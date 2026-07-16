@@ -5,6 +5,7 @@ import type {
   FetchFunction,
   SegmentIntegrityVerifier,
 } from "./verifier.js";
+import type { TransportManager } from "./transport-manager.js";
 
 const DEFAULT_P2P_TIMEOUT_MS = 2_000;
 const DEFAULT_URGENT_THRESHOLD_SEGMENTS = 2;
@@ -67,6 +68,7 @@ interface FetcherOptions {
   p2pTimeoutMs?: number;
   urgentThresholdSegments?: number;
   maxParallel?: number;
+  transportManager?: TransportManager;
 }
 
 export interface SegmentFetchResult {
@@ -371,28 +373,51 @@ export class HybridSegmentFetcher {
   private async fetchFromPeer(peer: Peer, segmentName: string): Promise<Buffer> {
     this.options.stats.recordP2PRequest();
     const controller = new AbortController();
-    const timer = setTimeout(
-      () => controller.abort(new Error("P2P request timed out")),
-      this.p2pTimeoutMs,
-    );
-    timer.unref();
+    const timer = this.options.transportManager
+      ? undefined
+      : setTimeout(
+          () => controller.abort(new Error("P2P request timed out")),
+          this.p2pTimeoutMs,
+        );
+    timer?.unref();
     try {
-      let response: Response;
-      try {
-        response = await this.fetchImpl(
-          new URL(`/segments/${encodeURIComponent(segmentName)}`, peer.address),
-          { signal: controller.signal },
-        );
-      } catch (error) {
-        throw new PeerFetchError(
-          error instanceof Error ? error.message : "Peer connection failed",
-          controller.signal.aborted ? "timeout" : "connection",
-        );
+      let data: Buffer;
+      if (this.options.transportManager) {
+        this.options.transportManager.registerPeer(peer);
+        try {
+          data = await this.options.transportManager.fetchSegment(
+            segmentName,
+            peer.address,
+            controller.signal,
+          );
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : "Peer connection failed";
+          const reason = /HTTP \d+/i.test(message)
+            ? "http"
+            : /timed out|abort/i.test(message)
+              ? "timeout"
+              : "connection";
+          throw new PeerFetchError(message, reason);
+        }
+      } else {
+        let response: Response;
+        try {
+          response = await this.fetchImpl(
+            new URL(`/segments/${encodeURIComponent(segmentName)}`, peer.address),
+            { signal: controller.signal },
+          );
+        } catch (error) {
+          throw new PeerFetchError(
+            error instanceof Error ? error.message : "Peer connection failed",
+            controller.signal.aborted ? "timeout" : "connection",
+          );
+        }
+        if (!response.ok) {
+          throw new PeerFetchError(`Peer returned HTTP ${response.status}`, "http");
+        }
+        data = Buffer.from(await response.arrayBuffer());
       }
-      if (!response.ok) {
-        throw new PeerFetchError(`Peer returned HTTP ${response.status}`, "http");
-      }
-      const data = Buffer.from(await response.arrayBuffer());
       if (!(await this.options.verifier.verify(segmentName, data))) {
         this.options.stats.recordIntegrityFailure();
         throw new PeerFetchError("Peer segment integrity check failed", "integrity");
@@ -400,7 +425,7 @@ export class HybridSegmentFetcher {
       this.options.stats.recordP2PSuccess(data.byteLength);
       return data;
     } finally {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
     }
   }
 

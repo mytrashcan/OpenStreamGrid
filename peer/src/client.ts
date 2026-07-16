@@ -5,6 +5,7 @@ import { SegmentCache } from "./cache.js";
 import { HybridSegmentFetcher } from "./fetcher.js";
 import { TrafficStats } from "./stats.js";
 import { TrackerClient } from "./tracker.js";
+import { TransportManager } from "./transport-manager.js";
 import { UploadServer } from "./uploader.js";
 import { OriginHashVerifier } from "./verifier.js";
 
@@ -67,6 +68,7 @@ class PeerApplication {
   private readonly stats = new TrafficStats();
   private readonly tracker: TrackerClient;
   private readonly uploader: UploadServer;
+  private readonly transportManager: TransportManager;
   private readonly fetcher: HybridSegmentFetcher;
   private readonly inFlightSegments = new Set<string>();
 
@@ -91,6 +93,18 @@ class PeerApplication {
       ready: () => this.cache.size > 0,
     });
     const verifier = new OriginHashVerifier(configuration.originBaseUrl);
+    const signalUrl = new URL("/ws", configuration.trackerUrl);
+    signalUrl.protocol = signalUrl.protocol === "https:" ? "wss:" : "ws:";
+    this.transportManager = new TransportManager({
+      signalUrl: signalUrl.href,
+      peerId: configuration.peerId,
+      broadcastId: configuration.broadcastId,
+      verifier,
+      webRtc: {
+        segmentProvider: (segmentName) => this.cache.get(segmentName),
+        onUpload: (bytes) => this.stats.recordUpload(bytes),
+      },
+    });
     this.fetcher = new HybridSegmentFetcher({
       selfPeerId: configuration.peerId,
       originBaseUrl: configuration.originBaseUrl,
@@ -99,6 +113,7 @@ class PeerApplication {
       verifier,
       stats: this.stats,
       maxParallel: configuration.maxParallelDownloads,
+      transportManager: this.transportManager,
     });
   }
 
@@ -113,6 +128,7 @@ class PeerApplication {
         uploadBandwidthBps: this.configuration.maxUploadSpeedBps,
       });
       await this.tracker.start();
+      await this.transportManager.start();
       console.log(
         JSON.stringify({
           event: "peer_started",
@@ -212,6 +228,7 @@ class PeerApplication {
     );
     const results = await Promise.allSettled([
       this.uploader.stop(),
+      this.transportManager.stop(),
     ]);
     this.tracker.stop();
     for (const result of results) {
