@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "openstreamgrid.originName" . }}
+  labels:
+    {{- include "openstreamgrid.labels" . | nindent 4 }}
+    app.kubernetes.io/component: origin
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "openstreamgrid.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: origin
+  ports:
+    - name: http
+      port: {{ .Values.origin.port }}
+      targetPort: http
+      protocol: TCP

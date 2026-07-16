@@ -1,0 +1,23 @@
+{{- if .Values.tracker.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "openstreamgrid.trackerName" . }}
+  labels:
+    {{- include "openstreamgrid.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tracker
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "openstreamgrid.trackerName" . }}
+  minReplicas: {{ .Values.tracker.replicaCount }}
+  maxReplicas: {{ .Values.tracker.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.tracker.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}

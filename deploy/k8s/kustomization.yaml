@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: openstreamgrid
+
+resources:
+  - namespace.yaml
+
+helmGlobals:
+  chartHome: ../../helm
+
+helmCharts:
+  - name: openstreamgrid
+    releaseName: openstreamgrid
+    namespace: openstreamgrid
+    includeCRDs: false

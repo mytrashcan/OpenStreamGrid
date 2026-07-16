@@ -1,0 +1,59 @@
+tracker:
+  image:
+    repository: ghcr.io/mytrashcan/openstreamgrid-tracker
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  port: 7070
+  env:
+    STORE_TYPE: sqlite
+    DB_PATH: /data/tracker.db
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  persistence:
+    enabled: true
+    accessModes:
+      - ReadWriteOnce
+    size: 1Gi
+    storageClassName: ""
+  autoscaling:
+    enabled: true
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 60
+
+origin:
+  image:
+    repository: ghcr.io/mytrashcan/openstreamgrid-origin
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  port: 8080
+  env:
+    HLS_DIRECTORY: /data/hls
+    BROADCAST_ID: live
+  hlsSizeLimit: 256Mi
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+ingress:
+  enabled: true
+  className: ""
+  annotations: {}
+  host: stream.example.com
+  tls: []
+
+networkPolicy:
+  enabled: true
+
+nameOverride: ""
+fullnameOverride: ""

@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "openstreamgrid.trackerName" . }}
+  labels:
+    {{- include "openstreamgrid.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tracker
+spec:
+  replicas: {{ .Values.tracker.replicaCount }}
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      {{- include "openstreamgrid.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: tracker
+  template:
+    metadata:
+      labels:
+        {{- include "openstreamgrid.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: tracker
+    spec:
+      securityContext:
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: tracker
+          image: "{{ .Values.tracker.image.repository }}:{{ .Values.tracker.image.tag }}"
+          imagePullPolicy: {{ .Values.tracker.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+          env:
+            - name: PORT
+              value: {{ .Values.tracker.port | quote }}
+            - name: STORE_TYPE
+              value: {{ .Values.tracker.env.STORE_TYPE | quote }}
+            - name: DB_PATH
+              value: {{ .Values.tracker.env.DB_PATH | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.tracker.port }}
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            failureThreshold: 30
+            periodSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            failureThreshold: 3
+            periodSeconds: 10
+            timeoutSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            failureThreshold: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+          resources:
+            {{- toYaml .Values.tracker.resources | nindent 12 }}
+          volumeMounts:
+            - name: tracker-data
+              mountPath: /data
+      terminationGracePeriodSeconds: 10
+      volumes:
+        - name: tracker-data
+          {{- if .Values.tracker.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "openstreamgrid.trackerName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
