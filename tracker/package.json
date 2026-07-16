@@ -5,10 +5,10 @@
   "type": "module",
   "main": "dist/server.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/copy-dashboard.mjs dist",
     "start": "node dist/server.js",
     "dev": "node --experimental-strip-types src/server.ts",
-    "test": "tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js",
+    "test": "tsc -p tsconfig.test.json && node scripts/copy-dashboard.mjs dist-test/src && node --test dist-test/test/*.test.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

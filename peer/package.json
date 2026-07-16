@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@openstreamgrid/common": "0.1.0",
+    "@roamhq/wrtc": "^0.10.0",
     "ws": "^8.21.1"
   },
   "devDependencies": {

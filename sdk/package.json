@@ -8,9 +8,9 @@
   "browser": "./dist/sdk.js",
   "exports": {
     ".": {
+      "browser": "./dist/sdk.js",
       "import": "./dist/sdk.js",
-      "require": "./dist/sdk.cjs",
-      "browser": "./dist/sdk.js"
+      "require": "./dist/sdk.cjs"
     }
   },
   "files": [

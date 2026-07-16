@@ -15,6 +15,7 @@ interface Subscription {
 }
 
 export interface TrackerEvents {
+  broadcastListChanged?(): void;
   peerJoined?(broadcastId: string, peer: Peer): void;
   peerLeft?(broadcastId: string, peerId: string): void;
   segmentsAvailable?(broadcastId: string, peerId: string, segments: string[]): void;
@@ -65,6 +66,7 @@ export class TrackerWebSocketHub implements TrackerEvents {
   constructor(
     private readonly server: Server,
     private readonly store: TrackerStore,
+    private readonly downstreamEvents: TrackerEvents = {},
   ) {
     this.server.on("upgrade", this.handleUpgrade);
     this.webSocketServer.on("connection", (socket) => {
@@ -83,11 +85,13 @@ export class TrackerWebSocketHub implements TrackerEvents {
   peerJoined(broadcastId: string, peer: Peer): void {
     this.broadcast({ type: "peer_joined", broadcastId, peer });
     this.broadcastPeerList(broadcastId);
+    this.downstreamEvents.peerJoined?.(broadcastId, peer);
   }
 
   peerLeft(broadcastId: string, peerId: string): void {
     this.broadcast({ type: "peer_left", broadcastId, peerId });
     this.broadcastPeerList(broadcastId);
+    this.downstreamEvents.peerLeft?.(broadcastId, peerId);
   }
 
   segmentsAvailable(
@@ -102,6 +106,11 @@ export class TrackerWebSocketHub implements TrackerEvents {
       segments,
     });
     this.broadcastPeerList(broadcastId);
+    this.downstreamEvents.segmentsAvailable?.(
+      broadcastId,
+      peerId,
+      segments,
+    );
   }
 
   statsUpdated(broadcastId: string, peerId: string): void {
@@ -111,10 +120,16 @@ export class TrackerWebSocketHub implements TrackerEvents {
       peerId,
       stats: this.store.getBroadcastStats(broadcastId),
     });
+    this.downstreamEvents.statsUpdated?.(broadcastId, peerId);
   }
 
   peerListChanged(broadcastId: string): void {
     this.broadcastPeerList(broadcastId);
+    this.downstreamEvents.peerListChanged?.(broadcastId);
+  }
+
+  broadcastListChanged(): void {
+    this.downstreamEvents.broadcastListChanged?.();
   }
 
   async stop(): Promise<void> {
