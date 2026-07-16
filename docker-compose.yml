@@ -132,6 +132,33 @@ services:
       start_period: 3s
     stop_grace_period: 5s
 
+  load-test:
+    profiles: ["load-test"]
+    build:
+      context: .
+      dockerfile: test/load-test.Dockerfile
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      TRACKER_URL: http://tracker:7070
+      BROADCAST_ID: live
+      ORIGIN_URL: http://origin:8080/hls
+      ADVERTISE_URL: http://127.0.0.1:9090
+      UPLOAD_PORT: "9090"
+    depends_on:
+      tracker:
+        condition: service_healthy
+      origin:
+        condition: service_healthy
+    command: ["--peers", "10", "--duration", "60", "--ramp-up", "5"]
+    networks:
+      - stream-grid
+    stop_grace_period: 10s
+
 networks:
   stream-grid:
     driver: bridge
