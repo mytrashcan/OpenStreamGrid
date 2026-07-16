@@ -142,6 +142,60 @@ MVP validation is on the same local or Docker network (no complex NAT traversal)
 4. Multi-quality ABR on Origin
 5. Monitoring dashboard
 
+## Phase 3: Production Hardening & Advanced Transports
+
+### Goals
+
+1. **WebRTC DataChannel Transport**
+   - New peer transport adapter interface (TransportAdapter)
+   - WebRtcTransport: uses `node-datachannel` or `wrtc` for browser-like P2P
+   - STUN/TURN configuration for NAT traversal
+   - Fall back to HTTP transport when WebRTC fails
+   - Benchmarks: compare HTTP vs WebRTC latency/throughput
+
+2. **Persistent Tracker Store**
+   - Replace in-memory state with SQLite (better-sqlite3 or bun:sqlite)
+   - Tables: broadcasts, peers, segments, stats_history
+   - Stats rollup: hourly/daily aggregates for dashboard
+   - Graceful recovery on restart
+
+3. **Load Testing Framework**
+   - VirtualPeer class: simulates a peer client with configurable behavior
+   - Configurable: join delay, segment fetch interval, upload throttle
+   - Docker compose scale: `docker compose up --scale peer=N`
+   - Test scenarios:
+     - N peers join simultaneously (burst)
+     - Random peer churn (join/leave)
+     - Gradual ramp-up from 1 to 100 peers
+   - Metrics: P2P efficiency ratio, CDN traffic reduction %, latency p50/p95/p99
+
+4. **Kubernetes Deployment**
+   - Helm chart for tracker + origin
+   - ConfigMap for peer settings
+   - HorizontalPodAutoscaler for tracker (CPU-based)
+   - NetworkPolicy for pod isolation
+   - Readiness/liveness probes
+
+5. **Code Quality & Documentation**
+   - Complete README.md with:
+     - Architecture overview (ASCII diagram)
+     - Quick start guide (docker compose up)
+     - API reference
+     - Configuration reference
+     - Development guide
+     - Performance benchmarks
+   - TypeScript strict mode compliance
+   - ESLint config
+   - GitHub Actions CI (build + test + docker build)
+
+### Phase 3 Implementation Order
+
+1. WebRTC DataChannel transport adapter
+2. Load testing framework + scale test
+3. Code quality (README, CI, lint)
+4. Persistent tracker store (SQLite)
+5. Kubernetes deployment
+
 ## Tracker API Design
 
 ```
