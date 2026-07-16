@@ -1,0 +1,23 @@
+{
+  "name": "openstreamgrid",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "common",
+    "tracker",
+    "origin",
+    "peer"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.2",
+    "typescript": "6.0.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

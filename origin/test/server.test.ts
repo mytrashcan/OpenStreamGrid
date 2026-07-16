@@ -1,0 +1,124 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { Readable, Writable } from "node:stream";
+import test from "node:test";
+import { createOriginHandler, registerBroadcast } from "../src/server.js";
+import type { StreamController } from "../src/streamer.js";
+
+class FakeStreamer implements StreamController {
+  readonly playlistPath: string;
+  private running = false;
+
+  constructor(private readonly directory: string) {
+    this.playlistPath = path.join(directory, "stream.m3u8");
+  }
+
+  isRunning(): boolean {
+    return this.running;
+  }
+
+  async start(): Promise<void> {
+    this.running = true;
+  }
+
+  async stop(): Promise<void> {
+    this.running = false;
+  }
+
+  async ensureHash(segmentName: string): Promise<string> {
+    const data = await readFile(path.join(this.directory, segmentName));
+    const digest = createHash("sha256").update(data).digest("hex");
+    const hashPath = path.join(this.directory, `${segmentName}.sha256`);
+    await writeFile(hashPath, `${digest}  ${segmentName}\n`);
+    return hashPath;
+  }
+}
+
+class TestResponse extends Writable {
+  statusCode = 0;
+  body = Buffer.alloc(0);
+  private sent = false;
+
+  get headersSent(): boolean {
+    return this.sent;
+  }
+
+  writeHead(statusCode: number): this {
+    this.statusCode = statusCode;
+    this.sent = true;
+    return this;
+  }
+
+  override _write(
+    chunk: Buffer,
+    _encoding: BufferEncoding,
+    callback: (error?: Error | null) => void,
+  ): void {
+    this.body = Buffer.concat([this.body, Buffer.from(chunk)]);
+    callback();
+  }
+}
+
+const invoke = async (
+  handler: ReturnType<typeof createOriginHandler>,
+  url: string,
+): Promise<TestResponse> => {
+  const request = Object.assign(Readable.from([]), {
+    method: "GET",
+    url,
+  }) as unknown as IncomingMessage;
+  const response = new TestResponse();
+  await handler(request, response as unknown as ServerResponse);
+  return response;
+};
+
+test("serves HLS assets, creates hashes, and exposes readiness", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "openstreamgrid-origin-"));
+  const streamer = new FakeStreamer(directory);
+  const handler = createOriginHandler(directory, streamer);
+
+  await streamer.start();
+  let response = await invoke(handler, "/health");
+  assert.equal(response.statusCode, 503);
+
+  await writeFile(streamer.playlistPath, "#EXTM3U\nsegment_000001.ts\n");
+  await writeFile(path.join(directory, "segment_000001.ts"), "segment-data");
+
+  response = await invoke(handler, "/health");
+  assert.equal(response.statusCode, 200);
+  response = await invoke(handler, "/hls/segment_000001.ts");
+  assert.equal(response.body.toString(), "segment-data");
+  response = await invoke(handler, "/hls/segment_000001.ts.sha256");
+  assert.match(
+    response.body.toString(),
+    /^[a-f0-9]{64}  segment_000001\.ts\n$/,
+  );
+  await streamer.stop();
+  await rm(directory, { recursive: true, force: true });
+});
+
+test("registers a broadcast with the tracker", async () => {
+  let received: unknown;
+
+  await registerBroadcast({
+    trackerUrl: "http://tracker:7070",
+    registration: {
+      id: "live",
+      playlistUrl: "http://origin:8080/hls/stream.m3u8",
+    },
+    fetchImpl: async (input, init) => {
+      assert.equal(String(input), "http://tracker:7070/api/v1/broadcasts");
+      assert.equal(init?.method, "POST");
+      received = JSON.parse(String(init?.body)) as unknown;
+      return new Response(null, { status: 201 });
+    },
+  });
+  assert.deepEqual(received, {
+    id: "live",
+    playlistUrl: "http://origin:8080/hls/stream.m3u8",
+  });
+});

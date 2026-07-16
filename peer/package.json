@@ -1,0 +1,20 @@
+{
+  "name": "@openstreamgrid/peer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/client.js",
+  "bin": {
+    "openstreamgrid-peer": "dist/client.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/client.js",
+    "dev": "node --experimental-strip-types src/client.ts",
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@openstreamgrid/common": "0.1.0"
+  }
+}

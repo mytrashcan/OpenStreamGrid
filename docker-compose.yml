@@ -1,0 +1,137 @@
+name: openstreamgrid
+
+x-service-defaults: &service-defaults
+  init: true
+  restart: unless-stopped
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  networks:
+    - stream-grid
+
+x-peer-environment: &peer-environment
+  TRACKER_URL: http://tracker:7070
+  BROADCAST_ID: live
+  ORIGIN_URL: http://origin:8080/hls
+  CACHE_SIZE: 200MB
+  MAX_UPLOAD_SPEED: 4Mbps
+  MAX_CONNECTIONS: "3"
+
+services:
+  tracker:
+    <<: *service-defaults
+    build:
+      context: .
+      dockerfile: tracker/Dockerfile
+    environment:
+      PORT: "7070"
+      STALE_PEER_MS: "30000"
+    ports:
+      - "7070:7070"
+    healthcheck:
+      test:
+        - CMD
+        - /nodejs/bin/node
+        - -e
+        - fetch('http://127.0.0.1:7070/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 3s
+    stop_grace_period: 5s
+
+  origin:
+    <<: *service-defaults
+    build:
+      context: .
+      dockerfile: origin/Dockerfile
+    environment:
+      PORT: "8080"
+      TRACKER_URL: http://tracker:7070
+      BROADCAST_ID: live
+      PUBLIC_ORIGIN_URL: http://origin:8080
+      HLS_DIRECTORY: /tmp/openstreamgrid-hls
+    depends_on:
+      tracker:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    healthcheck:
+      test:
+        - CMD
+        - /nodejs/bin/node
+        - -e
+        - fetch('http://127.0.0.1:8080/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
+    stop_grace_period: 8s
+
+  peer-a:
+    <<: *service-defaults
+    build:
+      context: .
+      dockerfile: peer/Dockerfile
+    environment:
+      <<: *peer-environment
+      PEER_ID: peer-a
+      PEER_ADDRESS: http://peer-a:9090
+      PLAYLIST_POLL_MS: "300"
+    depends_on:
+      tracker:
+        condition: service_healthy
+      origin:
+        condition: service_healthy
+    ports:
+      - "9091:9090"
+    healthcheck:
+      test:
+        - CMD
+        - /nodejs/bin/node
+        - -e
+        - fetch('http://127.0.0.1:9090/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 2s
+      timeout: 2s
+      retries: 20
+      start_period: 3s
+    stop_grace_period: 5s
+
+  peer-b:
+    <<: *service-defaults
+    build:
+      context: .
+      dockerfile: peer/Dockerfile
+    environment:
+      <<: *peer-environment
+      PEER_ID: peer-b
+      PEER_ADDRESS: http://peer-b:9090
+      PLAYLIST_POLL_MS: "1000"
+    depends_on:
+      tracker:
+        condition: service_healthy
+      origin:
+        condition: service_healthy
+      peer-a:
+        condition: service_healthy
+    ports:
+      - "9092:9090"
+    healthcheck:
+      test:
+        - CMD
+        - /nodejs/bin/node
+        - -e
+        - fetch('http://127.0.0.1:9090/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 2s
+      timeout: 2s
+      retries: 20
+      start_period: 3s
+    stop_grace_period: 5s
+
+networks:
+  stream-grid:
+    driver: bridge
