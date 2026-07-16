@@ -1,3 +1,5 @@
+export type Quality = "low" | "med" | "high";
+
 export interface BroadcastRegistration {
   id: string;
   playlistUrl: string;
@@ -75,3 +77,60 @@ export interface HealthStatus {
   service: "tracker" | "origin" | "peer";
   details?: Record<string, string | number | boolean>;
 }
+
+export type WsClientMessage =
+  | {
+      type: "subscribe";
+      broadcastId: string;
+      peerId: string;
+    }
+  | {
+      type: "heartbeat";
+      broadcastId: string;
+      peerId: string;
+      latencyMs?: number;
+      uploadBandwidthBps?: number;
+      successRate?: number;
+    }
+  | {
+      type: "report_segments";
+      broadcastId: string;
+      peerId: string;
+      segments: string[];
+      replace?: boolean;
+    }
+  | {
+      type: "report_stats";
+      broadcastId: string;
+      peerId: string;
+      stats: PeerTrafficStats;
+    };
+
+export type WsServerMessage =
+  | {
+      type: "peer_joined";
+      broadcastId: string;
+      peer: Peer;
+    }
+  | {
+      type: "peer_left";
+      broadcastId: string;
+      peerId: string;
+    }
+  | {
+      type: "segment_available";
+      broadcastId: string;
+      peerId: string;
+      segments: string[];
+    }
+  | {
+      type: "stats_update";
+      broadcastId: string;
+      peerId: string;
+      stats: BroadcastStats;
+    }
+  | {
+      type: "peer_list";
+      broadcastId: string;
+      peers: Peer[];
+    };

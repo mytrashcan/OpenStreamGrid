@@ -1,0 +1,123 @@
+/**
+ * Browser-compatible types for the OpenStreamGrid Browser SDK.
+ * Mirrors @openstreamgrid/common but avoids the Node dependency.
+ */
+
+/** A segment stored in the browser cache — uses Uint8Array instead of Node Buffer. */
+export interface CachedSegment {
+  data: Uint8Array;
+  storedAt: number;
+  hash?: string;
+}
+
+export interface PeerInfo {
+  id: string;
+  address: string;
+  /** Segments this peer claims to possess (segment names / URLs). */
+  segments: string[];
+  latencyMs: number;
+  successRate: number;
+  trustScore: number;
+  uploadBandwidthBps?: number;
+  metadata?: Record<string, string>;
+  joinedAt?: string;
+  lastSeenAt?: string;
+}
+
+export interface SegmentVerificationResult {
+  valid: boolean;
+  actualHash: string;
+  expectedHash?: string;
+}
+
+export interface HlsjsPluginConfig {
+  /** WebSocket URL of the tracker (e.g., ws://tracker:7070/ws). */
+  trackerUrl: string;
+  /** Broadcast / stream ID to join. */
+  broadcastId: string;
+  /** Unique peer ID for this client. Generated if omitted. */
+  peerId?: string;
+  /** Base URL of the origin server for fallback. Auto-detected from Hls.js if omitted. */
+  originBaseUrl?: string;
+  /** Max cache size in bytes (default: 100 MB). */
+  maxCacheBytes?: number;
+  /** P2P request timeout in ms (default: 3000). */
+  peerTimeoutMs?: number;
+  /** Whether to enable SHA-256 segment verification (default: true). */
+  verifySegments?: boolean;
+  /** Callback for stats / debug events. */
+  onEvent?: (event: SdkEvent) => void;
+  /** Callback when the plugin is ready (first WS connection established). */
+  onReady?: () => void;
+}
+
+export interface SdkEvent {
+  type:
+    | "peer_fetched"
+    | "origin_fallback"
+    | "cache_hit"
+    | "cache_miss"
+    | "integrity_ok"
+    | "integrity_fail"
+    | "ws_connected"
+    | "ws_disconnected"
+    | "ws_error";
+  /** Segment name involved, if any. */
+  segment?: string;
+  /** Peer ID involved, if any. */
+  peerId?: string;
+  /** Duration in ms, if applicable. */
+  durationMs?: number;
+  /** Additional info. */
+  message?: string;
+}
+
+/** Message types for tracker WebSocket communication. */
+export type WsClientMessage =
+  | { type: "subscribe"; broadcastId: string; peerId: string }
+  | {
+      type: "heartbeat";
+      broadcastId: string;
+      peerId: string;
+      latencyMs?: number;
+      uploadBandwidthBps?: number;
+      successRate?: number;
+    }
+  | {
+      type: "report_segments";
+      broadcastId: string;
+      peerId: string;
+      segments: string[];
+      replace?: boolean;
+    }
+  | {
+      type: "report_stats";
+      broadcastId: string;
+      peerId: string;
+      stats: PeerTrafficStats;
+    };
+
+export type WsServerMessage =
+  | { type: "peer_joined"; broadcastId: string; peer: PeerInfo }
+  | { type: "peer_left"; broadcastId: string; peerId: string }
+  | {
+      type: "segment_available";
+      broadcastId: string;
+      peerId: string;
+      segments: string[];
+    }
+  | { type: "stats_update"; broadcastId: string; peerId: string; stats: unknown }
+  | { type: "peer_list"; broadcastId: string; peers: PeerInfo[] };
+
+export interface PeerTrafficStats {
+  bytesDownloadedP2P: number;
+  bytesDownloadedOrigin: number;
+  bytesUploadedP2P: number;
+  p2pRequests: number;
+  p2pSuccesses: number;
+  p2pFailures: number;
+  originRequests: number;
+  integrityFailures: number;
+  fallbacks: number;
+  segmentsCached: number;
+}

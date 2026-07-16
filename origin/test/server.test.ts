@@ -11,6 +11,7 @@ import type { StreamController } from "../src/streamer.js";
 
 class FakeStreamer implements StreamController {
   readonly playlistPath: string;
+  readonly qualities: string[] = ['low', 'med', 'high'];
   private running = false;
 
   constructor(private readonly directory: string) {

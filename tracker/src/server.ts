@@ -9,6 +9,7 @@ import type {
   SegmentPossessionReport,
 } from "@openstreamgrid/common";
 import { StoreError, TrackerStore } from "./store.js";
+import { TrackerWebSocketHub, type TrackerEvents } from "./websocket.js";
 
 const DEFAULT_PORT = 7070;
 const DEFAULT_STALE_PEER_MS = 30_000;
@@ -110,7 +111,10 @@ const stringArray = (body: JsonObject, key: string): string[] => {
   return value;
 };
 
-export const createTrackerHandler = (store: TrackerStore) =>
+export const createTrackerHandler = (
+  store: TrackerStore,
+  events: TrackerEvents = {},
+) =>
   async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     try {
       const method = request.method ?? "GET";
@@ -161,16 +165,14 @@ export const createTrackerHandler = (store: TrackerStore) =>
             segments: stringArray(body, "segments"),
             ...(typeof body.replace === "boolean" ? { replace: body.replace } : {}),
           };
-          sendJson(
-            response,
-            200,
-            store.reportSegments(
-              broadcastId,
-              peerId,
-              report.segments,
-              report.replace,
-            ),
+          const peer = store.reportSegments(
+            broadcastId,
+            peerId,
+            report.segments,
+            report.replace,
           );
+          sendJson(response, 200, peer);
+          events.segmentsAvailable?.(broadcastId, peerId, report.segments);
           return;
         }
         if (action === "heartbeat" && method === "PUT") {
@@ -186,6 +188,7 @@ export const createTrackerHandler = (store: TrackerStore) =>
             ...(successRate !== undefined ? { successRate } : {}),
           };
           sendJson(response, 200, store.heartbeat(broadcastId, peerId, heartbeat));
+          events.peerListChanged?.(broadcastId);
           return;
         }
         if (action === "stats" && method === "POST") {
@@ -195,6 +198,7 @@ export const createTrackerHandler = (store: TrackerStore) =>
           }
           store.reportStats(broadcastId, peerId, report.stats);
           sendEmpty(response, 204);
+          events.statsUpdated?.(broadcastId, peerId);
           return;
         }
         if (action === "reports" && method === "POST") {
@@ -212,6 +216,7 @@ export const createTrackerHandler = (store: TrackerStore) =>
             reason,
           };
           sendJson(response, 200, store.reportPeerFailure(broadcastId, peerId, report));
+          events.peerListChanged?.(broadcastId);
           return;
         }
       }
@@ -232,7 +237,9 @@ export const createTrackerHandler = (store: TrackerStore) =>
             ...(uploadBandwidthBps !== undefined ? { uploadBandwidthBps } : {}),
             ...(metadata ? { metadata } : {}),
           };
-          sendJson(response, 201, store.joinPeer(broadcastId, join));
+          const peer = store.joinPeer(broadcastId, join);
+          sendJson(response, 201, peer);
+          events.peerJoined?.(broadcastId, peer);
           return;
         }
         if (!encodedPeerId && method === "GET") {
@@ -243,8 +250,10 @@ export const createTrackerHandler = (store: TrackerStore) =>
           return;
         }
         if (encodedPeerId && method === "DELETE") {
-          store.leavePeer(broadcastId, decodeURIComponent(encodedPeerId));
+          const peerId = decodeURIComponent(encodedPeerId);
+          store.leavePeer(broadcastId, peerId);
           sendEmpty(response, 204);
+          events.peerLeft?.(broadcastId, peerId);
           return;
         }
       }
@@ -287,6 +296,7 @@ export const createTrackerHandler = (store: TrackerStore) =>
 export class TrackerServer {
   readonly store: TrackerStore;
   private readonly server;
+  private readonly webSockets: TrackerWebSocketHub;
   private cleanupTimer?: NodeJS.Timeout;
 
   constructor(
@@ -294,7 +304,22 @@ export class TrackerServer {
     private readonly stalePeerMs = DEFAULT_STALE_PEER_MS,
   ) {
     this.store = store;
-    this.server = createServer(createTrackerHandler(store));
+    let webSockets: TrackerWebSocketHub | undefined;
+    const events: TrackerEvents = {
+      peerJoined: (broadcastId, peer) =>
+        webSockets?.peerJoined(broadcastId, peer),
+      peerLeft: (broadcastId, peerId) =>
+        webSockets?.peerLeft(broadcastId, peerId),
+      segmentsAvailable: (broadcastId, peerId, segments) =>
+        webSockets?.segmentsAvailable(broadcastId, peerId, segments),
+      statsUpdated: (broadcastId, peerId) =>
+        webSockets?.statsUpdated(broadcastId, peerId),
+      peerListChanged: (broadcastId) =>
+        webSockets?.peerListChanged(broadcastId),
+    };
+    this.server = createServer(createTrackerHandler(store, events));
+    webSockets = new TrackerWebSocketHub(this.server, store);
+    this.webSockets = webSockets;
   }
 
   async start(port = DEFAULT_PORT, host = "0.0.0.0"): Promise<number> {
@@ -306,7 +331,7 @@ export class TrackerServer {
       });
     });
     this.cleanupTimer = setInterval(
-      () => this.store.removeStalePeers(this.stalePeerMs),
+      () => this.removeStalePeers(),
       Math.max(1_000, Math.floor(this.stalePeerMs / 2)),
     );
     this.cleanupTimer.unref();
@@ -317,9 +342,30 @@ export class TrackerServer {
   async stop(): Promise<void> {
     if (this.cleanupTimer) clearInterval(this.cleanupTimer);
     if (!this.server.listening) return;
+    await this.webSockets.stop();
     await new Promise<void>((resolve, reject) => {
       this.server.close((error) => (error ? reject(error) : resolve()));
     });
+  }
+
+  private removeStalePeers(): void {
+    const peersBefore = new Map(
+      this.store.listBroadcasts().map((broadcast) => [
+        broadcast.id,
+        new Set(this.store.listPeers(broadcast.id).map((peer) => peer.id)),
+      ]),
+    );
+    if (this.store.removeStalePeers(this.stalePeerMs) === 0) return;
+    for (const [broadcastId, peerIds] of peersBefore) {
+      const activePeerIds = new Set(
+        this.store.listPeers(broadcastId).map((peer) => peer.id),
+      );
+      for (const peerId of peerIds) {
+        if (!activePeerIds.has(peerId)) {
+          this.webSockets.peerLeft(broadcastId, peerId);
+        }
+      }
+    }
   }
 }
 

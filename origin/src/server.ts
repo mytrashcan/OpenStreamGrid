@@ -95,7 +95,7 @@ export const createOriginHandler = (
         sendJson(response, 400, { error: "Invalid file path" });
         return;
       }
-      if (!/^[-A-Za-z0-9_.]+$/.test(fileName)) {
+      if (!/^[-A-Za-z0-9_./]+$/.test(fileName)) {
         sendJson(response, 400, { error: "Invalid file path" });
         return;
       }
@@ -271,7 +271,12 @@ const run = async (): Promise<void> => {
     registration: {
       id: broadcastId,
       playlistUrl: new URL("/hls/stream.m3u8", publicOriginUrl).href,
-      metadata: { protocol: "hls", source: "test-pattern" },
+      metadata: {
+        protocol: "hls",
+        source: "test-pattern",
+        abr: "true",
+        qualities: "low,med,high",
+      },
     },
     signal: shutdownController.signal,
   });

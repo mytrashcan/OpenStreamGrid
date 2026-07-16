@@ -1,0 +1,40 @@
+{
+  "name": "@openstreamgrid/sdk",
+  "version": "0.1.0",
+  "description": "OpenStreamGrid Browser SDK — hybrid P2P-CDN live streaming middleware for Hls.js",
+  "type": "module",
+  "main": "./dist/sdk.cjs",
+  "module": "./dist/sdk.js",
+  "browser": "./dist/sdk.js",
+  "exports": {
+    ".": {
+      "import": "./dist/sdk.js",
+      "require": "./dist/sdk.cjs",
+      "browser": "./dist/sdk.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "src/"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "hls.js": "^1.5.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "typescript": "^5.5.0"
+  },
+  "keywords": [
+    "p2p",
+    "hls",
+    "hlsjs",
+    "live-streaming",
+    "cdn",
+    "webrtc"
+  ],
+  "license": "MIT"
+}

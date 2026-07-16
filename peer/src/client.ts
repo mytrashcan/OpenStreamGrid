@@ -1,21 +1,19 @@
 #!/usr/bin/env node
 import { hostname } from "node:os";
 import { pathToFileURL } from "node:url";
-import type { Peer, PeerFailureReport, PeerJoinRequest } from "@openstreamgrid/common";
 import { SegmentCache } from "./cache.js";
-import {
-  HybridSegmentFetcher,
-  type PeerDirectory,
-} from "./fetcher.js";
-import { StatsReporter, TrafficStats } from "./stats.js";
+import { HybridSegmentFetcher } from "./fetcher.js";
+import { TrafficStats } from "./stats.js";
+import { TrackerClient } from "./tracker.js";
 import { UploadServer } from "./uploader.js";
-import { OriginHashVerifier, type FetchFunction } from "./verifier.js";
+import { OriginHashVerifier } from "./verifier.js";
 
 const DEFAULT_TRACKER_URL = "http://tracker:7070";
 const DEFAULT_BROADCAST_ID = "live";
 const DEFAULT_CACHE_SIZE = 200 * 1_000_000;
 const DEFAULT_UPLOAD_SPEED_BPS = 1_000_000;
 const DEFAULT_MAX_CONNECTIONS = 3;
+const DEFAULT_MAX_PARALLEL_DOWNLOADS = 3;
 const DEFAULT_PLAYLIST_POLL_MS = 500;
 
 interface PeerConfiguration {
@@ -28,75 +26,8 @@ interface PeerConfiguration {
   cacheSizeBytes: number;
   maxUploadSpeedBps: number;
   maxConnections: number;
+  maxParallelDownloads: number;
   playlistPollMs: number;
-}
-
-class TrackerClient implements PeerDirectory {
-  constructor(
-    private readonly trackerUrl: string,
-    private readonly broadcastId: string,
-    private readonly peerId: string,
-    private readonly fetchImpl: FetchFunction = fetch,
-  ) {}
-
-  async join(request: PeerJoinRequest): Promise<Peer> {
-    return this.requestJson<Peer>(this.peersUrl(), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(request),
-    });
-  }
-
-  async leave(): Promise<void> {
-    const response = await this.fetchImpl(
-      new URL(`${this.peersUrl().pathname}/${encodeURIComponent(this.peerId)}`, this.trackerUrl),
-      { method: "DELETE" },
-    );
-    if (!response.ok && response.status !== 404) {
-      throw new Error(`Tracker leave returned HTTP ${response.status}`);
-    }
-  }
-
-  async listPeers(segmentName: string): Promise<Peer[]> {
-    const endpoint = this.peersUrl();
-    endpoint.searchParams.set("segment", segmentName);
-    const result = await this.requestJson<{ peers: Peer[] }>(endpoint);
-    if (!Array.isArray(result.peers)) throw new Error("Tracker returned an invalid peer list");
-    return result.peers;
-  }
-
-  async reportFailure(
-    peerId: string,
-    reason: PeerFailureReport["reason"],
-  ): Promise<void> {
-    const endpoint = new URL(
-      `${this.peersUrl().pathname}/${encodeURIComponent(peerId)}/reports`,
-      this.trackerUrl,
-    );
-    await this.requestJson(endpoint, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ reporterId: this.peerId, reason }),
-    });
-  }
-
-  private peersUrl(): URL {
-    return new URL(
-      `/api/v1/broadcasts/${encodeURIComponent(this.broadcastId)}/peers`,
-      this.trackerUrl,
-    );
-  }
-
-  private async requestJson<T = unknown>(
-    endpoint: URL,
-    init?: RequestInit,
-  ): Promise<T> {
-    const response = await this.fetchImpl(endpoint, init);
-    if (!response.ok) {
-      throw new Error(`Tracker returned HTTP ${response.status}`);
-    }
-    return (await response.json()) as T;
-  }
 }
 
 const delay = async (milliseconds: number, signal: AbortSignal): Promise<void> => {
@@ -135,24 +66,22 @@ class PeerApplication {
   private readonly cache: SegmentCache;
   private readonly stats = new TrafficStats();
   private readonly tracker: TrackerClient;
-  private readonly reporter: StatsReporter;
   private readonly uploader: UploadServer;
   private readonly fetcher: HybridSegmentFetcher;
+  private readonly inFlightSegments = new Set<string>();
 
   constructor(private readonly configuration: PeerConfiguration) {
     this.cache = new SegmentCache(configuration.cacheSizeBytes);
-    this.tracker = new TrackerClient(
-      configuration.trackerUrl,
-      configuration.broadcastId,
-      configuration.peerId,
-    );
-    this.reporter = new StatsReporter({
+    this.tracker = new TrackerClient({
       trackerUrl: configuration.trackerUrl,
       broadcastId: configuration.broadcastId,
       peerId: configuration.peerId,
-      uploadBandwidthBps: configuration.maxUploadSpeedBps,
-      stats: this.stats,
-      cache: this.cache,
+      heartbeat: () => ({
+        uploadBandwidthBps: configuration.maxUploadSpeedBps,
+        successRate: this.stats.p2pSuccessRate,
+      }),
+      stats: () => this.stats.snapshot(),
+      segments: () => this.cache.keys(),
     });
     this.uploader = new UploadServer({
       cache: this.cache,
@@ -169,6 +98,7 @@ class PeerApplication {
       directory: this.tracker,
       verifier,
       stats: this.stats,
+      maxParallel: configuration.maxParallelDownloads,
     });
   }
 
@@ -182,8 +112,7 @@ class PeerApplication {
         address: this.configuration.peerAddress,
         uploadBandwidthBps: this.configuration.maxUploadSpeedBps,
       });
-      await this.reporter.report();
-      this.reporter.start();
+      await this.tracker.start();
       console.log(
         JSON.stringify({
           event: "peer_started",
@@ -213,23 +142,29 @@ class PeerApplication {
         for (const segment of processed) {
           if (!current.has(segment)) processed.delete(segment);
         }
-        for (const [index, segmentName] of segments.entries()) {
-          if (signal.aborted || processed.has(segmentName)) continue;
-          const result = await this.fetcher.fetchSegment(
+        const pending = segments
+          .map((segmentName, index) => ({
             segmentName,
-            segments.length - index - 1,
+            segmentsAhead: segments.length - index - 1,
+          }))
+          .filter(
+            ({ segmentName }) =>
+              !processed.has(segmentName) &&
+              !this.inFlightSegments.has(segmentName),
           );
-          processed.add(segmentName);
-          await this.reporter.reportSegments();
-          console.log(
-            JSON.stringify({
-              event: "segment_fetched",
-              peerId: this.configuration.peerId,
-              segment: segmentName,
-              source: result.source,
-              bytes: result.data.byteLength,
-            }),
+        while (!signal.aborted && pending.length > 0) {
+          const nonUrgent = pending.filter(
+            ({ segmentsAhead }) => segmentsAhead >= 2,
           );
+          const batch = (
+            nonUrgent.length > 0 ? nonUrgent : pending.slice(0, 1)
+          ).slice(0, this.configuration.maxParallelDownloads);
+          await this.fetchBatch(batch, processed);
+          const attempted = new Set(batch.map(({ segmentName }) => segmentName));
+          for (let index = pending.length - 1; index >= 0; index -= 1) {
+            const item = pending[index];
+            if (item && attempted.has(item.segmentName)) pending.splice(index, 1);
+          }
         }
       } catch (error) {
         if (!signal.aborted) console.error("playlist processing failed", error);
@@ -238,14 +173,47 @@ class PeerApplication {
     }
   }
 
+  private async fetchBatch(
+    batch: Array<{ segmentName: string; segmentsAhead: number }>,
+    processed: Set<string>,
+  ): Promise<void> {
+    for (const { segmentName } of batch) this.inFlightSegments.add(segmentName);
+    const [result] = await Promise.allSettled([
+      this.fetcher.fetchSegments(
+        batch.map(({ segmentName }) => segmentName),
+        this.tracker.allPeers(),
+      ),
+    ]);
+    for (const { segmentName } of batch) {
+      this.inFlightSegments.delete(segmentName);
+    }
+    if (!result || result.status === "rejected") {
+      console.error("parallel segment fetch failed", result?.reason);
+      return;
+    }
+    for (const [segmentName, data] of result.value) {
+      processed.add(segmentName);
+      console.log(
+        JSON.stringify({
+          event: "segment_fetched",
+          peerId: this.configuration.peerId,
+          segment: segmentName,
+          source: this.fetcher.getLastSource(segmentName),
+          bytes: data.byteLength,
+        }),
+      );
+    }
+    if (result.value.size > 0) this.tracker.reportSegments();
+  }
+
   private async shutdown(): Promise<void> {
     console.log(
       JSON.stringify({ event: "peer_stopping", peerId: this.configuration.peerId }),
     );
     const results = await Promise.allSettled([
-      this.reporter.stop(),
       this.uploader.stop(),
     ]);
+    this.tracker.stop();
     for (const result of results) {
       if (result.status === "rejected") {
         console.error("peer shutdown operation failed", result.reason);
@@ -335,6 +303,7 @@ export const parseArguments = (
     "cache-size",
     "max-upload-speed",
     "max-connections",
+    "parallel-downloads",
   ]);
   for (const key of values.keys()) {
     if (!supported.has(key)) throw new Error(`Unknown CLI argument '--${key}'`);
@@ -375,6 +344,12 @@ export const parseArguments = (
         environment.MAX_CONNECTIONS ??
         String(DEFAULT_MAX_CONNECTIONS),
       "Maximum connections",
+    ),
+    maxParallelDownloads: parsePositiveInteger(
+      values.get("parallel-downloads") ??
+        environment.MAX_PARALLEL_DOWNLOADS ??
+        String(DEFAULT_MAX_PARALLEL_DOWNLOADS),
+      "Parallel downloads",
     ),
     playlistPollMs: parsePositiveInteger(
       environment.PLAYLIST_POLL_MS ?? String(DEFAULT_PLAYLIST_POLL_MS),
