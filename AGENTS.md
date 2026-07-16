@@ -93,6 +93,55 @@ MVP validation is on the same local or Docker network (no complex NAT traversal)
 - No browser SDK (CLI/Node-based peer clients first)
 - No persistent storage (in-memory)
 
+## Phase 2: Real-time Signaling & Quality-Based Selection
+
+### Goals
+
+1. **WebSocket Signaling on Tracker**
+   - Replace REST polling with WebSocket for real-time peer events
+   - `/ws` endpoint: push peer join/leave, segment availability, stats aggregation
+   - Peer heartbeat via WebSocket (no more polling)
+   - Origin broadcasts new segment availability via Tracker WebSocket
+
+2. **Quality-Based Dynamic Peer Selection**
+   - Score peers by: latency (30%), success rate (30%), upload bandwidth (20%), trust score (20%)
+   - Exponential moving average for peer metrics
+   - Exclude peers with trustScore < 0.3
+   - Parallel peer probing: fetch low-priority segments from 2 peers, pick fastest
+
+3. **Parallel Segment Download**
+   - Request different segments from different peers simultaneously
+   - Configurable max parallel downloads (default: 3)
+   - Chunked download: split a large segment and fetch parts from multiple peers
+
+4. **Browser SDK (JavaScript/TypeScript)**
+   - `@openstreamgrid/sdk` npm package
+   - Browser-compatible build (esbuild or tsc, no Node builtins)
+   - `Hls.js` plugin: intercept Hls.js segment loading, route through P2P grid
+   - Native `HTMLVideoElement` wrapper + Hls.js integration
+   - WebSocket client for Tracker communication
+   - Same hybrid selector logic as Node peer
+
+5. **Multi-quality Adaptive Bitrate (ABR)**
+   - Origin generates 3 quality levels (low/med/high) from FFmpeg
+   - Variant playlist with 3 renditions
+   - Peer tracks segments per quality level
+   - Client selects quality based on buffer health and network speed
+
+6. **Monitoring Dashboard (Web UI)**
+   - Real-time dashboard served by tracker
+   - Shows: active broadcasts, peer count per broadcast, P2P vs Origin traffic chart
+   - Per-peer stats (uploaded, downloaded, success rate)
+   - Auto-refresh via Server-Sent Events or WebSocket push
+
+### Phase 2 Implementation Order
+
+1. WebSocket signaling on Tracker + Peer WebSocket client
+2. Quality-based peer selection & parallel download in peer SDK
+3. Browser SDK (Hls.js plugin + WebSocket)
+4. Multi-quality ABR on Origin
+5. Monitoring dashboard
+
 ## Tracker API Design
 
 ```
