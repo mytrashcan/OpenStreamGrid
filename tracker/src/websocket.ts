@@ -8,7 +8,7 @@ import type {
   WsServerMessage,
 } from "@openstreamgrid/common";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
-import { TrackerStore } from "./store.js";
+import type { TrackerStoreBackend } from "./store.js";
 
 interface Subscription {
   broadcastId: string;
@@ -66,7 +66,7 @@ export class TrackerWebSocketHub implements TrackerEvents {
 
   constructor(
     private readonly server: Server,
-    private readonly store: TrackerStore,
+    private readonly store: TrackerStoreBackend,
     private readonly downstreamEvents: TrackerEvents = {},
   ) {
     this.server.on("upgrade", this.handleUpgrade);

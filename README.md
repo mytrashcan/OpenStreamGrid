@@ -64,6 +64,7 @@ OpenStreamGrid is an independent **P2P video delivery middleware** that integrat
 - **Real-time dashboard** — served by tracker, shows active broadcasts, peer counts, P2P vs Origin traffic chart
 - **Server-Sent Events** — stats push for live updates
 - **Per-peer statistics** — uploaded/downloaded bytes, success rate, trust score
+- **Persistent tracker state** — SQLite with WAL mode, versioned migrations, and historical stats rollups
 
 ### Deployment
 - **Docker Compose** — single-command multi-peer test setup
@@ -416,6 +417,8 @@ hls.attachMedia(videoElement);
 |---------------------|---------|-------------|
 | `PORT` | `7070` | HTTP server port |
 | `STALE_PEER_MS` | `30000` | Milliseconds before a peer is considered stale |
+| `STORE_TYPE` | `sqlite` | Tracker store backend (`sqlite` or `memory`) |
+| `DB_PATH` | `./data/tracker.db` | SQLite database path when `STORE_TYPE=sqlite` |
 
 ### Origin
 

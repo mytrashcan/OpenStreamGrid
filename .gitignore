@@ -4,5 +4,6 @@ dist-test/
 coverage/
 .DS_Store
 origin/data/
+tracker/data/
 *.log
 .env

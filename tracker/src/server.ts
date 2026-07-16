@@ -12,7 +12,12 @@ import type {
   PeerStatsReport,
   SegmentPossessionReport,
 } from "@openstreamgrid/common";
-import { StoreError, TrackerStore } from "./store.js";
+import { SQLiteStore } from "./sqlite-store.js";
+import {
+  StoreError,
+  TrackerStore,
+  type TrackerStoreBackend,
+} from "./store.js";
 import { TrackerWebSocketHub, type TrackerEvents } from "./websocket.js";
 
 const DEFAULT_PORT = 7070;
@@ -41,7 +46,7 @@ export class TrackerStatsSse implements TrackerEvents {
   private eventSequence = 0;
   private publishTimer: NodeJS.Timeout | undefined;
 
-  constructor(private readonly store: TrackerStore) {}
+  constructor(private readonly store: TrackerStoreBackend) {}
 
   connect(response: ServerResponse): void {
     response.writeHead(200, {
@@ -262,7 +267,7 @@ const stringArray = (body: JsonObject, key: string): string[] => {
 };
 
 export const createTrackerHandler = (
-  store: TrackerStore,
+  store: TrackerStoreBackend,
   events: TrackerEvents = {},
   statsEvents?: TrackerStatsSse,
 ) =>
@@ -457,17 +462,31 @@ export const createTrackerHandler = (
     }
   };
 
+export type TrackerStoreFactory = () => TrackerStoreBackend;
+
+export const createConfiguredStore = (
+  environment: NodeJS.ProcessEnv = process.env,
+): TrackerStoreBackend => {
+  const storeType = (environment.STORE_TYPE ?? "sqlite").toLowerCase();
+  if (storeType === "memory") return new TrackerStore();
+  if (storeType === "sqlite") return new SQLiteStore(environment.DB_PATH);
+  throw new Error(
+    `Unsupported STORE_TYPE '${environment.STORE_TYPE}'. Expected 'sqlite' or 'memory'`,
+  );
+};
+
 export class TrackerServer {
-  readonly store: TrackerStore;
+  readonly store: TrackerStoreBackend;
   private readonly server;
   private readonly webSockets: TrackerWebSocketHub;
   private readonly statsEvents: TrackerStatsSse;
   private cleanupTimer?: NodeJS.Timeout;
 
   constructor(
-    store = new TrackerStore(),
+    storeFactory: TrackerStoreFactory = createConfiguredStore,
     private readonly stalePeerMs = DEFAULT_STALE_PEER_MS,
   ) {
+    const store = storeFactory();
     this.store = store;
     this.statsEvents = new TrackerStatsSse(store);
     let webSockets: TrackerWebSocketHub | undefined;
@@ -510,12 +529,19 @@ export class TrackerServer {
 
   async stop(): Promise<void> {
     if (this.cleanupTimer) clearInterval(this.cleanupTimer);
-    if (!this.server.listening) return;
+    if (!this.server.listening) {
+      this.store.close();
+      return;
+    }
     this.statsEvents.stop();
-    await this.webSockets.stop();
-    await new Promise<void>((resolve, reject) => {
-      this.server.close((error) => (error ? reject(error) : resolve()));
-    });
+    try {
+      await this.webSockets.stop();
+      await new Promise<void>((resolve, reject) => {
+        this.server.close((error) => (error ? reject(error) : resolve()));
+      });
+    } finally {
+      this.store.close();
+    }
   }
 
   private removeStalePeers(): void {
@@ -545,7 +571,7 @@ const run = async (): Promise<void> => {
     process.env.STALE_PEER_MS ?? String(DEFAULT_STALE_PEER_MS),
     10,
   );
-  const server = new TrackerServer(new TrackerStore(), stalePeerMs);
+  const server = new TrackerServer(createConfiguredStore, stalePeerMs);
   await server.start(port);
   console.log(JSON.stringify({ event: "tracker_started", port }));
 
