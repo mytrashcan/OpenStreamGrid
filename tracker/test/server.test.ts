@@ -175,7 +175,7 @@ const waitForSseEvent = async (
 };
 
 test("pushes peer and segment updates to WebSocket subscribers", async () => {
-  const server = new TrackerServer();
+  const server = new TrackerServer(() => new TrackerStore());
   const port = await server.start(0, "127.0.0.1");
   const baseUrl = `http://127.0.0.1:${port}`;
   let socket: WebSocket | undefined;
@@ -240,7 +240,7 @@ test("pushes peer and segment updates to WebSocket subscribers", async () => {
 });
 
 test("relays WebRTC offers and answers only to the target peer", async () => {
-  const server = new TrackerServer();
+  const server = new TrackerServer(() => new TrackerStore());
   const port = await server.start(0, "127.0.0.1");
   const baseUrl = `http://127.0.0.1:${port}`;
   const sockets: WebSocket[] = [];
@@ -317,7 +317,7 @@ test("relays WebRTC offers and answers only to the target peer", async () => {
 });
 
 test("streams global, broadcast, REST, and WebSocket stats over SSE", async () => {
-  const server = new TrackerServer();
+  const server = new TrackerServer(() => new TrackerStore());
   const port = await server.start(0, "127.0.0.1");
   const baseUrl = `http://127.0.0.1:${port}`;
   const abortController = new AbortController();

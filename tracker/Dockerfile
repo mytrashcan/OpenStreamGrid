@@ -12,7 +12,8 @@ COPY common common
 COPY tracker tracker
 RUN npm run build --workspace @openstreamgrid/common \
     && npm run build --workspace @openstreamgrid/tracker \
-    && npm prune --omit=dev
+    && npm prune --omit=dev \
+    && mkdir -p /app/data
 
 FROM gcr.io/distroless/nodejs22-debian12:nonroot
 WORKDIR /app
@@ -21,6 +22,7 @@ COPY --from=build --chown=nonroot:nonroot /app/common/package.json common/packag
 COPY --from=build --chown=nonroot:nonroot /app/tracker/dist tracker/dist
 COPY --from=build --chown=nonroot:nonroot /app/tracker/package.json tracker/package.json
 COPY --from=build --chown=nonroot:nonroot /app/node_modules node_modules
+COPY --from=build --chown=nonroot:nonroot /app/data data
 ENV NODE_ENV=production
 USER nonroot
 CMD ["tracker/dist/server.js"]

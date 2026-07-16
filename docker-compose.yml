@@ -28,6 +28,10 @@ services:
     environment:
       PORT: "7070"
       STALE_PEER_MS: "30000"
+      STORE_TYPE: sqlite
+      DB_PATH: /app/data/tracker.db
+    volumes:
+      - tracker-data:/app/data
     ports:
       - "7070:7070"
     healthcheck:
@@ -162,3 +166,6 @@ services:
 networks:
   stream-grid:
     driver: bridge
+
+volumes:
+  tracker-data:

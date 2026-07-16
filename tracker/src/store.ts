@@ -20,6 +20,44 @@ export class StoreError extends Error {
   }
 }
 
+export interface TrackerStoreBackend {
+  registerBroadcast(registration: BroadcastRegistration): {
+    broadcast: Broadcast;
+    created: boolean;
+  };
+  listBroadcasts(): Broadcast[];
+  getBroadcast(id: string): Broadcast;
+  unregisterBroadcast(id: string): void;
+  joinPeer(broadcastId: string, request: PeerJoinRequest): Peer;
+  leavePeer(broadcastId: string, peerId: string): void;
+  listPeers(broadcastId: string, segment?: string): Peer[];
+  reportSegments(
+    broadcastId: string,
+    peerId: string,
+    segments: string[],
+    replace?: boolean,
+  ): Peer;
+  heartbeat(
+    broadcastId: string,
+    peerId: string,
+    heartbeat: PeerHeartbeat,
+  ): Peer;
+  reportStats(
+    broadcastId: string,
+    peerId: string,
+    stats: PeerTrafficStats,
+  ): void;
+  reportPeerFailure(
+    broadcastId: string,
+    peerId: string,
+    report: PeerFailureReport,
+  ): Peer;
+  removeStalePeers(maxAgeMs: number): number;
+  getBroadcastStats(broadcastId: string): BroadcastStats;
+  getGlobalStats(): GlobalStats;
+  close(): void;
+}
+
 interface PeerState {
   peer: Peer;
   stats: PeerTrafficStats;
@@ -75,7 +113,7 @@ const sanitizeStats = (stats: PeerTrafficStats): PeerTrafficStats => {
   return sanitized;
 };
 
-export class TrackerStore {
+export class TrackerStore implements TrackerStoreBackend {
   private readonly broadcasts = new Map<string, BroadcastState>();
 
   constructor(
@@ -272,6 +310,8 @@ export class TrackerStore {
       ...totals,
     };
   }
+
+  close(): void {}
 
   private totalsFor(state: BroadcastState): TrafficTotals {
     const totals: TrafficTotals = {
