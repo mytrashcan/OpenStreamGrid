@@ -1,0 +1,61 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "openstreamgrid.trackerName" . }}
+  labels:
+    {{- include "openstreamgrid.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tracker
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "openstreamgrid.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: tracker
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - port: {{ .Values.tracker.port }}
+          protocol: TCP
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "openstreamgrid.originName" . }}
+  labels:
+    {{- include "openstreamgrid.labels" . | nindent 4 }}
+    app.kubernetes.io/component: origin
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "openstreamgrid.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: origin
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - port: {{ .Values.origin.port }}
+          protocol: TCP
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "openstreamgrid.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: tracker
+      ports:
+        - port: {{ .Values.tracker.port }}
+          protocol: TCP
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+{{- end }}

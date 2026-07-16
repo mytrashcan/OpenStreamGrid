@@ -1,0 +1,18 @@
+{{- if .Values.tracker.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "openstreamgrid.trackerName" . }}
+  labels:
+    {{- include "openstreamgrid.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tracker
+spec:
+  accessModes:
+    {{- toYaml .Values.tracker.persistence.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.tracker.persistence.size }}
+  {{- with .Values.tracker.persistence.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+{{- end }}

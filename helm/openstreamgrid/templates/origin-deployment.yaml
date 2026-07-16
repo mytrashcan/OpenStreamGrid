@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "openstreamgrid.originName" . }}
+  labels:
+    {{- include "openstreamgrid.labels" . | nindent 4 }}
+    app.kubernetes.io/component: origin
+spec:
+  replicas: {{ .Values.origin.replicaCount }}
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      {{- include "openstreamgrid.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: origin
+  template:
+    metadata:
+      labels:
+        {{- include "openstreamgrid.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: origin
+    spec:
+      securityContext:
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+      initContainers:
+        - name: ffmpeg-check
+          image: "{{ .Values.origin.image.repository }}:{{ .Values.origin.image.tag }}"
+          imagePullPolicy: {{ .Values.origin.image.pullPolicy }}
+          command:
+            - /usr/bin/ffmpeg
+          args:
+            - -version
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+      containers:
+        - name: origin
+          image: "{{ .Values.origin.image.repository }}:{{ .Values.origin.image.tag }}"
+          imagePullPolicy: {{ .Values.origin.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+          env:
+            - name: PORT
+              value: {{ .Values.origin.port | quote }}
+            - name: TRACKER_URL
+              value: "http://{{ include "openstreamgrid.trackerName" . }}:{{ .Values.tracker.port }}"
+            - name: BROADCAST_ID
+              value: {{ .Values.origin.env.BROADCAST_ID | quote }}
+            - name: PUBLIC_ORIGIN_URL
+              value: {{ printf "http://%s" .Values.ingress.host | quote }}
+            - name: HLS_DIRECTORY
+              value: {{ .Values.origin.env.HLS_DIRECTORY | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.origin.port }}
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            failureThreshold: 60
+            periodSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            failureThreshold: 3
+            periodSeconds: 10
+            timeoutSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            failureThreshold: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+          resources:
+            {{- toYaml .Values.origin.resources | nindent 12 }}
+          volumeMounts:
+            - name: hls-data
+              mountPath: {{ .Values.origin.env.HLS_DIRECTORY }}
+      terminationGracePeriodSeconds: 15
+      volumes:
+        - name: hls-data
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.origin.hlsSizeLimit }}
