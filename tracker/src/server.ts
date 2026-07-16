@@ -1,7 +1,11 @@
+import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import type {
+  Broadcast,
   BroadcastRegistration,
+  BroadcastStats,
+  GlobalStats,
   PeerFailureReport,
   PeerHeartbeat,
   PeerJoinRequest,
@@ -13,9 +17,133 @@ import { TrackerWebSocketHub, type TrackerEvents } from "./websocket.js";
 
 const DEFAULT_PORT = 7070;
 const DEFAULT_STALE_PEER_MS = 30_000;
+const STATS_EVENT_INTERVAL_MS = 3_000;
 const MAX_BODY_BYTES = 1_000_000;
+const DASHBOARD_HTML_URL = new URL("./dashboard.html", import.meta.url);
+
+let dashboardHtml: Promise<string> | undefined;
 
 type JsonObject = Record<string, unknown>;
+
+export interface TrackerStatsSnapshot {
+  generatedAt: string;
+  global: GlobalStats;
+  broadcasts: Array<{
+    broadcast: Broadcast;
+    stats: BroadcastStats;
+  }>;
+}
+
+type StatsEventName = "broadcasts" | "stats";
+
+export class TrackerStatsSse implements TrackerEvents {
+  private readonly clients = new Set<ServerResponse>();
+  private eventSequence = 0;
+  private publishTimer: NodeJS.Timeout | undefined;
+
+  constructor(private readonly store: TrackerStore) {}
+
+  connect(response: ServerResponse): void {
+    response.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",
+    });
+    response.flushHeaders();
+    response.write("retry: 3000\n\n");
+    this.clients.add(response);
+    response.once("close", () => {
+      this.clients.delete(response);
+      this.stopTimerWhenIdle();
+    });
+    this.publishTo(response, "stats");
+    this.startTimer();
+  }
+
+  broadcastListChanged(): void {
+    this.publish("broadcasts");
+  }
+
+  peerJoined(): void {
+    this.publish("broadcasts");
+  }
+
+  peerLeft(): void {
+    this.publish("broadcasts");
+  }
+
+  statsUpdated(): void {
+    this.publish("stats");
+  }
+
+  stop(): void {
+    if (this.publishTimer) clearInterval(this.publishTimer);
+    this.publishTimer = undefined;
+    for (const client of this.clients) client.end();
+    this.clients.clear();
+  }
+
+  private snapshot(): TrackerStatsSnapshot {
+    return {
+      generatedAt: new Date().toISOString(),
+      global: this.store.getGlobalStats(),
+      broadcasts: this.store.listBroadcasts().map((broadcast) => ({
+        broadcast,
+        stats: this.store.getBroadcastStats(broadcast.id),
+      })),
+    };
+  }
+
+  private publish(eventName: StatsEventName): void {
+    if (this.clients.size === 0) return;
+    const payload = JSON.stringify(this.snapshot());
+    const eventId = ++this.eventSequence;
+    for (const client of this.clients) {
+      this.writeEvent(client, eventName, eventId, payload);
+    }
+  }
+
+  private publishTo(
+    client: ServerResponse,
+    eventName: StatsEventName,
+  ): void {
+    this.writeEvent(
+      client,
+      eventName,
+      ++this.eventSequence,
+      JSON.stringify(this.snapshot()),
+    );
+  }
+
+  private writeEvent(
+    client: ServerResponse,
+    eventName: StatsEventName,
+    eventId: number,
+    payload: string,
+  ): void {
+    if (client.destroyed || client.writableEnded) {
+      this.clients.delete(client);
+      return;
+    }
+    client.write(`event: ${eventName}\nid: ${eventId}\ndata: ${payload}\n\n`);
+  }
+
+  private startTimer(): void {
+    if (this.publishTimer) return;
+    this.publishTimer = setInterval(
+      () => this.publish("stats"),
+      STATS_EVENT_INTERVAL_MS,
+    );
+    this.publishTimer.unref();
+  }
+
+  private stopTimerWhenIdle(): void {
+    if (this.clients.size > 0 || !this.publishTimer) return;
+    clearInterval(this.publishTimer);
+    this.publishTimer = undefined;
+  }
+}
 
 class RequestError extends Error {
   constructor(
@@ -38,6 +166,28 @@ const sendJson = (
     "cache-control": "no-store",
   });
   response.end(body);
+};
+
+const sendHtml = (
+  response: ServerResponse,
+  statusCode: number,
+  body: string,
+): void => {
+  response.writeHead(statusCode, {
+    "content-type": "text/html; charset=utf-8",
+    "content-length": Buffer.byteLength(body),
+    "cache-control": "no-cache",
+    "content-security-policy":
+      "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+  });
+  response.end(body);
+};
+
+const loadDashboardHtml = (): Promise<string> => {
+  dashboardHtml ??= readFile(DASHBOARD_HTML_URL, "utf8");
+  return dashboardHtml;
 };
 
 const sendEmpty = (response: ServerResponse, statusCode: number): void => {
@@ -114,6 +264,7 @@ const stringArray = (body: JsonObject, key: string): string[] => {
 export const createTrackerHandler = (
   store: TrackerStore,
   events: TrackerEvents = {},
+  statsEvents?: TrackerStatsSse,
 ) =>
   async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     try {
@@ -125,8 +276,19 @@ export const createTrackerHandler = (
         sendJson(response, 200, { status: "ok", service: "tracker" });
         return;
       }
+      if (method === "GET" && path === "/dashboard") {
+        sendHtml(response, 200, await loadDashboardHtml());
+        return;
+      }
       if (method === "GET" && path === "/api/v1/stats") {
         sendJson(response, 200, store.getGlobalStats());
+        return;
+      }
+      if (method === "GET" && path === "/api/v1/stats/events") {
+        if (!statsEvents) {
+          throw new RequestError("Stats event stream is unavailable", 503);
+        }
+        statsEvents.connect(response);
         return;
       }
       if (path === "/api/v1/broadcasts" && method === "POST") {
@@ -139,6 +301,7 @@ export const createTrackerHandler = (
         };
         const result = store.registerBroadcast(registration);
         sendJson(response, result.created ? 201 : 200, result.broadcast);
+        events.broadcastListChanged?.();
         return;
       }
       if (path === "/api/v1/broadcasts" && method === "GET") {
@@ -271,6 +434,7 @@ export const createTrackerHandler = (
         if (method === "DELETE") {
           store.unregisterBroadcast(broadcastId);
           sendEmpty(response, 204);
+          events.broadcastListChanged?.();
           return;
         }
       }
@@ -297,6 +461,7 @@ export class TrackerServer {
   readonly store: TrackerStore;
   private readonly server;
   private readonly webSockets: TrackerWebSocketHub;
+  private readonly statsEvents: TrackerStatsSse;
   private cleanupTimer?: NodeJS.Timeout;
 
   constructor(
@@ -304,6 +469,7 @@ export class TrackerServer {
     private readonly stalePeerMs = DEFAULT_STALE_PEER_MS,
   ) {
     this.store = store;
+    this.statsEvents = new TrackerStatsSse(store);
     let webSockets: TrackerWebSocketHub | undefined;
     const events: TrackerEvents = {
       peerJoined: (broadcastId, peer) =>
@@ -316,9 +482,12 @@ export class TrackerServer {
         webSockets?.statsUpdated(broadcastId, peerId),
       peerListChanged: (broadcastId) =>
         webSockets?.peerListChanged(broadcastId),
+      broadcastListChanged: () => webSockets?.broadcastListChanged(),
     };
-    this.server = createServer(createTrackerHandler(store, events));
-    webSockets = new TrackerWebSocketHub(this.server, store);
+    this.server = createServer(
+      createTrackerHandler(store, events, this.statsEvents),
+    );
+    webSockets = new TrackerWebSocketHub(this.server, store, this.statsEvents);
     this.webSockets = webSockets;
   }
 
@@ -342,6 +511,7 @@ export class TrackerServer {
   async stop(): Promise<void> {
     if (this.cleanupTimer) clearInterval(this.cleanupTimer);
     if (!this.server.listening) return;
+    this.statsEvents.stop();
     await this.webSockets.stop();
     await new Promise<void>((resolve, reject) => {
       this.server.close((error) => (error ? reject(error) : resolve()));
