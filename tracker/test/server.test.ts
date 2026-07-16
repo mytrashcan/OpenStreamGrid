@@ -239,6 +239,83 @@ test("pushes peer and segment updates to WebSocket subscribers", async () => {
   }
 });
 
+test("relays WebRTC offers and answers only to the target peer", async () => {
+  const server = new TrackerServer();
+  const port = await server.start(0, "127.0.0.1");
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const sockets: WebSocket[] = [];
+  try {
+    await fetch(`${baseUrl}/api/v1/broadcasts`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id: "live",
+        playlistUrl: "http://origin/live.m3u8",
+      }),
+    });
+    for (const peerId of ["peer-a", "peer-b"]) {
+      await fetch(`${baseUrl}/api/v1/broadcasts/live/peers`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          id: peerId,
+          address: `http://${peerId}:9090`,
+        }),
+      });
+      const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+      sockets.push(socket);
+      await new Promise<void>((resolve) => socket.once("open", resolve));
+      const subscribed = waitForMessage(
+        socket,
+        (message) => message.type === "peer_list",
+      );
+      socket.send(
+        JSON.stringify({ type: "subscribe", broadcastId: "live", peerId }),
+      );
+      await subscribed;
+    }
+
+    const peerASocket = sockets[0];
+    const peerBSocket = sockets[1];
+    assert.ok(peerASocket);
+    assert.ok(peerBSocket);
+    const offer = {
+      type: "webrtc_offer",
+      broadcastId: "live",
+      peerId: "peer-a",
+      targetPeerId: "peer-b",
+      requestId: "request-1",
+      sdp: "offer-sdp",
+    } as const;
+    const relayedOffer = waitForMessage(
+      peerBSocket,
+      (message) =>
+        message.type === "webrtc_offer" && message.requestId === "request-1",
+    );
+    peerASocket.send(JSON.stringify(offer));
+    assert.deepEqual(await relayedOffer, offer);
+
+    const answer = {
+      type: "webrtc_answer",
+      broadcastId: "live",
+      peerId: "peer-b",
+      targetPeerId: "peer-a",
+      requestId: "request-1",
+      sdp: "answer-sdp",
+    } as const;
+    const relayedAnswer = waitForMessage(
+      peerASocket,
+      (message) =>
+        message.type === "webrtc_answer" && message.requestId === "request-1",
+    );
+    peerBSocket.send(JSON.stringify(answer));
+    assert.deepEqual(await relayedAnswer, answer);
+  } finally {
+    for (const socket of sockets) socket.close();
+    await server.stop();
+  }
+});
+
 test("streams global, broadcast, REST, and WebSocket stats over SSE", async () => {
   const server = new TrackerServer();
   const port = await server.start(0, "127.0.0.1");

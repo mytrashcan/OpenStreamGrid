@@ -4,6 +4,7 @@ import type {
   Peer,
   PeerHeartbeat,
   PeerTrafficStats,
+  WebRtcSignalMessage,
   WsServerMessage,
 } from "@openstreamgrid/common";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
@@ -175,6 +176,17 @@ export class TrackerWebSocketHub implements TrackerEvents {
       }
 
       this.requireSubscription(socket, broadcastId, peerId);
+      if (type === "webrtc_offer" || type === "webrtc_answer") {
+        this.relayWebRtcSignal({
+          type,
+          broadcastId,
+          peerId,
+          targetPeerId: requiredString(parsed, "targetPeerId"),
+          requestId: requiredString(parsed, "requestId"),
+          sdp: requiredString(parsed, "sdp"),
+        });
+        return;
+      }
       if (type === "heartbeat") {
         const latencyMs = optionalNumber(parsed, "latencyMs");
         const uploadBandwidthBps = optionalNumber(parsed, "uploadBandwidthBps");
@@ -234,6 +246,17 @@ export class TrackerWebSocketHub implements TrackerEvents {
       broadcastId,
       peers: this.store.listPeers(broadcastId),
     });
+  }
+
+  private relayWebRtcSignal(message: WebRtcSignalMessage): void {
+    for (const [socket, subscription] of this.subscriptions) {
+      if (
+        subscription.broadcastId === message.broadcastId &&
+        subscription.peerId === message.targetPeerId
+      ) {
+        this.send(socket, message);
+      }
+    }
   }
 
   private broadcast(message: WsServerMessage): void {

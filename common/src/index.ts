@@ -78,6 +78,16 @@ export interface HealthStatus {
   details?: Record<string, string | number | boolean>;
 }
 
+export interface WebRtcSignalMessage {
+  type: "webrtc_offer" | "webrtc_answer";
+  broadcastId: string;
+  /** Signaling identity of the peer that sent this message. */
+  peerId: string;
+  targetPeerId: string;
+  requestId: string;
+  sdp: string;
+}
+
 export type WsClientMessage =
   | {
       type: "subscribe";
@@ -104,7 +114,8 @@ export type WsClientMessage =
       broadcastId: string;
       peerId: string;
       stats: PeerTrafficStats;
-    };
+    }
+  | WebRtcSignalMessage;
 
 export type WsServerMessage =
   | {
@@ -133,4 +144,5 @@ export type WsServerMessage =
       type: "peer_list";
       broadcastId: string;
       peers: Peer[];
-    };
+    }
+  | WebRtcSignalMessage;
