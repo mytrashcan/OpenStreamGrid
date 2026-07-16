@@ -2,6 +2,7 @@
   "name": "openstreamgrid",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "workspaces": [
     "common",
     "tracker",
@@ -15,6 +16,9 @@
   },
   "devDependencies": {
     "@types/node": "24.13.2",
+    "@typescript-eslint/eslint-plugin": "^8.64.0",
+    "@typescript-eslint/parser": "^8.64.0",
+    "eslint": "^10.7.0",
     "typescript": "6.0.3"
   },
   "engines": {
