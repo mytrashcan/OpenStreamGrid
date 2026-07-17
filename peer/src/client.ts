@@ -17,6 +17,8 @@ const DEFAULT_UPLOAD_SPEED_BPS = 1_000_000;
 const DEFAULT_MAX_CONNECTIONS = 3;
 const DEFAULT_MAX_PARALLEL_DOWNLOADS = 3;
 const DEFAULT_PLAYLIST_POLL_MS = 500;
+const DEFAULT_P2P_TIMEOUT_MS = 2_000;
+const DEFAULT_UPLOAD_HOST = "0.0.0.0";
 const MINIMUM_P2P_SEGMENTS_AHEAD = 2;
 const DEFAULT_HTTP_PORT = "80";
 const CLI_ARGUMENT_PAIR_SIZE = 2;
@@ -30,12 +32,14 @@ interface PeerConfiguration {
   originBaseUrl: URL;
   playlistUrl: URL;
   peerAddress: string;
+  uploadHost: string;
   peerId: string;
   cacheSizeBytes: number;
   maxUploadSpeedBps: number;
   maxConnections: number;
   maxParallelDownloads: number;
   playlistPollMs: number;
+  p2pTimeoutMs: number;
   webRtcEnabled: boolean;
 }
 
@@ -106,6 +110,7 @@ class PeerApplication {
       peerId: configuration.peerId,
       broadcastId: configuration.broadcastId,
       webRtcEnabled: configuration.webRtcEnabled,
+      p2pTimeoutMs: configuration.p2pTimeoutMs,
       webRtc: {
         segmentProvider: (segmentName) => this.cache.get(segmentName),
         onUpload: (bytes) => this.stats.recordUpload(bytes),
@@ -120,6 +125,7 @@ class PeerApplication {
       verifier,
       stats: this.stats,
       maxParallel: configuration.maxParallelDownloads,
+      p2pTimeoutMs: configuration.p2pTimeoutMs,
       transportManager: this.transportManager,
     });
   }
@@ -127,7 +133,7 @@ class PeerApplication {
   async run(signal: AbortSignal): Promise<void> {
     const address = new URL(this.configuration.peerAddress);
     const port = Number.parseInt(address.port || DEFAULT_HTTP_PORT, 10);
-    await this.uploader.start(port);
+    await this.uploader.start(port, this.configuration.uploadHost);
     try {
       await this.tracker.join({
         id: this.configuration.peerId,
@@ -262,6 +268,31 @@ const parseBoolean = (value: string, label: string): boolean => {
   throw new Error(`${label} must be true or false`);
 };
 
+const requiredValue = (value: string | undefined, label: string): string => {
+  if (value === undefined || value.trim() === "") {
+    throw new Error(`${label} is required`);
+  }
+  return value.trim();
+};
+
+const nonEmptyValue = (value: string, label: string): string => {
+  if (value.trim() === "") throw new Error(`${label} must not be empty`);
+  return value.trim();
+};
+
+const httpUrl = (value: string, label: string): URL => {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${label} must be a valid absolute URL`);
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`${label} must use HTTP or HTTPS`);
+  }
+  return url;
+};
+
 const parseDataSize = (value: string): number => {
   const match = value.trim().match(/^(\d+(?:\.\d+)?)\s*(b|kb|mb|gb)?$/i);
   if (!match?.[1]) throw new Error("Cache size must be a byte count or use KB/MB/GB");
@@ -297,10 +328,7 @@ const parseBitRate = (value: string): number => {
 };
 
 const originUrls = (value: string): { base: URL; playlist: URL } => {
-  const url = new URL(value);
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("Origin URL must use HTTP or HTTPS");
-  }
+  const url = httpUrl(value, "Origin URL");
   if (url.pathname.endsWith(".m3u8")) {
     return { base: new URL(".", url), playlist: url };
   }
@@ -342,26 +370,48 @@ export const parseArguments = (
     if (!supported.has(key)) throw new Error(`Unknown CLI argument '--${key}'`);
   }
 
-  const peerAddress = values.get("peer-address") ?? environment.PEER_ADDRESS;
-  const originValue = values.get("origin-url") ?? environment.ORIGIN_URL;
-  if (!peerAddress) throw new Error("--peer-address is required");
-  if (!originValue) throw new Error("--origin-url is required");
-  const peerUrl = new URL(peerAddress);
+  const peerAddress = requiredValue(
+    values.get("peer-address") ?? environment.PEER_ADDRESS,
+    "--peer-address or PEER_ADDRESS",
+  );
+  const originValue = requiredValue(
+    values.get("origin-url") ?? environment.ORIGIN_URL,
+    "--origin-url or ORIGIN_URL",
+  );
+  const peerUrl = httpUrl(peerAddress, "Peer address");
   if (peerUrl.protocol !== "http:") throw new Error("Peer address must use HTTP");
   if (!peerUrl.port) throw new Error("Peer address must include an upload port");
+  const peerPort = Number(peerUrl.port);
+  if (!Number.isInteger(peerPort) || peerPort < 1 || peerPort > 65_535) {
+    throw new Error("Peer address port must be between 1 and 65535");
+  }
   const origin = originUrls(originValue);
+  const trackerUrl = httpUrl(
+    values.get("tracker-url") ??
+      environment.TRACKER_URL ??
+      DEFAULT_TRACKER_URL,
+    "Tracker URL",
+  );
 
   return {
-    trackerUrl:
-      values.get("tracker-url") ?? environment.TRACKER_URL ?? DEFAULT_TRACKER_URL,
-    broadcastId:
+    trackerUrl: trackerUrl.href,
+    broadcastId: nonEmptyValue(
       values.get("broadcast-id") ??
-      environment.BROADCAST_ID ??
-      DEFAULT_BROADCAST_ID,
+        environment.BROADCAST_ID ??
+        DEFAULT_BROADCAST_ID,
+      "Broadcast ID",
+    ),
     originBaseUrl: origin.base,
     playlistUrl: origin.playlist,
     peerAddress: peerUrl.href.replace(/\/$/, ""),
-    peerId: values.get("peer-id") ?? environment.PEER_ID ?? hostname(),
+    uploadHost: nonEmptyValue(
+      environment.UPLOAD_HOST ?? DEFAULT_UPLOAD_HOST,
+      "Upload host",
+    ),
+    peerId: nonEmptyValue(
+      values.get("peer-id") ?? environment.PEER_ID ?? hostname(),
+      "Peer ID",
+    ),
     cacheSizeBytes: parseDataSize(
       values.get("cache-size") ??
         environment.CACHE_SIZE ??
@@ -387,6 +437,10 @@ export const parseArguments = (
     playlistPollMs: parsePositiveInteger(
       environment.PLAYLIST_POLL_MS ?? String(DEFAULT_PLAYLIST_POLL_MS),
       "Playlist poll interval",
+    ),
+    p2pTimeoutMs: parsePositiveInteger(
+      environment.P2P_TIMEOUT_MS ?? String(DEFAULT_P2P_TIMEOUT_MS),
+      "P2P timeout",
     ),
     webRtcEnabled: parseBoolean(
       values.get("webrtc-enabled") ?? environment.WEBRTC_ENABLED ?? "true",

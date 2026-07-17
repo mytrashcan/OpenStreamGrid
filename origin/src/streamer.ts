@@ -12,10 +12,10 @@ import {
 import path from "node:path";
 import { createLogger } from "@openstreamgrid/common";
 
-const DEFAULT_HASH_INTERVAL_MS = 250;
+export const DEFAULT_HASH_INTERVAL_MS = 250;
 const STOP_TIMEOUT_MS = 5_000;
-const DEFAULT_SEGMENT_DURATION_SECONDS = 2;
-const DEFAULT_PLAYLIST_SIZE = 8;
+export const DEFAULT_SEGMENT_DURATION_SECONDS = 2;
+export const DEFAULT_PLAYLIST_SIZE = 8;
 const TEST_PATTERN_FRAME_RATE = 30;
 const TEST_AUDIO_FREQUENCY_HZ = 1_000;
 const AUDIO_SAMPLE_RATE_HZ = 48_000;
@@ -111,13 +111,36 @@ export class HlsStreamer implements StreamController {
 
   constructor(private readonly options: StreamerOptions) {
     const masterPlaylistName = options.masterPlaylistName ?? "stream.m3u8";
+    if (options.outputDirectory.trim() === "") {
+      throw new Error("Output directory must not be empty");
+    }
+    if (!/^[-A-Za-z0-9_.]+\.m3u8$/.test(masterPlaylistName)) {
+      throw new Error("Master playlist name must be a safe .m3u8 file name");
+    }
     this.playlistPath = path.join(options.outputDirectory, masterPlaylistName);
     this.qualities = QUALITY_LEVELS.map((q) => q.name);
     this.ffmpegPath = options.ffmpegPath ?? "ffmpeg";
+    if (this.ffmpegPath.trim() === "") {
+      throw new Error("FFmpeg path must not be empty");
+    }
     this.segmentDurationSeconds =
       options.segmentDurationSeconds ?? DEFAULT_SEGMENT_DURATION_SECONDS;
     this.playlistSize = options.playlistSize ?? DEFAULT_PLAYLIST_SIZE;
     this.hashIntervalMs = options.hashIntervalMs ?? DEFAULT_HASH_INTERVAL_MS;
+    if (
+      !Number.isFinite(this.segmentDurationSeconds) ||
+      this.segmentDurationSeconds <= 0
+    ) {
+      throw new Error("Segment duration must be positive");
+    }
+    for (const [label, value] of [
+      ["Playlist size", this.playlistSize],
+      ["Hash interval", this.hashIntervalMs],
+    ] as const) {
+      if (!Number.isSafeInteger(value) || value <= 0) {
+        throw new Error(`${label} must be a positive integer`);
+      }
+    }
   }
 
   isRunning(): boolean {

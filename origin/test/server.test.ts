@@ -9,6 +9,7 @@ import test from "node:test";
 import {
   createOriginHandler,
   OriginServer,
+  parseOriginConfiguration,
   registerBroadcast,
 } from "../src/server.js";
 import { HlsStreamer, type StreamController } from "../src/streamer.js";
@@ -46,6 +47,67 @@ class FakeStreamer implements StreamController {
     return hashPath;
   }
 }
+
+test("validates origin environment configuration", () => {
+  assert.deepEqual(parseOriginConfiguration({}), {
+    port: 8080,
+    host: "0.0.0.0",
+    hlsDirectory: "/tmp/openstreamgrid-hls",
+    trackerUrl: "http://tracker:7070/",
+    broadcastId: "live",
+    publicOriginUrl: "http://origin:8080/",
+    segmentDurationSeconds: 2,
+    playlistSize: 8,
+    hashIntervalMs: 250,
+  });
+  assert.throws(
+    () => parseOriginConfiguration({ PORT: "8080x" }),
+    /PORT must be an integer between 1 and 65535/,
+  );
+  assert.throws(
+    () => parseOriginConfiguration({ TRACKER_URL: "tracker:7070" }),
+    /TRACKER_URL must use HTTP or HTTPS/,
+  );
+  assert.throws(
+    () => parseOriginConfiguration({ PUBLIC_ORIGIN_URL: "not a URL" }),
+    /PUBLIC_ORIGIN_URL must be a valid absolute URL/,
+  );
+  assert.throws(
+    () => parseOriginConfiguration({ BROADCAST_ID: " " }),
+    /BROADCAST_ID must not be empty/,
+  );
+  assert.throws(
+    () => parseOriginConfiguration({ HLS_DIRECTORY: "" }),
+    /HLS_DIRECTORY must not be empty/,
+  );
+  assert.throws(
+    () => parseOriginConfiguration({ SEGMENT_DURATION_SECONDS: "0" }),
+    /SEGMENT_DURATION_SECONDS must be a positive number/,
+  );
+  assert.throws(
+    () => parseOriginConfiguration({ PLAYLIST_SIZE: "2.5" }),
+    /PLAYLIST_SIZE must be a positive integer/,
+  );
+});
+
+test("validates HLS streamer configuration before startup", () => {
+  assert.throws(
+    () => new HlsStreamer({ outputDirectory: "" }),
+    /Output directory must not be empty/,
+  );
+  assert.throws(
+    () =>
+      new HlsStreamer({
+        outputDirectory: "/tmp/hls",
+        masterPlaylistName: "../stream.m3u8",
+      }),
+    /Master playlist name must be a safe .m3u8 file name/,
+  );
+  assert.throws(
+    () => new HlsStreamer({ outputDirectory: "/tmp/hls", playlistSize: 0 }),
+    /Playlist size must be a positive integer/,
+  );
+});
 
 class TestResponse extends Writable {
   statusCode = 0;

@@ -193,6 +193,24 @@ export class WsTrackerClient {
   private readonly peers = new Map<string, PeerInfo>();
 
   constructor(private readonly options: WsClientOptions) {
+    if (
+      typeof options.broadcastId !== "string" ||
+      options.broadcastId.trim() === ""
+    ) {
+      throw new Error("broadcastId must not be empty");
+    }
+    if (typeof options.peerId !== "string" || options.peerId.trim() === "") {
+      throw new Error("peerId must not be empty");
+    }
+    let trackerUrl: URL;
+    try {
+      trackerUrl = new URL(options.trackerUrl);
+    } catch {
+      throw new Error("trackerUrl must be a valid absolute URL");
+    }
+    if (!["http:", "https:", "ws:", "wss:"].includes(trackerUrl.protocol)) {
+      throw new Error("trackerUrl must use HTTP, HTTPS, WS, or WSS");
+    }
     this.reconnectInitialMs =
       options.reconnectInitialMs ?? DEFAULT_RECONNECT_INITIAL_MS;
     this.reconnectMaxMs =

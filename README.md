@@ -416,6 +416,7 @@ hls.attachMedia(videoElement);
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
 | `PORT` | `7070` | HTTP server port |
+| `HOST` | `0.0.0.0` | HTTP server bind host |
 | `STALE_PEER_MS` | `30000` | Milliseconds before a peer is considered stale |
 | `STORE_TYPE` | `sqlite` | Tracker store backend (`sqlite` or `memory`) |
 | `DB_PATH` | `./data/tracker.db` | SQLite database path when `STORE_TYPE=sqlite` |
@@ -425,11 +426,15 @@ hls.attachMedia(videoElement);
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
 | `PORT` | `8080` | HTTP server port |
+| `HOST` | `0.0.0.0` | HTTP server bind host |
 | `TRACKER_URL` | `http://tracker:7070` | Tracker endpoint |
 | `BROADCAST_ID` | `live` | Broadcast identifier |
 | `PUBLIC_ORIGIN_URL` | `http://origin:8080` | Public origin URL for playlist |
 | `HLS_DIRECTORY` | `/tmp/openstreamgrid-hls` | HLS output directory |
 | `FFMPEG_PATH` | `ffmpeg` | Path to FFmpeg binary |
+| `SEGMENT_DURATION_SECONDS` | `2` | HLS segment duration in seconds |
+| `PLAYLIST_SIZE` | `8` | Segments retained in each media playlist |
+| `HASH_INTERVAL_MS` | `250` | Interval for generating segment hashes |
 
 ### Peer
 
@@ -445,6 +450,9 @@ hls.attachMedia(videoElement);
 | `MAX_CONNECTIONS` / `--max-connections` | `3` | Max concurrent P2P uploads |
 | `MAX_PARALLEL_DOWNLOADS` / `--parallel-downloads` | `3` | Max parallel segment downloads |
 | `PLAYLIST_POLL_MS` | `500` | Poll interval for HLS playlist |
+| `P2P_TIMEOUT_MS` | `2000` | Timeout for peer segment requests |
+| `UPLOAD_HOST` | `0.0.0.0` | Peer upload server bind host |
+| `WEBRTC_ENABLED` / `--webrtc-enabled` | `true` | Enable WebRTC with HTTP fallback |
 
 ---
 
