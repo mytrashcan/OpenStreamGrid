@@ -20,6 +20,7 @@
 
 import type Hls from "hls.js";
 import type {
+  HlsConfig,
   Loader,
   LoaderCallbacks,
   LoaderConfiguration,
@@ -46,27 +47,39 @@ const DEFAULT_PEER_TIMEOUT_MS = 3_000;
  */
 class OpenStreamGridLoader implements Loader<LoaderContext> {
   public stats: LoaderStats;
-  public context!: LoaderContext;
+  public context: LoaderContext | null = null;
 
   private callbacks: LoaderCallbacks<LoaderContext> | null = null;
   private aborted = false;
   private abortController: AbortController | null = null;
+  private fallbackLoader: Loader<LoaderContext> | null = null;
 
   constructor(
-    config: LoaderConfiguration,
+    private readonly hlsConfig: HlsConfig,
     private readonly plugin: OpenStreamGridHlsPlugin,
+    private readonly fallbackLoaderConstructor: HlsConfig["loader"],
   ) {
     this.stats = this.createStats();
   }
 
   destroy(): void {
-    this.abort();
+    this.abortController?.abort();
+    this.fallbackLoader?.destroy();
+    this.fallbackLoader = null;
+    this.callbacks = null;
+    this.context = null;
   }
 
   abort(): void {
+    if (this.aborted) return;
     this.aborted = true;
+    this.stats.aborted = true;
     this.abortController?.abort();
-    this.callbacks?.onAbort?.(this.stats, this.context, null);
+    if (this.fallbackLoader) {
+      this.fallbackLoader.abort();
+    } else if (this.context) {
+      this.callbacks?.onAbort?.(this.stats, this.context, null);
+    }
   }
 
   load(
@@ -88,7 +101,7 @@ class OpenStreamGridLoader implements Loader<LoaderContext> {
     }
 
     // Only intercept .ts segments, let playlists pass through to default loader
-    if (!url.endsWith(".ts")) {
+    if (!this.isTransportStreamUrl(url)) {
       this.fallbackToOrigin(context, config, callbacks);
       return;
     }
@@ -103,13 +116,13 @@ class OpenStreamGridLoader implements Loader<LoaderContext> {
         this.stats.total = result.data.byteLength;
 
         callbacks.onSuccess(
-          { url, data: result.data.buffer as ArrayBuffer },
+          { url, data: Uint8Array.from(result.data).buffer },
           this.stats,
           context,
           null,
         );
       })
-      .catch((_err: Error) => {
+      .catch((_error: unknown) => {
         if (this.aborted) return;
         // Fallback to origin on any failure
         this.fallbackToOrigin(context, config, callbacks);
@@ -123,44 +136,18 @@ class OpenStreamGridLoader implements Loader<LoaderContext> {
     config: LoaderConfiguration,
     callbacks: LoaderCallbacks<LoaderContext>,
   ): void {
-    // Use Hls.js built-in default loader as fallback
-    const DefaultLoader = (Hls as any).DefaultConfig?.loader;
-    if (DefaultLoader) {
-      const fallback = new DefaultLoader(config) as Loader<LoaderContext>;
-      fallback.load(context, config, callbacks);
-    } else {
-      // Last resort: native fetch
-      const url = context.url;
-      if (!url) {
-        callbacks.onError(
-          { type: 1, details: "", fatal: false, reason: "No URL" },
-          this.stats,
-          context,
-          null,
-        );
-        return;
-      }
-      fetch(url)
-        .then((r) => r.arrayBuffer())
-        .then((buf) => {
-          this.stats.loading.end = performance.now();
-          this.stats.loaded = buf.byteLength;
-          this.stats.total = buf.byteLength;
-          callbacks.onSuccess(
-            { url, data: buf },
-            this.stats,
-            context,
-            null,
-          );
-        })
-        .catch((err) => {
-          callbacks.onError(
-            { type: 1, details: err.message, fatal: false, reason: "Fetch failed" },
-            this.stats,
-            context,
-            null,
-          );
-        });
+    if (this.aborted) return;
+    const fallback = new this.fallbackLoaderConstructor(this.hlsConfig);
+    this.fallbackLoader = fallback;
+    this.stats = fallback.stats;
+    fallback.load(context, config, callbacks);
+  }
+
+  private isTransportStreamUrl(url: string): boolean {
+    try {
+      return new URL(url, globalThis.location?.href).pathname.endsWith(".ts");
+    } catch {
+      return false;
     }
   }
 
@@ -184,6 +171,16 @@ class OpenStreamGridLoader implements Loader<LoaderContext> {
   }
 }
 
+const createP2PLoader = (
+  plugin: OpenStreamGridHlsPlugin,
+  fallbackLoader: HlsConfig["loader"],
+): HlsConfig["loader"] =>
+  class extends OpenStreamGridLoader {
+    constructor(config: HlsConfig) {
+      super(config, plugin, fallbackLoader);
+    }
+  };
+
 /**
  * OpenStreamGrid Hls.js plugin.
  *
@@ -202,10 +199,10 @@ export class OpenStreamGridHlsPlugin {
   public readonly cache: SegmentCache;
   public readonly wsClient: WsTrackerClient;
   public readonly stats: PeerTrafficStats;
-  private readonly verifier?: OriginHashVerifier;
+  private readonly verifier: OriginHashVerifier | undefined;
   private readonly peerTimeoutMs: number;
   private readonly peerId: string;
-  private readonly onEvent?: (event: SdkEvent) => void;
+  private readonly onEvent: ((event: SdkEvent) => void) | undefined;
 
   constructor(config: HlsjsPluginConfig) {
     this.peerId = config.peerId ?? generatePeerId();
@@ -257,24 +254,16 @@ export class OpenStreamGridHlsPlugin {
    * Replaces the default loader with OpenStreamGrid's P2P-aware loader.
    */
   attach(hls: Hls): void {
-    const self = this;
-
-    // Create a custom loader constructor that Hls.js can instantiate
-    const P2PLoader = function (
-      this: OpenStreamGridLoader,
-      config: LoaderConfiguration,
-    ) {
-      return new OpenStreamGridLoader(config, self);
-    } as any;
+    const DefaultLoader = hls.config.loader;
 
     // Register the custom loader
-    (hls.config as any).loader = P2PLoader;
+    hls.config.loader = createP2PLoader(this, DefaultLoader);
 
     // Start WebSocket connection
-    this.wsClient.start().catch((err) => {
+    this.wsClient.start().catch((error: unknown) => {
       console.warn(
         "[OpenStreamGrid] Failed to connect to tracker, continuing with origin-only",
-        err,
+        error,
       );
     });
   }
@@ -348,7 +337,7 @@ export class OpenStreamGridHlsPlugin {
           this.emit({
             type: "peer_fetched",
             segment: segmentName,
-            peerId: peers[0]?.id,
+            ...(peers[0] ? { peerId: peers[0].id } : {}),
           });
 
           return { data: result };
@@ -409,7 +398,7 @@ export class OpenStreamGridHlsPlugin {
         ),
       ),
       new Promise<PromiseSettledResult<Uint8Array>[]>((resolve) =>
-        setTimeout(resolve, this.peerTimeoutMs, [] as any),
+        setTimeout(() => resolve([]), this.peerTimeoutMs),
       ),
     ]);
 
@@ -471,7 +460,11 @@ export class OpenStreamGridHlsPlugin {
   }
 
   private emit(event: SdkEvent): void {
-    this.onEvent?.(event);
+    try {
+      this.onEvent?.(event);
+    } catch (error) {
+      console.error("[OpenStreamGrid] onEvent callback failed", error);
+    }
   }
 }
 

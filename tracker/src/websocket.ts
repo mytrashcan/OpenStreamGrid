@@ -3,10 +3,10 @@ import type { Duplex } from "node:stream";
 import type {
   Peer,
   PeerHeartbeat,
-  PeerTrafficStats,
   WebRtcSignalMessage,
   WsServerMessage,
 } from "@openstreamgrid/common";
+import { parsePeerTrafficStats } from "@openstreamgrid/common";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 import type { TrackerStoreBackend } from "./store.js";
 
@@ -209,11 +209,10 @@ export class TrackerWebSocketHub implements TrackerEvents {
         return;
       }
       if (type === "report_stats") {
-        if (!isObject(parsed.stats)) throw new Error("'stats' must be an object");
         this.store.reportStats(
           broadcastId,
           peerId,
-          parsed.stats as unknown as PeerTrafficStats,
+          parsePeerTrafficStats(parsed.stats),
         );
         this.statsUpdated(broadcastId, peerId);
         return;
@@ -269,7 +268,12 @@ export class TrackerWebSocketHub implements TrackerEvents {
 
   private send(socket: WebSocket, message: WsServerMessage): void {
     if (socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify(message));
+      try {
+        socket.send(JSON.stringify(message));
+      } catch (error) {
+        console.error("failed to send tracker WebSocket message", error);
+        socket.terminate();
+      }
     }
   }
 }

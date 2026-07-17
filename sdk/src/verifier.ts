@@ -9,7 +9,10 @@ import type { SegmentVerificationResult } from "./types.js";
  * Compute the SHA-256 hex digest of a Uint8Array using SubtleCrypto.
  */
 export async function sha256Hex(data: Uint8Array): Promise<string> {
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashBuffer = await crypto.subtle.digest(
+    "SHA-256",
+    Uint8Array.from(data).buffer,
+  );
   const hashArray = new Uint8Array(hashBuffer);
   return Array.from(hashArray)
     .map((b) => b.toString(16).padStart(2, "0"))
@@ -57,10 +60,19 @@ export async function verifySegmentHash(
  * Fetches the .sha256 file for a segment from the origin and verifies.
  */
 export class OriginHashVerifier {
-  constructor(private readonly originBaseUrl: string) {}
+  private readonly originBaseUrl: URL;
+
+  constructor(originBaseUrl: string) {
+    this.originBaseUrl = new URL(
+      originBaseUrl.endsWith("/") ? originBaseUrl : `${originBaseUrl}/`,
+    );
+  }
 
   async verify(segmentName: string, data: Uint8Array): Promise<SegmentVerificationResult> {
-    const hashUrl = `${this.originBaseUrl}/${encodeURIComponent(segmentName)}.sha256`;
+    const hashUrl = new URL(
+      `${encodeURIComponent(segmentName)}.sha256`,
+      this.originBaseUrl,
+    );
     const response = await fetch(hashUrl);
     if (!response.ok) {
       throw new Error(

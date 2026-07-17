@@ -51,6 +51,47 @@ export interface PeerTrafficStats {
   segmentsCached: number;
 }
 
+export const peerTrafficStatKeys = [
+  "bytesDownloadedP2P",
+  "bytesDownloadedOrigin",
+  "bytesUploadedP2P",
+  "p2pRequests",
+  "p2pSuccesses",
+  "p2pFailures",
+  "originRequests",
+  "integrityFailures",
+  "fallbacks",
+  "segmentsCached",
+] as const satisfies ReadonlyArray<keyof PeerTrafficStats>;
+
+export const parsePeerTrafficStats = (value: unknown): PeerTrafficStats => {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Peer traffic stats must be an object");
+  }
+
+  const record = value as Record<string, unknown>;
+  const stats: PeerTrafficStats = {
+    bytesDownloadedP2P: 0,
+    bytesDownloadedOrigin: 0,
+    bytesUploadedP2P: 0,
+    p2pRequests: 0,
+    p2pSuccesses: 0,
+    p2pFailures: 0,
+    originRequests: 0,
+    integrityFailures: 0,
+    fallbacks: 0,
+    segmentsCached: 0,
+  };
+  for (const key of peerTrafficStatKeys) {
+    const metric = record[key];
+    if (typeof metric !== "number" || !Number.isFinite(metric) || metric < 0) {
+      throw new TypeError(`Peer traffic stat '${key}' must be a non-negative number`);
+    }
+    stats[key] = metric;
+  }
+  return stats;
+};
+
 export interface PeerStatsReport {
   stats: PeerTrafficStats;
 }

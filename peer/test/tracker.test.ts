@@ -44,7 +44,8 @@ const waitFor = async (
   }
 };
 
-test("uses WebSocket peer updates and reconnects after disconnect", async () => {
+test("uses validated WebSocket peer updates and reconnects after disconnect", async (context) => {
+  context.mock.method(console, "error", () => {});
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await new Promise<void>((resolve) => server.once("listening", resolve));
   const port = (server.address() as AddressInfo).port;
@@ -56,6 +57,13 @@ test("uses WebSocket peer updates and reconnects after disconnect", async () => 
       const message = JSON.parse(data.toString()) as WsClientMessage;
       messages.push(message);
       if (message.type === "subscribe") {
+        socket.send(
+          JSON.stringify({
+            type: "peer_list",
+            broadcastId: "live",
+            peers: [{ id: "malformed-peer" }],
+          }),
+        );
         socket.send(
           JSON.stringify({
             type: "peer_list",

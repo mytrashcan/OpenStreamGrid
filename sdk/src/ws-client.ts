@@ -14,7 +14,139 @@ import type {
 const DEFAULT_RECONNECT_INITIAL_MS = 1_000;
 const DEFAULT_RECONNECT_MAX_MS = 30_000;
 const DEFAULT_REPORT_INTERVAL_MS = 5_000;
-const DEFAULT_HEARTBEAT_INTERVAL_MS = 10_000;
+
+type JsonObject = Record<string, unknown>;
+
+const isObject = (value: unknown): value is JsonObject =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+const isStringArray = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((item) => typeof item === "string");
+
+const parseMetadata = (value: unknown): Record<string, string> | undefined => {
+  if (value === undefined) return undefined;
+  if (!isObject(value)) {
+    throw new TypeError("Peer metadata must contain only strings");
+  }
+  const metadata: Record<string, string> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item !== "string") {
+      throw new TypeError("Peer metadata must contain only strings");
+    }
+    metadata[key] = item;
+  }
+  return metadata;
+};
+
+const parsePeer = (value: unknown): PeerInfo => {
+  if (!isObject(value)) throw new TypeError("Peer must be an object");
+  const { id, address, segments, latencyMs, successRate, trustScore } = value;
+  if (
+    typeof id !== "string" ||
+    typeof address !== "string" ||
+    !isStringArray(segments) ||
+    typeof latencyMs !== "number" ||
+    !Number.isFinite(latencyMs) ||
+    typeof successRate !== "number" ||
+    !Number.isFinite(successRate) ||
+    typeof trustScore !== "number" ||
+    !Number.isFinite(trustScore)
+  ) {
+    throw new TypeError("Peer contains invalid required fields");
+  }
+  if (
+    value.uploadBandwidthBps !== undefined &&
+    (typeof value.uploadBandwidthBps !== "number" ||
+      !Number.isFinite(value.uploadBandwidthBps))
+  ) {
+    throw new TypeError("Peer upload bandwidth must be a finite number");
+  }
+  const metadata = parseMetadata(value.metadata);
+  if (
+    (value.joinedAt !== undefined && typeof value.joinedAt !== "string") ||
+    (value.lastSeenAt !== undefined && typeof value.lastSeenAt !== "string")
+  ) {
+    throw new TypeError("Peer timestamps must be strings");
+  }
+  return {
+    id,
+    address,
+    segments: [...segments],
+    latencyMs,
+    successRate,
+    trustScore,
+    ...(typeof value.uploadBandwidthBps === "number"
+      ? { uploadBandwidthBps: value.uploadBandwidthBps }
+      : {}),
+    ...(metadata ? { metadata } : {}),
+    ...(typeof value.joinedAt === "string" ? { joinedAt: value.joinedAt } : {}),
+    ...(typeof value.lastSeenAt === "string"
+      ? { lastSeenAt: value.lastSeenAt }
+      : {}),
+  };
+};
+
+const parseServerMessage = (raw: unknown): WsServerMessage => {
+  if (typeof raw !== "string") {
+    throw new TypeError("WebSocket message must be text");
+  }
+  const value: unknown = JSON.parse(raw);
+  if (!isObject(value) || typeof value.type !== "string") {
+    throw new TypeError("WebSocket message must be an object with a type");
+  }
+  if (typeof value.broadcastId !== "string") {
+    throw new TypeError("WebSocket message broadcastId must be a string");
+  }
+  const broadcastId = value.broadcastId;
+  switch (value.type) {
+    case "peer_list":
+      if (!Array.isArray(value.peers)) {
+        throw new TypeError("Peer list must be an array");
+      }
+      return {
+        type: "peer_list",
+        broadcastId,
+        peers: value.peers.map(parsePeer),
+      };
+    case "peer_joined":
+      return { type: "peer_joined", broadcastId, peer: parsePeer(value.peer) };
+    case "peer_left":
+      if (typeof value.peerId !== "string") {
+        throw new TypeError("Peer ID must be a string");
+      }
+      return { type: "peer_left", broadcastId, peerId: value.peerId };
+    case "segment_available":
+      if (typeof value.peerId !== "string" || !isStringArray(value.segments)) {
+        throw new TypeError("Segment availability message is invalid");
+      }
+      return {
+        type: "segment_available",
+        broadcastId,
+        peerId: value.peerId,
+        segments: value.segments,
+      };
+    case "stats_update":
+      if (typeof value.peerId !== "string") {
+        throw new TypeError("Peer ID must be a string");
+      }
+      return {
+        type: "stats_update",
+        broadcastId,
+        peerId: value.peerId,
+        stats: value.stats,
+      };
+    default:
+      throw new TypeError(`Unsupported WebSocket message type '${value.type}'`);
+  }
+};
+
+const callSafely = (label: string, callback: () => void): void => {
+  try {
+    callback();
+  } catch (error) {
+    console.error(`[OpenStreamGrid] ${label} callback failed`, error);
+  }
+};
 
 export interface WsClientOptions {
   trackerUrl: string;
@@ -68,7 +200,10 @@ export class WsTrackerClient {
   start(): Promise<void> {
     if (this.started) return Promise.resolve();
     this.started = true;
-    this.reportTimer = setInterval(() => this.reportStatus(), this.reportIntervalMs);
+    this.reportTimer = setInterval(
+      () => this.reportStatusSafely(),
+      this.reportIntervalMs,
+    );
     return new Promise<void>((resolve) => {
       this.firstConnectResolve = resolve;
       this.openSocket();
@@ -154,12 +289,11 @@ export class WsTrackerClient {
       });
 
       // Report initial status
-      this.reportStatus();
+      this.reportStatusSafely();
 
-      // Notify
-      this.options.onConnected?.();
       this.firstConnectResolve?.();
       this.firstConnectResolve = null;
+      callSafely("onConnected", () => this.options.onConnected?.());
     };
 
     ws.onmessage = (event: MessageEvent) => {
@@ -168,13 +302,13 @@ export class WsTrackerClient {
 
     ws.onerror = (event: Event) => {
       console.error("[OpenStreamGrid] WebSocket error");
-      this.options.onError?.(event);
+      callSafely("onError", () => this.options.onError?.(event));
     };
 
     ws.onclose = () => {
       if (this.ws === ws) this.ws = null;
       this.peers.clear();
-      this.options.onDisconnected?.();
+      callSafely("onDisconnected", () => this.options.onDisconnected?.());
       if (this.started) this.scheduleReconnect();
     };
   }
@@ -215,9 +349,19 @@ export class WsTrackerClient {
     this.reportSegments();
   }
 
+  private reportStatusSafely(): void {
+    try {
+      this.reportStatus();
+    } catch (error) {
+      if (this.started) {
+        console.error("[OpenStreamGrid] Failed to report peer status", error);
+      }
+    }
+  }
+
   private handleMessage(raw: unknown): void {
     try {
-      const msg = JSON.parse(raw as string) as WsServerMessage;
+      const msg = parseServerMessage(raw);
       if (msg.broadcastId !== this.options.broadcastId) return;
 
       switch (msg.type) {
@@ -226,7 +370,9 @@ export class WsTrackerClient {
           for (const peer of msg.peers) {
             this.peers.set(peer.id, { ...peer, segments: [...peer.segments] });
           }
-          this.options.onPeerList?.([...this.peers.values()]);
+          callSafely("onPeerList", () =>
+            this.options.onPeerList?.([...this.peers.values()]),
+          );
           break;
         }
         case "peer_joined": {
@@ -234,12 +380,12 @@ export class WsTrackerClient {
             ...msg.peer,
             segments: [...msg.peer.segments],
           });
-          this.options.onPeerJoined?.(msg.peer);
+          callSafely("onPeerJoined", () => this.options.onPeerJoined?.(msg.peer));
           break;
         }
         case "peer_left": {
           this.peers.delete(msg.peerId);
-          this.options.onPeerLeft?.(msg.peerId);
+          callSafely("onPeerLeft", () => this.options.onPeerLeft?.(msg.peerId));
           break;
         }
         case "segment_available": {
@@ -249,7 +395,9 @@ export class WsTrackerClient {
               ...new Set([...peer.segments, ...msg.segments]),
             ];
           }
-          this.options.onSegmentAvailable?.(msg.peerId, msg.segments);
+          callSafely("onSegmentAvailable", () =>
+            this.options.onSegmentAvailable?.(msg.peerId, msg.segments),
+          );
           break;
         }
       }
@@ -260,7 +408,11 @@ export class WsTrackerClient {
 
   private send(msg: WsClientMessage): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(msg));
+      try {
+        this.ws.send(JSON.stringify(msg));
+      } catch (error) {
+        console.error("[OpenStreamGrid] Failed to send WebSocket message", error);
+      }
     }
   }
 

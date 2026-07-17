@@ -10,9 +10,9 @@
     "peer"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present && npm --prefix sdk run build",
     "test": "npm run test --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present && npm --prefix sdk run typecheck"
   },
   "devDependencies": {
     "@types/node": "24.13.2",
