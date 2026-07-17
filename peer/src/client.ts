@@ -38,16 +38,14 @@ const delay = async (milliseconds: number, signal: AbortSignal): Promise<void> =
       resolve();
       return;
     }
-    const timer = setTimeout(resolve, milliseconds);
+    const finish = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, milliseconds);
     timer.unref();
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
+    signal.addEventListener("abort", finish, { once: true });
   });
 };
 
@@ -101,10 +99,10 @@ class PeerApplication {
       peerId: configuration.peerId,
       broadcastId: configuration.broadcastId,
       webRtcEnabled: configuration.webRtcEnabled,
-      verifier,
       webRtc: {
         segmentProvider: (segmentName) => this.cache.get(segmentName),
         onUpload: (bytes) => this.stats.recordUpload(bytes),
+        maxUploadConnections: configuration.maxConnections,
       },
     });
     this.fetcher = new HybridSegmentFetcher({
@@ -129,8 +127,7 @@ class PeerApplication {
         address: this.configuration.peerAddress,
         uploadBandwidthBps: this.configuration.maxUploadSpeedBps,
       });
-      await this.tracker.start();
-      await this.transportManager.start();
+      await Promise.all([this.tracker.start(), this.transportManager.start()]);
       console.log(
         JSON.stringify({
           event: "peer_started",
@@ -196,35 +193,37 @@ class PeerApplication {
     processed: Set<string>,
   ): Promise<void> {
     for (const { segmentName } of batch) this.inFlightSegments.add(segmentName);
-    const [result] = await Promise.allSettled([
-      this.fetcher.fetchSegments(
+    let fetched: Map<string, Buffer>;
+    try {
+      fetched = await this.fetcher.fetchSegments(
         batch.map(({ segmentName }) => segmentName),
         this.tracker.allPeers(),
-      ),
-    ]);
-    for (const { segmentName } of batch) {
-      this.inFlightSegments.delete(segmentName);
-    }
-    if (!result || result.status === "rejected") {
-      console.error("parallel segment fetch failed", result?.reason);
+      );
+    } catch (error) {
+      console.error("parallel segment fetch failed", error);
       return;
+    } finally {
+      for (const { segmentName } of batch) {
+        this.inFlightSegments.delete(segmentName);
+      }
     }
-    for (const [segmentName, data] of result.value) {
+    for (const [segmentName, data] of fetched) {
       processed.add(segmentName);
+      const source = this.fetcher.getLastSource(segmentName);
       console.log(
         JSON.stringify({
           event: "segment_fetched",
           peerId: this.configuration.peerId,
           segment: segmentName,
-          source: this.fetcher.getLastSource(segmentName),
+          source,
           bytes: data.byteLength,
-          ...(this.fetcher.getLastSource(segmentName) === "p2p"
+          ...(source === "p2p"
             ? { transport: this.transportManager.getStats().lastTransport }
             : {}),
         }),
       );
     }
-    if (result.value.size > 0) this.tracker.reportSegments();
+    if (fetched.size > 0) this.tracker.reportSegments();
   }
 
   private async shutdown(): Promise<void> {

@@ -25,7 +25,6 @@ export class HttpTransport implements TransportAdapter {
     bytesTransferred: 0,
     latencyMs: { min: Infinity, max: 0, average: 0 },
   };
-  private latencies: number[] = [];
 
   constructor(options: HttpTransportOptions = {}) {
     this.fetchImpl = options.fetchImpl ?? fetch;
@@ -110,35 +109,22 @@ export class HttpTransport implements TransportAdapter {
     this.stats.segmentsFailed = 0;
     this.stats.bytesTransferred = 0;
     this.stats.latencyMs = { min: Infinity, max: 0, average: 0 };
-    this.latencies = [];
   }
 
   private recordSuccess(bytes: number, latencyMs: number): void {
     this.stats.segmentsFetched += 1;
     this.stats.bytesTransferred += bytes;
-    this.latencies.push(latencyMs);
-    this.recomputeLatencyStats();
+    const count = this.stats.segmentsFetched;
+    const previous = this.stats.latencyMs;
+    this.stats.latencyMs = {
+      min: Math.min(previous.min, latencyMs),
+      max: Math.max(previous.max, latencyMs),
+      average: previous.average + (latencyMs - previous.average) / count,
+    };
   }
 
   private recordFailure(): void {
     this.stats.segmentsFailed += 1;
-  }
-
-  private recomputeLatencyStats(): void {
-    const count = this.latencies.length;
-    if (count === 0) {
-      this.stats.latencyMs = { min: Infinity, max: 0, average: 0 };
-      return;
-    }
-    let sum = 0;
-    let min = Infinity;
-    let max = 0;
-    for (const ms of this.latencies) {
-      sum += ms;
-      if (ms < min) min = ms;
-      if (ms > max) max = ms;
-    }
-    this.stats.latencyMs = { min, max, average: sum / count };
   }
 
   private copyStats(): TransportStats {

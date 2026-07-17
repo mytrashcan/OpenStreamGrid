@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import test from "node:test";
 import { createOriginHandler, registerBroadcast } from "../src/server.js";
-import type { StreamController } from "../src/streamer.js";
+import { HlsStreamer, type StreamController } from "../src/streamer.js";
 
 class FakeStreamer implements StreamController {
   readonly playlistPath: string;
@@ -122,4 +122,28 @@ test("registers a broadcast with the tracker", async () => {
     id: "live",
     playlistUrl: "http://origin:8080/hls/stream.m3u8",
   });
+});
+
+test("creates hashes for nested variant segments without allowing traversal", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "openstreamgrid-streamer-"));
+  const segmentDirectory = path.join(directory, "low");
+  const segmentName = "low/segment_000001.ts";
+  await mkdir(segmentDirectory, { recursive: true });
+  await writeFile(path.join(directory, segmentName), "variant-segment-data");
+
+  const streamer = new HlsStreamer({ outputDirectory: directory });
+  const hashPath = await streamer.ensureHash(segmentName);
+  const expectedDigest = createHash("sha256")
+    .update("variant-segment-data")
+    .digest("hex");
+
+  assert.equal(
+    await readFile(hashPath, "utf8"),
+    `${expectedDigest}  ${segmentName}\n`,
+  );
+  await assert.rejects(
+    streamer.ensureHash("../outside.ts"),
+    /Invalid segment name/,
+  );
+  await rm(directory, { recursive: true, force: true });
 });

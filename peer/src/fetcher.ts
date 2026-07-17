@@ -12,6 +12,7 @@ const DEFAULT_URGENT_THRESHOLD_SEGMENTS = 2;
 const DEFAULT_MAX_PARALLEL_DOWNLOADS = 3;
 const MINIMUM_TRUST_SCORE = 0.3;
 const METRIC_EMA_ALPHA = 0.3;
+const MAX_TRACKED_SEGMENT_SOURCES = 2_000;
 
 const LATENCY_WEIGHT = 0.3;
 const SUCCESS_RATE_WEIGHT = 0.3;
@@ -117,7 +118,7 @@ export class HybridSegmentFetcher {
   ): Promise<SegmentFetchResult> {
     const cached = this.options.cache.get(segmentName);
     if (cached) {
-      this.lastSources.set(segmentName, "cache");
+      this.setLastSource(segmentName, "cache");
       return { data: cached, source: "cache" };
     }
 
@@ -138,7 +139,7 @@ export class HybridSegmentFetcher {
           const data = await this.fetchFromPeer(peer, segmentName);
           this.observePeer(peer, performance.now() - startedAt, true, data.byteLength);
           this.cache(segmentName, data);
-          this.lastSources.set(segmentName, "p2p");
+          this.setLastSource(segmentName, "p2p");
           return { data, source: "p2p" };
         } catch (error) {
           const failure =
@@ -165,7 +166,7 @@ export class HybridSegmentFetcher {
 
     const data = await this.fetchFromOrigin(segmentName);
     this.cache(segmentName, data);
-    this.lastSources.set(segmentName, "origin");
+    this.setLastSource(segmentName, "origin");
     return { data, source: "origin" };
   }
 
@@ -191,7 +192,7 @@ export class HybridSegmentFetcher {
       const tasks = wave.map((segmentName) => {
         const cached = this.options.cache.get(segmentName);
         if (cached) {
-          this.lastSources.set(segmentName, "cache");
+          this.setLastSource(segmentName, "cache");
           return Promise.resolve<SegmentFetchResult>({
             data: cached,
             source: "cache",
@@ -219,7 +220,7 @@ export class HybridSegmentFetcher {
         if (!segmentName) continue;
         if (result.status === "fulfilled") {
           fetched.set(segmentName, result.value.data);
-          this.lastSources.set(segmentName, result.value.source);
+          this.setLastSource(segmentName, result.value.source);
         } else {
           failures.push(result.reason);
         }
@@ -290,6 +291,10 @@ export class HybridSegmentFetcher {
   }
 
   private rankPeers(peers: Peer[]): Peer[] {
+    const currentPeerIds = new Set(peers.map((peer) => peer.id));
+    for (const peerId of this.peerMetrics.keys()) {
+      if (!currentPeerIds.has(peerId)) this.peerMetrics.delete(peerId);
+    }
     const candidates = peers
       .filter(
         (peer) =>
@@ -448,5 +453,18 @@ export class HybridSegmentFetcher {
   private cache(segmentName: string, data: Buffer): void {
     this.options.cache.set(segmentName, data);
     this.options.stats.setSegmentsCached(this.options.cache.size);
+  }
+
+  private setLastSource(
+    segmentName: string,
+    source: SegmentFetchResult["source"],
+  ): void {
+    this.lastSources.delete(segmentName);
+    this.lastSources.set(segmentName, source);
+    while (this.lastSources.size > MAX_TRACKED_SEGMENT_SOURCES) {
+      const oldest = this.lastSources.keys().next().value;
+      if (oldest === undefined) break;
+      this.lastSources.delete(oldest);
+    }
   }
 }

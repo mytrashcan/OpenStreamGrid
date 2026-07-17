@@ -41,6 +41,10 @@ import type {
 const DEFAULT_MAX_CACHE_BYTES = 100 * 1024 * 1024;
 const DEFAULT_PEER_TIMEOUT_MS = 3_000;
 
+type PeerFetchAttempt =
+  | { index: number; data: Uint8Array }
+  | { index: number; data?: never };
+
 /**
  * Custom loader for Hls.js that routes segment requests through the
  * OpenStreamGrid P2P network.
@@ -107,29 +111,42 @@ class OpenStreamGridLoader implements Loader<LoaderContext> {
     }
 
     const segmentName = this.extractSegmentName(url);
-    this.plugin
-      .loadSegment(segmentName, url, this.abortController.signal)
-      .then((result) => {
-        if (this.aborted) return;
-        this.stats.loading.end = performance.now();
-        this.stats.loaded = result.data.byteLength;
-        this.stats.total = result.data.byteLength;
-
-        callbacks.onSuccess(
-          { url, data: Uint8Array.from(result.data).buffer },
-          this.stats,
-          context,
-          null,
-        );
-      })
-      .catch((_error: unknown) => {
-        if (this.aborted) return;
-        // Fallback to origin on any failure
-        this.fallbackToOrigin(context, config, callbacks);
-      });
+    void this.loadThroughGrid(
+      segmentName,
+      url,
+      context,
+      config,
+      callbacks,
+      this.abortController.signal,
+    );
   }
 
   // ---- internal ----
+
+  private async loadThroughGrid(
+    segmentName: string,
+    url: string,
+    context: LoaderContext,
+    config: LoaderConfiguration,
+    callbacks: LoaderCallbacks<LoaderContext>,
+    signal: AbortSignal,
+  ): Promise<void> {
+    try {
+      const result = await this.plugin.loadSegment(segmentName, url, signal);
+      if (this.aborted) return;
+      this.stats.loading.end = performance.now();
+      this.stats.loaded = result.data.byteLength;
+      this.stats.total = result.data.byteLength;
+      callbacks.onSuccess(
+        { url, data: Uint8Array.from(result.data).buffer },
+        this.stats,
+        context,
+        null,
+      );
+    } catch {
+      if (!this.aborted) this.fallbackToOrigin(context, config, callbacks);
+    }
+  }
 
   private fallbackToOrigin(
     context: LoaderContext,
@@ -323,7 +340,6 @@ export class OpenStreamGridHlsPlugin {
                 segment: segmentName,
                 message: `Expected ${verification.expectedHash}, got ${verification.actualHash}`,
               });
-              this.stats.p2pFailures++;
               throw new Error("Segment integrity check failed");
             }
             this.emit({ type: "integrity_ok", segment: segmentName });
@@ -391,24 +407,51 @@ export class OpenStreamGridHlsPlugin {
     });
 
     const topPeers = sorted.slice(0, 3);
-    const results = await Promise.race([
-      Promise.allSettled(
-        topPeers.map((peer) =>
-          this.fetchFromPeer(peer, segmentName, this.peerTimeoutMs, signal),
-        ),
-      ),
-      new Promise<PromiseSettledResult<Uint8Array>[]>((resolve) =>
-        setTimeout(() => resolve([]), this.peerTimeoutMs),
-      ),
-    ]);
-
-    if (!Array.isArray(results)) return null;
-
-    for (const result of results) {
-      if (result.status === "fulfilled") return result.value;
+    const controller = new AbortController();
+    const onAbort = (): void => controller.abort(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) onAbort();
+    try {
+      const pending = new Map(
+        topPeers.map((peer, index) => [
+          index,
+          this.fetchPeerAttempt(
+            index,
+            peer,
+            segmentName,
+            controller.signal,
+          ),
+        ]),
+      );
+      while (pending.size > 0) {
+        const result = await Promise.race(pending.values());
+        pending.delete(result.index);
+        if (result.data) return result.data;
+      }
+      return null;
+    } finally {
+      controller.abort();
+      signal.removeEventListener("abort", onAbort);
     }
+  }
 
-    return null;
+  private async fetchPeerAttempt(
+    index: number,
+    peer: PeerInfo,
+    segmentName: string,
+    signal: AbortSignal,
+  ): Promise<PeerFetchAttempt> {
+    try {
+      const data = await this.fetchFromPeer(
+        peer,
+        segmentName,
+        this.peerTimeoutMs,
+        signal,
+      );
+      return { index, data };
+    } catch {
+      return { index };
+    }
   }
 
   /**

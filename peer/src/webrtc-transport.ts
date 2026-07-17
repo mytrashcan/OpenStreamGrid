@@ -13,6 +13,8 @@ import type {
 import type { SegmentIntegrityVerifier } from "./verifier.js";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+const DEFAULT_MAX_UPLOAD_CONNECTIONS = 3;
+const MAX_TRACKED_PEERS = 2_000;
 const DATA_CHANNEL_LABEL = "segment-request";
 const MAX_DATA_CHANNEL_CHUNK_BYTES = 16 * 1024;
 const MAX_BUFFERED_BYTES = 1024 * 1024;
@@ -30,6 +32,7 @@ export interface WebRtcTransportOptions {
   segmentProvider?: SegmentProvider;
   verifier?: SegmentIntegrityVerifier;
   onUpload?: (bytes: number) => void;
+  maxUploadConnections?: number;
   peerConnectionFactory?: (configuration: RTCConfiguration) => RTCPeerConnection;
   webSocketFactory?: (url: URL) => WebSocket;
 }
@@ -82,6 +85,7 @@ export class WebRtcTransport implements TransportAdapter {
   private readonly segmentProvider: SegmentProvider | undefined;
   private readonly verifier: SegmentIntegrityVerifier | undefined;
   private readonly onUpload: ((bytes: number) => void) | undefined;
+  private readonly maxUploadConnections: number;
   private readonly peerConnectionFactory: (
     configuration: RTCConfiguration,
   ) => RTCPeerConnection;
@@ -89,7 +93,7 @@ export class WebRtcTransport implements TransportAdapter {
   private readonly activePeerIds = new Set<string>();
   private readonly activeConnections = new Set<RTCPeerConnection>();
   private readonly pendingAnswers = new Map<string, PendingAnswer>();
-  private readonly latencies: number[] = [];
+  private activeUploadConnections = 0;
   private readonly stats: TransportStats = {
     segmentsFetched: 0,
     segmentsFailed: 0,
@@ -110,6 +114,14 @@ export class WebRtcTransport implements TransportAdapter {
     this.segmentProvider = options.segmentProvider;
     this.verifier = options.verifier;
     this.onUpload = options.onUpload;
+    this.maxUploadConnections =
+      options.maxUploadConnections ?? DEFAULT_MAX_UPLOAD_CONNECTIONS;
+    if (
+      !Number.isSafeInteger(this.maxUploadConnections) ||
+      this.maxUploadConnections <= 0
+    ) {
+      throw new Error("Maximum WebRTC upload connections must be a positive integer");
+    }
     this.peerConnectionFactory =
       options.peerConnectionFactory ??
       ((configuration) => new wrtc.RTCPeerConnection(configuration));
@@ -221,7 +233,7 @@ export class WebRtcTransport implements TransportAdapter {
       if (this.verifier && !(await this.verifier.verify(segmentName, data))) {
         throw new Error("WebRTC segment integrity verification failed");
       }
-      this.activePeerIds.add(peerAddress);
+      this.rememberPeer(peerAddress);
       this.recordSuccess(data.byteLength, performance.now() - startedAt);
       return data;
     } catch (error) {
@@ -251,7 +263,6 @@ export class WebRtcTransport implements TransportAdapter {
     this.stats.segmentsFailed = 0;
     this.stats.bytesTransferred = 0;
     this.stats.latencyMs = { min: Infinity, max: 0, average: 0 };
-    this.latencies.length = 0;
   }
 
   private requireConfiguration(): Required<
@@ -416,7 +427,15 @@ export class WebRtcTransport implements TransportAdapter {
   }
 
   private async acceptOffer(message: WebRtcSignalMessage): Promise<void> {
-    const connection = this.createPeerConnection();
+    if (this.activeUploadConnections >= this.maxUploadConnections) return;
+    this.activeUploadConnections += 1;
+    let connection: RTCPeerConnection;
+    try {
+      connection = this.createPeerConnection();
+    } catch (error) {
+      this.activeUploadConnections -= 1;
+      throw error;
+    }
     const controller = new AbortController();
     const timeout = setTimeout(
       () => controller.abort(new Error("Incoming WebRTC request timed out")),
@@ -427,6 +446,7 @@ export class WebRtcTransport implements TransportAdapter {
     const finish = (): void => {
       if (finished) return;
       finished = true;
+      this.activeUploadConnections -= 1;
       clearTimeout(timeout);
       this.closePeerConnection(connection);
     };
@@ -521,7 +541,7 @@ export class WebRtcTransport implements TransportAdapter {
     }
     await this.waitForBufferedData(channel, signal);
     await receipt;
-    this.activePeerIds.add(requesterPeerId);
+    this.rememberPeer(requesterPeerId);
     channel.close();
   }
 
@@ -843,13 +863,23 @@ export class WebRtcTransport implements TransportAdapter {
   private recordSuccess(bytes: number, latencyMs: number): void {
     this.stats.segmentsFetched += 1;
     this.stats.bytesTransferred += bytes;
-    this.latencies.push(latencyMs);
-    const total = this.latencies.reduce((sum, value) => sum + value, 0);
+    const count = this.stats.segmentsFetched;
+    const previous = this.stats.latencyMs;
     this.stats.latencyMs = {
-      min: Math.min(...this.latencies),
-      max: Math.max(...this.latencies),
-      average: total / this.latencies.length,
+      min: Math.min(previous.min, latencyMs),
+      max: Math.max(previous.max, latencyMs),
+      average: previous.average + (latencyMs - previous.average) / count,
     };
+  }
+
+  private rememberPeer(peerId: string): void {
+    this.activePeerIds.delete(peerId);
+    this.activePeerIds.add(peerId);
+    while (this.activePeerIds.size > MAX_TRACKED_PEERS) {
+      const oldest = this.activePeerIds.values().next().value;
+      if (oldest === undefined) break;
+      this.activePeerIds.delete(oldest);
+    }
   }
 
   private recordFailure(): void {

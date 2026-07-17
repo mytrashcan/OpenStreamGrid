@@ -92,6 +92,8 @@ export class HlsStreamer implements StreamController {
   private readonly hashIntervalMs: number;
   private child: ChildProcess | undefined;
   private hashTimer: NodeJS.Timeout | undefined;
+  private hashGeneration: Promise<void> | undefined;
+  private readonly pendingHashes = new Map<string, Promise<string>>();
 
   constructor(private readonly options: StreamerOptions) {
     const masterPlaylistName = options.masterPlaylistName ?? "stream.m3u8";
@@ -148,9 +150,7 @@ export class HlsStreamer implements StreamController {
     });
 
     this.hashTimer = setInterval(
-      () => void this.generatePublishedHashes().catch((error: unknown) => {
-        console.error("failed to generate segment hashes", error);
-      }),
+      () => this.scheduleHashGeneration(),
       this.hashIntervalMs,
     );
     this.hashTimer.unref();
@@ -161,26 +161,54 @@ export class HlsStreamer implements StreamController {
       clearInterval(this.hashTimer);
       this.hashTimer = undefined;
     }
+    const hashGeneration = this.hashGeneration;
     const child = this.child;
-    if (!child || child.exitCode !== null) return;
-
-    const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
-    child.kill("SIGTERM");
-    const timeout = new Promise<"timeout">((resolve) => {
-      const timer = setTimeout(() => resolve("timeout"), STOP_TIMEOUT_MS);
-      timer.unref();
-    });
-    if ((await Promise.race([exited, timeout])) === "timeout") {
-      child.kill("SIGKILL");
-      await exited;
+    if (child && child.exitCode === null) {
+      const exited = new Promise<void>((resolve) =>
+        child.once("exit", () => resolve()),
+      );
+      child.kill("SIGTERM");
+      let timeoutTimer: NodeJS.Timeout | undefined;
+      try {
+        const timeout = new Promise<"timeout">((resolve) => {
+          timeoutTimer = setTimeout(() => resolve("timeout"), STOP_TIMEOUT_MS);
+          timeoutTimer.unref();
+        });
+        if ((await Promise.race([exited, timeout])) === "timeout") {
+          child.kill("SIGKILL");
+          await exited;
+        }
+      } finally {
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+      }
     }
+    await hashGeneration;
   }
 
   async ensureHash(segmentName: string): Promise<string> {
-    if (!/^[-A-Za-z0-9_./]+\\.ts$/.test(segmentName)) {
+    if (!/^[-A-Za-z0-9_./]+\.ts$/.test(segmentName)) {
       throw new Error("Invalid segment name");
     }
-    const segmentPath = path.join(this.options.outputDirectory, segmentName);
+    const outputDirectory = path.resolve(this.options.outputDirectory);
+    const segmentPath = path.resolve(outputDirectory, segmentName);
+    if (!segmentPath.startsWith(`${outputDirectory}${path.sep}`)) {
+      throw new Error("Invalid segment name");
+    }
+    const pending = this.pendingHashes.get(segmentName);
+    if (pending) return pending;
+    const promise = this.createHashFile(segmentName, segmentPath).finally(() => {
+      if (this.pendingHashes.get(segmentName) === promise) {
+        this.pendingHashes.delete(segmentName);
+      }
+    });
+    this.pendingHashes.set(segmentName, promise);
+    return promise;
+  }
+
+  private async createHashFile(
+    segmentName: string,
+    segmentPath: string,
+  ): Promise<string> {
     const hashPath = `${segmentPath}.sha256`;
     try {
       await access(hashPath);
@@ -195,6 +223,18 @@ export class HlsStreamer implements StreamController {
     await writeFile(temporaryPath, `${digest}  ${segmentName}\n`, "utf8");
     await rename(temporaryPath, hashPath);
     return hashPath;
+  }
+
+  private scheduleHashGeneration(): void {
+    if (this.hashGeneration) return;
+    const generation = this.generatePublishedHashes()
+      .catch((error: unknown) => {
+        console.error("failed to generate segment hashes", error);
+      })
+      .finally(() => {
+        if (this.hashGeneration === generation) this.hashGeneration = undefined;
+      });
+    this.hashGeneration = generation;
   }
 
   private ffmpegArguments(): string[] {
@@ -278,15 +318,15 @@ export class HlsStreamer implements StreamController {
       "-master_pl_name",
       path.basename(this.playlistPath),
       "-hls_segment_filename",
-      "hls/%v/segment_%06d.ts",
-      "hls/%v/stream.m3u8",
+      "%v/segment_%06d.ts",
+      "%v/stream.m3u8",
     ];
   }
 
   private async createVariantDirectories(): Promise<void> {
     await Promise.all(
       QUALITY_LEVELS.map((q) =>
-        mkdir(path.join(this.options.outputDirectory, "hls", q.name), {
+        mkdir(path.join(this.options.outputDirectory, q.name), {
           recursive: true,
         }),
       ),
@@ -299,7 +339,6 @@ export class HlsStreamer implements StreamController {
       QUALITY_LEVELS.map(async (q) => {
         const variantPlaylist = path.join(
           this.options.outputDirectory,
-          "hls",
           q.name,
           "stream.m3u8",
         );
@@ -319,7 +358,7 @@ export class HlsStreamer implements StreamController {
         await Promise.all(
           segmentNames.map(async (segmentName) => {
             try {
-              await this.ensureHash(path.join("hls", q.name, segmentName));
+              await this.ensureHash(path.join(q.name, segmentName));
             } catch (error) {
               if (!isMissing(error)) throw error;
             }
@@ -344,19 +383,20 @@ export class HlsStreamer implements StreamController {
           rm(path.join(this.options.outputDirectory, entry), { force: true, recursive: true }),
         ),
     );
-    // Clean variant subdirectories
-    for (const q of QUALITY_LEVELS) {
-      const variantDir = path.join(this.options.outputDirectory, "hls", q.name);
-      try {
-        const variantEntries = await readdir(variantDir);
-        await Promise.all(
-          variantEntries.map((entry) =>
-            rm(path.join(variantDir, entry), { force: true, recursive: true }),
-          ),
-        );
-      } catch (error) {
-        if (!isMissing(error)) throw error;
-      }
-    }
+    await Promise.all(
+      QUALITY_LEVELS.map(async (q) => {
+        const variantDir = path.join(this.options.outputDirectory, q.name);
+        try {
+          const variantEntries = await readdir(variantDir);
+          await Promise.all(
+            variantEntries.map((entry) =>
+              rm(path.join(variantDir, entry), { force: true, recursive: true }),
+            ),
+          );
+        } catch (error) {
+          if (!isMissing(error)) throw error;
+        }
+      }),
+    );
   }
 }
