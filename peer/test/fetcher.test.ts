@@ -297,3 +297,35 @@ test("falls back only failed parallel peer downloads to origin", async () => {
     { peerId: "peer-a", reason: "http" },
   ]);
 });
+
+test("coalesces concurrent requests for the same segment", async () => {
+  let requests = 0;
+  let release: (() => void) | undefined;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const fetcher = new HybridSegmentFetcher({
+    selfPeerId: "self",
+    originBaseUrl: new URL("http://origin:8080/hls/"),
+    cache: new SegmentCache(1_000),
+    directory: { async listPeers() { return []; }, async reportFailure() {} },
+    verifier,
+    stats: new TrafficStats(),
+    fetchImpl: async () => {
+      requests += 1;
+      await blocked;
+      return new Response("shared-segment");
+    },
+  });
+
+  const first = fetcher.fetchSegment("segment.ts", 0);
+  const second = fetcher.fetchSegment("segment.ts", 0);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(requests, 1);
+  release?.();
+
+  const [firstResult, secondResult] = await Promise.all([first, second]);
+  assert.equal(firstResult.data.toString(), "shared-segment");
+  assert.equal(secondResult.data.toString(), "shared-segment");
+  assert.equal(requests, 1);
+});

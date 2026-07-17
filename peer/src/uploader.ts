@@ -62,6 +62,8 @@ export class UploadServer {
   private readonly server;
   private readonly bucket: TokenBucket;
   private activeConnections = 0;
+  private startPromise: Promise<number> | undefined;
+  private stopPromise: Promise<void> | undefined;
 
   constructor(private readonly options: UploadServerOptions) {
     if (!Number.isSafeInteger(options.maxConnections) || options.maxConnections <= 0) {
@@ -74,6 +76,19 @@ export class UploadServer {
   }
 
   async start(port: number, host = "0.0.0.0"): Promise<number> {
+    if (this.stopPromise) {
+      throw new Error("Upload server cannot be started after shutdown begins");
+    }
+    if (this.startPromise) return this.startPromise;
+    const startPromise = this.startOnce(port, host).catch((error: unknown) => {
+      if (this.startPromise === startPromise) this.startPromise = undefined;
+      throw error;
+    });
+    this.startPromise = startPromise;
+    return startPromise;
+  }
+
+  private async startOnce(port: number, host: string): Promise<number> {
     await new Promise<void>((resolve, reject) => {
       this.server.once("error", reject);
       this.server.listen(port, host, () => {
@@ -86,11 +101,16 @@ export class UploadServer {
   }
 
   async stop(): Promise<void> {
-    if (!this.server.listening) return;
-    await new Promise<void>((resolve, reject) => {
-      this.server.close((error) => (error ? reject(error) : resolve()));
-      this.server.closeAllConnections();
-    });
+    if (this.stopPromise) return this.stopPromise;
+    this.stopPromise = (async (): Promise<void> => {
+      await this.startPromise?.catch(() => undefined);
+      if (!this.server.listening) return;
+      await new Promise<void>((resolve, reject) => {
+        this.server.close((error) => (error ? reject(error) : resolve()));
+        this.server.closeAllConnections();
+      });
+    })();
+    return this.stopPromise;
   }
 
   private async handle(

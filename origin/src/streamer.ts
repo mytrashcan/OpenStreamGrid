@@ -93,6 +93,8 @@ export class HlsStreamer implements StreamController {
   private child: ChildProcess | undefined;
   private hashTimer: NodeJS.Timeout | undefined;
   private hashGeneration: Promise<void> | undefined;
+  private startPromise: Promise<void> | undefined;
+  private stopPromise: Promise<void> | undefined;
   private readonly pendingHashes = new Map<string, Promise<string>>();
 
   constructor(private readonly options: StreamerOptions) {
@@ -110,7 +112,15 @@ export class HlsStreamer implements StreamController {
   }
 
   async start(): Promise<void> {
+    if (this.stopPromise) await this.stopPromise;
     if (this.isRunning()) return;
+    this.startPromise ??= this.startOnce().finally(() => {
+      this.startPromise = undefined;
+    });
+    return this.startPromise;
+  }
+
+  private async startOnce(): Promise<void> {
     await mkdir(this.options.outputDirectory, { recursive: true });
     await this.createVariantDirectories();
     await this.removeOldStreamFiles();
@@ -157,6 +167,14 @@ export class HlsStreamer implements StreamController {
   }
 
   async stop(): Promise<void> {
+    this.stopPromise ??= this.stopOnce().finally(() => {
+      this.stopPromise = undefined;
+    });
+    return this.stopPromise;
+  }
+
+  private async stopOnce(): Promise<void> {
+    await this.startPromise;
     if (this.hashTimer) {
       clearInterval(this.hashTimer);
       this.hashTimer = undefined;

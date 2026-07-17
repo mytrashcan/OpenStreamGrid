@@ -155,6 +155,8 @@ export const createOriginHandler = (
 
 export class OriginServer {
   private readonly server;
+  private startPromise: Promise<number> | undefined;
+  private stopPromise: Promise<void> | undefined;
 
   constructor(private readonly options: OriginServerOptions) {
     this.server = createServer(
@@ -163,6 +165,19 @@ export class OriginServer {
   }
 
   async start(port = DEFAULT_PORT, host = "0.0.0.0"): Promise<number> {
+    if (this.stopPromise) {
+      throw new Error("Origin server cannot be started after shutdown begins");
+    }
+    if (this.startPromise) return this.startPromise;
+    const startPromise = this.startOnce(port, host).catch((error: unknown) => {
+      if (this.startPromise === startPromise) this.startPromise = undefined;
+      throw error;
+    });
+    this.startPromise = startPromise;
+    return startPromise;
+  }
+
+  private async startOnce(port: number, host: string): Promise<number> {
     await mkdir(this.options.hlsDirectory, { recursive: true });
     await this.options.streamer.start();
     try {
@@ -182,7 +197,11 @@ export class OriginServer {
   }
 
   async stop(): Promise<void> {
-    await Promise.all([this.stopHttpServer(), this.options.streamer.stop()]);
+    this.stopPromise ??= (async (): Promise<void> => {
+      await this.startPromise?.catch(() => undefined);
+      await Promise.all([this.stopHttpServer(), this.options.streamer.stop()]);
+    })();
+    return this.stopPromise;
   }
 
   private async stopHttpServer(): Promise<void> {

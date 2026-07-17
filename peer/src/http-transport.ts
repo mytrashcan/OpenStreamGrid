@@ -66,6 +66,7 @@ export class HttpTransport implements TransportAdapter {
     // Forward the outer signal so abort from either side works.
     const onOuterAbort = (): void => controller.abort(signal?.reason);
     signal?.addEventListener("abort", onOuterAbort, { once: true });
+    if (signal?.aborted) onOuterAbort();
 
     try {
       const url = new URL(

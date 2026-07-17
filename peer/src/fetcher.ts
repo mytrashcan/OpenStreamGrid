@@ -122,6 +122,27 @@ export class HybridSegmentFetcher {
       return { data: cached, source: "cache" };
     }
 
+    const existing = this.inFlightSegments.get(segmentName);
+    if (existing) {
+      const result = await existing.promise;
+      this.setLastSource(segmentName, result.source);
+      return result;
+    }
+
+    const promise = this.fetchUncachedSegment(segmentName, segmentsAhead).finally(
+      () => {
+        const current = this.inFlightSegments.get(segmentName);
+        if (current?.promise === promise) this.inFlightSegments.delete(segmentName);
+      },
+    );
+    this.inFlightSegments.set(segmentName, { promise });
+    return promise;
+  }
+
+  private async fetchUncachedSegment(
+    segmentName: string,
+    segmentsAhead: number,
+  ): Promise<SegmentFetchResult> {
     if (segmentsAhead >= this.urgentThresholdSegments) {
       let peers: Peer[] = [];
       try {

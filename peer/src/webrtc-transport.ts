@@ -149,10 +149,7 @@ export class WebRtcTransport implements TransportAdapter {
       if (socket.readyState === WebSocket.CONNECTING) socket.terminate();
       else socket.close(1000, "WebRTC transport stopping");
     }
-    for (const pending of this.pendingAnswers.values()) {
-      pending.reject(new Error("WebRTC transport stopped"));
-    }
-    this.pendingAnswers.clear();
+    this.rejectPendingAnswers(new Error("WebRTC transport stopped"));
     for (const connection of this.activeConnections) connection.close();
     this.activeConnections.clear();
     this.activePeerIds.clear();
@@ -291,7 +288,7 @@ export class WebRtcTransport implements TransportAdapter {
 
     const socket = this.webSocketFactory(url);
     this.signalSocket = socket;
-    this.signalConnection = new Promise<WebSocket>((resolve, reject) => {
+    const connection = new Promise<WebSocket>((resolve, reject) => {
       let settled = false;
       const cleanup = (): void => {
         socket.off("open", onOpen);
@@ -330,17 +327,32 @@ export class WebRtcTransport implements TransportAdapter {
       socket.once("close", onCloseBeforeOpen);
       signal?.addEventListener("abort", onAbort, { once: true });
       if (signal?.aborted) onAbort();
-    }).finally(() => {
-      this.signalConnection = undefined;
     });
+    const trackedConnection = connection.finally(() => {
+      if (this.signalConnection === trackedConnection) {
+        this.signalConnection = undefined;
+      }
+    });
+    this.signalConnection = trackedConnection;
 
     socket.on("message", (data, isBinary) => {
-      if (!isBinary) this.handleSignalMessage(data);
+      if (this.signalSocket === socket && !isBinary) {
+        this.handleSignalMessage(data);
+      }
     });
     socket.once("close", () => {
-      if (this.signalSocket === socket) this.signalSocket = undefined;
+      if (this.signalSocket !== socket) return;
+      this.signalSocket = undefined;
+      this.rejectPendingAnswers(
+        new Error("WebRTC signaling socket closed during negotiation"),
+      );
     });
-    return this.signalConnection;
+    return trackedConnection;
+  }
+
+  private rejectPendingAnswers(error: Error): void {
+    for (const pending of this.pendingAnswers.values()) pending.reject(error);
+    this.pendingAnswers.clear();
   }
 
   private handleSignalMessage(data: RawData): void {

@@ -7,6 +7,7 @@ import type {
   TransportOptions,
   TransportStats,
 } from "../src/transport.js";
+import { HttpTransport } from "../src/http-transport.js";
 import { TransportManager } from "../src/transport-manager.js";
 import { WebRtcTransport } from "../src/webrtc-transport.js";
 
@@ -20,16 +21,24 @@ const emptyStats = (): TransportStats => ({
 class StubTransport implements TransportAdapter {
   readonly peers: string[] = [];
   requests = 0;
+  starts = 0;
+  stops = 0;
   lastPeerAddress: string | undefined;
 
   constructor(
     readonly name: string,
     private response: Buffer | Error,
+    private readonly startGate: Promise<void> = Promise.resolve(),
   ) {}
 
-  async start(_options: TransportOptions): Promise<void> {}
+  async start(_options: TransportOptions): Promise<void> {
+    this.starts += 1;
+    await this.startGate;
+  }
 
-  async stop(): Promise<void> {}
+  async stop(): Promise<void> {
+    this.stops += 1;
+  }
 
   async requestSegment(
     peerAddress: string,
@@ -147,6 +156,48 @@ test("uses WebRTC when the transport is available", async () => {
     webrtc: { successes: 1, failures: 0 },
     http: { successes: 0, failures: 0 },
   });
+});
+
+test("coalesces concurrent transport starts and stops", async () => {
+  let releaseStart: (() => void) | undefined;
+  const startGate = new Promise<void>((resolve) => {
+    releaseStart = resolve;
+  });
+  const webRtc = new StubTransport("webrtc", Buffer.alloc(0), startGate);
+  const http = new StubTransport("http", Buffer.alloc(0), startGate);
+  const manager = new TransportManager({
+    webRtcTransport: webRtc,
+    httpTransport: http,
+  });
+
+  const firstStart = manager.start();
+  const secondStart = manager.start();
+  assert.equal(webRtc.starts, 1);
+  assert.equal(http.starts, 1);
+  releaseStart?.();
+  await Promise.all([firstStart, secondStart]);
+  await Promise.all([manager.stop(), manager.stop()]);
+
+  assert.equal(webRtc.starts, 1);
+  assert.equal(http.starts, 1);
+  assert.equal(webRtc.stops, 1);
+  assert.equal(http.stops, 1);
+});
+
+test("forwards an already-aborted signal to HTTP requests", async () => {
+  const controller = new AbortController();
+  controller.abort(new Error("shutting down"));
+  const transport = new HttpTransport({
+    fetchImpl: async (_input, init) => {
+      assert.equal(init?.signal?.aborted, true);
+      throw init?.signal?.reason;
+    },
+  });
+
+  await assert.rejects(
+    transport.requestSegment("http://peer-a:9090", "segment.ts", controller.signal),
+    /shutting down/,
+  );
 });
 
 test("falls back to HTTP when WebRTC fails", async () => {
