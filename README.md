@@ -76,6 +76,16 @@ Run the deterministic integration test with `bash test/docker-test.sh`. Run the
 load benchmark with `bash scripts/benchmark.sh`; its JSON result is written to
 `benchmark-results.json` unless `BENCHMARK_OUTPUT` overrides the destination.
 
+## Examples
+
+- [Browser SDK demo](sdk/examples/basic.html): build the SDK, then run
+  `python3 -m http.server 4173 --directory sdk` and open
+  `http://localhost:4173/examples/basic.html`.
+- [React integration](examples/react-integration/README.md): a minimal Vite app
+  with a lifecycle-safe Hls.js wrapper and live P2P/origin state.
+- [Five-peer Docker demo](examples/docker-demo/README.md): a scripted tracker,
+  origin, and five-peer walkthrough with health checks and traffic statistics.
+
 ## API summary
 
 All tracker resources are under `/api/v1`. When `TRACKER_API_KEY` is set, send

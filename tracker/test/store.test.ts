@@ -47,6 +47,18 @@ test("aggregates current and departed peer traffic", () => {
   assert.equal(totals.bytesDownloadedP2P, 50);
 });
 
+test("returns isolated per-peer traffic snapshots", () => {
+  const store = new TrackerStore();
+  store.registerBroadcast({ id: "live", playlistUrl: "http://origin/live.m3u8" });
+  store.joinPeer("live", { id: "peer-a", address: "http://peer-a:9090" });
+  store.reportStats("live", "peer-a", stats(100, 50));
+
+  const snapshot = store.listPeerStats("live");
+  assert.deepEqual(snapshot[0]?.stats, stats(100, 50));
+  snapshot[0]!.stats.bytesDownloadedP2P = 999;
+  assert.deepEqual(store.listPeerStats("live")[0]?.stats, stats(100, 50));
+});
+
 test("penalizes integrity failures more heavily and expires stale peers", () => {
   let now = new Date("2026-07-17T00:00:00.000Z");
   const store = new TrackerStore(() => now);

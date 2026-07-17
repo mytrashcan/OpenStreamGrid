@@ -1,252 +1,223 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>OpenStreamGrid + Hls.js Demo</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #0f0f0f;
-      color: #eee;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 2rem 1rem;
-      min-height: 100vh;
-    }
-    h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
-    .subtitle { color: #888; font-size: 0.9rem; margin-bottom: 1.5rem; }
-    video {
-      width: 100%;
-      max-width: 854px;
-      border-radius: 8px;
-      background: #000;
-      box-shadow: 0 4px 24px rgba(0,0,0,0.6);
-      margin-bottom: 1.5rem;
-    }
-    .controls {
-      display: flex;
-      gap: 0.75rem;
-      margin-bottom: 1.5rem;
-      flex-wrap: wrap;
-      justify-content: center;
-    }
-    button {
-      padding: 0.6rem 1.4rem;
-      border: none;
-      border-radius: 6px;
-      background: #2563eb;
-      color: #fff;
-      font-weight: 600;
-      cursor: pointer;
-      transition: background 0.2s;
-    }
-    button:hover { background: #1d4ed8; }
-    button:disabled {
-      background: #374151;
-      cursor: not-allowed;
-    }
-    button.danger { background: #dc2626; }
-    button.danger:hover { background: #b91c1c; }
-    .status {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 0.75rem;
-      width: 100%;
-      max-width: 854px;
-      margin-bottom: 1.5rem;
-    }
-    .stat-card {
-      background: #1a1a2e;
-      padding: 0.75rem 1rem;
-      border-radius: 6px;
-    }
-    .stat-label { color: #888; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
-    .stat-value { font-size: 1.1rem; font-weight: 600; margin-top: 0.25rem; }
-    .stat-value.green { color: #22c55e; }
-    .stat-value.blue { color: #3b82f6; }
-    .stat-value.yellow { color: #eab308; }
-    .event-log {
-      width: 100%;
-      max-width: 854px;
-      background: #1a1a2e;
-      border-radius: 6px;
-      padding: 0.75rem 1rem;
-      max-height: 200px;
-      overflow-y: auto;
-      font-family: "SF Mono", "Fira Code", "Courier New", monospace;
-      font-size: 0.8rem;
-    }
-    .event-log div { padding: 0.15rem 0; border-bottom: 1px solid #2a2a3e; }
-    .event-log .cache-hit { color: #22c55e; }
-    .event-log .cache-miss { color: #eab308; }
-    .event-log .peer-fetched { color: #3b82f6; }
-    .event-log .origin-fallback { color: #f97316; }
-    .event-log .integrity-ok { color: #22c55e; }
-    .event-log .integrity-fail { color: #ef4444; }
-  </style>
-</head>
-<body>
-  <h1>🎥 OpenStreamGrid + Hls.js</h1>
-  <p class="subtitle">Hybrid P2P-CDN live streaming demo</p>
-
-  <video id="video" controls muted autoplay></video>
-
-  <div class="controls">
-    <button id="btnConnect" disabled>Connecting...</button>
-    <button id="btnPlay" disabled>▶ Load Stream</button>
-    <button id="btnStop" disabled class="danger">■ Stop</button>
-  </div>
-
-  <div class="status">
-    <div class="stat-card">
-      <div class="stat-label">Connection</div>
-      <div class="stat-value" id="statConnection">—</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Peers</div>
-      <div class="stat-value" id="statPeers">0</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Cache</div>
-      <div class="stat-value" id="statCache">0 items</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">P2P / Origin</div>
-      <div class="stat-value" id="statRatio">0 / 0</div>
-    </div>
-  </div>
-
-  <div class="event-log" id="eventLog">
-    <div>— Waiting for events —</div>
-  </div>
-
-  <!-- Import Hls.js from CDN -->
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@0.14.17/dist/hls.min.js"></script>
-  <!-- Import our built SDK -->
-  <script type="module">
-    import { OpenStreamGridHlsPlugin } from "../dist/sdk.js";
-
-    const video = document.getElementById("video");
-    const btnConnect = document.getElementById("btnConnect");
-    const btnPlay = document.getElementById("btnPlay");
-    const btnStop = document.getElementById("btnStop");
-    const statConnection = document.getElementById("statConnection");
-    const statPeers = document.getElementById("statPeers");
-    const statCache = document.getElementById("statCache");
-    const statRatio = document.getElementById("statRatio");
-    const eventLog = document.getElementById("eventLog");
-
-    let hls = null;
-    let plugin = null;
-
-    function addEvent(type, msg) {
-      const div = document.createElement("div");
-      div.className = type;
-      const time = new Date().toLocaleTimeString();
-      div.textContent = `[${time}] ${msg}`;
-      eventLog.appendChild(div);
-      eventLog.scrollTop = eventLog.scrollHeight;
-    }
-
-    // Configuration — override via URL query params
-    const params = new URLSearchParams(window.location.search);
-    const trackerUrl = params.get("tracker") || "ws://localhost:7070/ws";
-    const broadcastId = params.get("broadcast") || "live";
-    const streamUrl = params.get("stream") || "http://localhost:8080/hls/stream.m3u8";
-    const originBaseUrl = params.get("origin") || "http://localhost:8080/hls";
-
-    addEvent("cache-miss", `Tracker: ${trackerUrl}`);
-    addEvent("cache-miss", `Broadcast: ${broadcastId}`);
-
-    // Create plugin
-    plugin = new OpenStreamGridHlsPlugin({
-      trackerUrl,
-      broadcastId,
-      originBaseUrl,
-      maxCacheBytes: 50 * 1024 * 1024,  // 50 MB
-      peerTimeoutMs: 3000,
-      verifySegments: true,
-      onReady: () => {
-        btnConnect.disabled = true;
-        btnConnect.textContent = "✓ Connected";
-        btnPlay.disabled = false;
-        statConnection.textContent = "Connected";
-        statConnection.className = "stat-value green";
-        addEvent("integrity-ok", "WebSocket connected to tracker");
-      },
-      onEvent: (event) => {
-        // Update stats display
-        if (event.type === "peer_fetched") {
-          addEvent("peer-fetched", `Fetched ${event.segment} from peer ${event.peerId?.slice(0,8)}`);
-        } else if (event.type === "origin_fallback") {
-          addEvent("origin-fallback", `Fallback: ${event.segment} — ${event.message}`);
-        } else if (event.type === "cache_hit") {
-          addEvent("cache-hit", `Cache HIT: ${event.segment}`);
-        } else if (event.type === "cache_miss") {
-          addEvent("cache-miss", `Cache MISS: ${event.segment}`);
-        } else if (event.type === "integrity_ok") {
-          addEvent("integrity-ok", `✓ Integrity OK: ${event.segment}`);
-        } else if (event.type === "integrity_fail") {
-          addEvent("integrity-fail", `✗ Integrity FAIL: ${event.segment}`);
-        }
-
-        // Refresh stats
-        if (plugin) {
-          statPeers.textContent = plugin.wsClient.getAllPeers().length;
-          statCache.textContent = `${plugin.cache.size} items (${(plugin.cache.bytes / 1024 / 1024).toFixed(1)} MB)`;
-          statRatio.textContent = `${plugin.stats.p2pSuccesses} / ${plugin.stats.originRequests}`;
-        }
-      },
-    });
-
-    btnPlay.addEventListener("click", () => {
-      if (hls) return;
-
-      if (!Hls.isSupported()) {
-        addEvent("origin-fallback", "Hls.js not supported in this browser");
-        return;
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>OpenStreamGrid Browser Demo</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #070a10;
+        --surface: #111925;
+        --raised: #172231;
+        --border: #27364c;
+        --text: #f5f8fc;
+        --muted: #8d9bb0;
+        --p2p: #36d4ef;
+        --origin: #a78bfa;
+        --ok: #3bd596;
+        --warn: #ffbd59;
+        --error: #ff6b7a;
       }
-
-      hls = new Hls({
-        enableWorker: true,
-        lowLatencyMode: true,
-        backbufferLength: 30,
-      });
-
-      plugin.attach(hls);
-      hls.loadSource(streamUrl);
-      hls.attachMedia(video);
-
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        btnPlay.disabled = true;
-        btnStop.disabled = false;
-        addEvent("integrity-ok", "Manifest parsed, playing...");
-      });
-
-      hls.on(Hls.Events.ERROR, (event, data) => {
-        if (data.fatal) {
-          addEvent("integrity-fail", `Fatal error: ${data.type} — ${data.details}`);
-        }
-      });
-    });
-
-    btnStop.addEventListener("click", () => {
-      if (plugin) plugin.detach();
-      if (hls) {
-        hls.destroy();
-        hls = null;
+      * { box-sizing: border-box; }
+      body {
+        min-width: 320px;
+        min-height: 100vh;
+        margin: 0;
+        background:
+          radial-gradient(circle at 10% 0, rgba(54, 212, 239, .13), transparent 30rem),
+          radial-gradient(circle at 95% 5%, rgba(167, 139, 250, .1), transparent 28rem),
+          var(--bg);
+        color: var(--text);
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
       }
-      btnPlay.disabled = false;
-      btnStop.disabled = true;
-      addEvent("origin-fallback", "Stopped");
-    });
+      main { width: min(1040px, calc(100% - 32px)); margin: 0 auto; padding: 44px 0 56px; }
+      header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
+      .eyebrow { margin: 0 0 8px; color: var(--p2p); font-size: .72rem; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
+      h1 { margin: 0; font-size: clamp(1.8rem, 5vw, 3rem); letter-spacing: -.05em; }
+      .subtitle { max-width: 640px; margin: 10px 0 0; color: var(--muted); line-height: 1.55; }
+      .pill { display: inline-flex; align-items: center; gap: 9px; padding: 9px 13px; border: 1px solid var(--border); border-radius: 999px; background: rgba(17, 25, 37, .88); color: var(--muted); font-size: .78rem; font-weight: 750; white-space: nowrap; }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); }
+      .pill[data-state="connected"] .dot { background: var(--ok); box-shadow: 0 0 0 5px rgba(59, 213, 150, .1); }
+      .pill[data-state="offline"] .dot { background: var(--error); }
+      .player { overflow: hidden; border: 1px solid var(--border); border-radius: 18px; background: #000; box-shadow: 0 28px 70px rgba(0, 0, 0, .34); }
+      video { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; }
+      .player-footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 16px; background: var(--surface); }
+      .source[data-source="p2p"] { color: var(--p2p); border-color: rgba(54, 212, 239, .4); }
+      .source[data-source="p2p"] .dot { background: var(--p2p); }
+      .source[data-source="origin"] { color: var(--origin); border-color: rgba(167, 139, 250, .4); }
+      .source[data-source="origin"] .dot { background: var(--origin); }
+      .actions { display: flex; gap: 9px; }
+      button { min-height: 38px; padding: 0 16px; border: 0; border-radius: 9px; background: var(--p2p); color: #03151a; font: inherit; font-size: .82rem; font-weight: 800; cursor: pointer; }
+      button.secondary { border: 1px solid var(--border); background: transparent; color: var(--text); }
+      button:disabled { cursor: not-allowed; opacity: .45; }
+      .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
+      .card { min-width: 0; padding: 18px; border: 1px solid var(--border); border-radius: 14px; background: linear-gradient(145deg, rgba(23, 34, 49, .96), rgba(13, 20, 30, .96)); }
+      .label { color: var(--muted); font-size: .71rem; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
+      .value { display: block; margin-top: 9px; overflow: hidden; font-size: 1.25rem; text-overflow: ellipsis; white-space: nowrap; }
+      .log-card { margin-top: 16px; padding: 0; overflow: hidden; }
+      .log-header { display: flex; justify-content: space-between; padding: 15px 18px; border-bottom: 1px solid var(--border); }
+      .log-header h2 { margin: 0; font-size: .9rem; }
+      .log-header span { color: var(--muted); font-size: .75rem; }
+      #event-log { min-height: 110px; max-height: 210px; margin: 0; padding: 14px 18px; overflow: auto; color: #b8c4d5; font: .77rem/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .p2p-event { color: var(--p2p); }
+      .origin-event { color: var(--origin); }
+      .error-event { color: var(--error); }
+      @media (max-width: 700px) {
+        main { width: min(100% - 20px, 1040px); padding-top: 28px; }
+        header { align-items: flex-start; flex-direction: column; }
+        .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .player-footer { align-items: flex-start; flex-direction: column; }
+        .actions { width: 100%; }
+        button { flex: 1; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <p class="eyebrow">Browser SDK example</p>
+          <h1>Hybrid live delivery</h1>
+          <p class="subtitle">OpenStreamGrid tries the peer mesh first and automatically uses the origin when P2P cannot meet playback needs.</p>
+        </div>
+        <div id="tracker-status" class="pill" data-state="ready" role="status"><span class="dot"></span><span id="tracker-label">Ready to connect</span></div>
+      </header>
 
-    // Setup initial state
-    btnConnect.textContent = "Connecting...";
-    btnConnect.disabled = true;
-  </script>
-</body>
+      <section class="player" aria-label="Live stream player">
+        <video id="video" controls muted playsinline></video>
+        <div class="player-footer">
+          <div id="source" class="pill source" data-source="idle"><span class="dot"></span><span id="source-label">Waiting for playback</span></div>
+          <div class="actions"><button id="start" type="button">Start demo</button><button id="stop" class="secondary" type="button" disabled>Stop</button></div>
+        </div>
+      </section>
+
+      <section class="stats" aria-label="Delivery statistics">
+        <article class="card"><span class="label">Available peers</span><strong id="peers" class="value">0</strong></article>
+        <article class="card"><span class="label">P2P downloaded</span><strong id="p2p-bytes" class="value">0 B</strong></article>
+        <article class="card"><span class="label">Origin / CDN</span><strong id="origin-bytes" class="value">0 B</strong></article>
+        <article class="card"><span class="label">P2P traffic share</span><strong id="p2p-share" class="value">0.0%</strong></article>
+      </section>
+
+      <section class="card log-card">
+        <div class="log-header"><h2>Delivery events</h2><span>Live SDK diagnostics</span></div>
+        <pre id="event-log" aria-live="polite">Start the demo to connect to localhost:7070.</pre>
+      </section>
+    </main>
+
+    <!-- Step 1: load Hls.js; the SDK will replace its segment loader. -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.6.16/dist/hls.min.js"></script>
+    <script type="module">
+      // Step 2: import the SDK bundle generated by `npm --prefix sdk run build`.
+      import { OpenStreamGridHlsPlugin } from "../dist/sdk.js";
+
+      // Step 3: use local demo endpoints, with optional URL query overrides.
+      const params = new URLSearchParams(location.search);
+      const trackerUrl = params.get("tracker") || "http://localhost:7070";
+      const broadcastId = params.get("broadcast") || "live";
+      const streamUrl = params.get("stream") || "http://localhost:8080/hls/stream.m3u8";
+      const originBaseUrl = params.get("origin") || "http://localhost:8080/hls";
+      const $ = (id) => document.getElementById(id);
+      const elements = { video: $("video"), start: $("start"), stop: $("stop"), tracker: $("tracker-status"), trackerLabel: $("tracker-label"), source: $("source"), sourceLabel: $("source-label"), peers: $("peers"), p2pBytes: $("p2p-bytes"), originBytes: $("origin-bytes"), p2pShare: $("p2p-share"), log: $("event-log") };
+      let hls;
+      let plugin;
+      let statsTimer;
+
+      const bytes = (value) => value < 1024 ? `${value} B` : value < 1024 ** 2 ? `${(value / 1024).toFixed(1)} KB` : `${(value / 1024 ** 2).toFixed(1)} MB`;
+      const log = (message, className = "") => {
+        const line = document.createElement("div");
+        line.className = className;
+        line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+        if (elements.log.textContent.startsWith("Start the demo")) elements.log.replaceChildren();
+        elements.log.appendChild(line);
+        while (elements.log.children.length > 60) elements.log.firstElementChild.remove();
+        elements.log.scrollTop = elements.log.scrollHeight;
+      };
+      const renderStats = () => {
+        if (!plugin) return;
+        const p2p = plugin.stats.bytesDownloadedP2P;
+        const origin = plugin.stats.bytesDownloadedOrigin;
+        elements.peers.textContent = plugin.wsClient.getAllPeers().length;
+        elements.p2pBytes.textContent = bytes(p2p);
+        elements.originBytes.textContent = bytes(origin);
+        elements.p2pShare.textContent = `${(p2p + origin ? p2p / (p2p + origin) * 100 : 0).toFixed(1)}%`;
+      };
+      const showSource = (source) => {
+        elements.source.dataset.source = source;
+        elements.sourceLabel.textContent = source === "p2p" ? "Receiving from peer mesh" : "Receiving from origin / CDN";
+      };
+
+      // Step 4: create a plugin that reports connection, integrity, and source events.
+      const createPlugin = () => new OpenStreamGridHlsPlugin({
+        trackerUrl,
+        broadcastId,
+        originBaseUrl,
+        maxCacheBytes: 50 * 1024 * 1024,
+        peerTimeoutMs: 3000,
+        verifySegments: true,
+        onReady: () => {
+          elements.tracker.dataset.state = "connected";
+          elements.trackerLabel.textContent = "Tracker connected";
+          log(`Connected to ${trackerUrl}`, "p2p-event");
+        },
+        onEvent: (event) => {
+          if (event.type === "peer_fetched") {
+            showSource("p2p");
+            log(`${event.segment} delivered by ${event.peerId}`, "p2p-event");
+          } else if (event.type === "origin_fallback") {
+            showSource("origin");
+            log(`${event.segment}: ${event.message}`, "origin-event");
+          } else if (event.type === "integrity_fail" || event.type === "ws_error") {
+            log(event.message || event.type, "error-event");
+          }
+          renderStats();
+        },
+      });
+
+      // Step 5: attach OpenStreamGrid before loading the HLS source.
+      elements.start.addEventListener("click", () => {
+        if (!window.Hls?.isSupported()) {
+          log("Hls.js is not supported in this browser.", "error-event");
+          return;
+        }
+        elements.tracker.dataset.state = "connecting";
+        elements.trackerLabel.textContent = "Connecting to tracker";
+        plugin = createPlugin();
+        hls = new Hls({ enableWorker: true, lowLatencyMode: true, backBufferLength: 30 });
+        plugin.attach(hls);
+        hls.loadSource(streamUrl);
+        hls.attachMedia(elements.video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          void elements.video.play().catch(() => log("Press play in the player controls to begin."));
+          elements.start.disabled = true;
+          elements.stop.disabled = false;
+          log(`Loaded ${streamUrl}`);
+        });
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          if (data.fatal) log(`Playback error: ${data.details}`, "error-event");
+        });
+        statsTimer = window.setInterval(renderStats, 1000);
+      });
+
+      // Step 6: detach on stop so sockets and in-flight segment requests are released.
+      elements.stop.addEventListener("click", () => {
+        clearInterval(statsTimer);
+        plugin?.detach();
+        hls?.destroy();
+        plugin = undefined;
+        hls = undefined;
+        elements.video.removeAttribute("src");
+        elements.video.load();
+        elements.start.disabled = false;
+        elements.stop.disabled = true;
+        elements.tracker.dataset.state = "offline";
+        elements.trackerLabel.textContent = "Disconnected";
+        elements.source.dataset.source = "idle";
+        elements.sourceLabel.textContent = "Waiting for playback";
+        log("Demo stopped.");
+      });
+      addEventListener("beforeunload", () => plugin?.detach());
+    </script>
+  </body>
 </html>

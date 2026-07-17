@@ -686,6 +686,7 @@ test("streams global, broadcast, REST, and WebSocket stats over SSE", async () =
     assert.equal(initial.data.global.broadcasts, 1);
     assert.equal(initial.data.global.peers, 0);
     assert.equal(initial.data.broadcasts[0]?.broadcast.id, "live");
+    assert.deepEqual(initial.data.broadcasts[0]?.peers, []);
 
     const dashboard = await fetch(`${baseUrl}/dashboard`);
     assert.equal(dashboard.status, 200);
@@ -709,6 +710,7 @@ test("streams global, broadcast, REST, and WebSocket stats over SSE", async () =
       (event) => event.event === "broadcasts" && event.data.global.peers === 1,
     );
     assert.equal(peerUpdate.data.broadcasts[0]?.stats.peers, 1);
+    assert.equal(peerUpdate.data.broadcasts[0]?.peers[0]?.peer.id, "peer-a");
 
     const restStats = {
       bytesDownloadedP2P: 100,
@@ -732,6 +734,10 @@ test("streams global, broadcast, REST, and WebSocket stats over SSE", async () =
       (event) => event.data.global.bytesDownloadedP2P === 100,
     );
     assert.equal(restUpdate.event, "stats");
+    assert.equal(
+      restUpdate.data.broadcasts[0]?.peers[0]?.stats.bytesDownloadedP2P,
+      100,
+    );
 
     const activeSocket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
     socket = activeSocket;

@@ -234,6 +234,37 @@
         background: #202b3d;
       }
 
+      .comparison-chart {
+        display: grid;
+        gap: 12px;
+        margin: 22px 0 18px;
+      }
+
+      .comparison-row {
+        display: grid;
+        grid-template-columns: 54px minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        color: var(--muted);
+        font-size: 0.76rem;
+        font-weight: 700;
+      }
+
+      .comparison-track {
+        height: 10px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: #202b3d;
+      }
+
+      .comparison-fill {
+        display: block;
+        width: 0;
+        height: 100%;
+        border-radius: inherit;
+        transition: width 400ms ease;
+      }
+
       .traffic-segment {
         width: 0;
         transition: width 400ms ease;
@@ -279,9 +310,73 @@
       }
 
       .broadcasts-card {
-        grid-column: span 3;
+        grid-column: span 6;
         margin-top: 14px;
         overflow: hidden;
+      }
+
+      .mesh-card {
+        grid-column: span 3;
+        margin-top: 14px;
+        padding: 22px;
+      }
+
+      .mesh-canvas {
+        display: block;
+        width: 100%;
+        min-height: 270px;
+        margin-top: 14px;
+        border: 1px solid rgba(56, 213, 247, 0.12);
+        border-radius: 12px;
+        background:
+          radial-gradient(circle at center, rgba(56, 213, 247, 0.07), transparent 48%),
+          rgba(7, 11, 18, 0.55);
+      }
+
+      .mesh-origin-line {
+        stroke: rgba(154, 130, 255, 0.32);
+        stroke-width: 1.2;
+        stroke-dasharray: 4 5;
+      }
+
+      .mesh-peer-line {
+        stroke: rgba(56, 213, 247, 0.62);
+        stroke-width: 1.8;
+      }
+
+      .mesh-origin-node { fill: var(--violet); }
+      .mesh-peer-node { fill: var(--cyan); }
+      .mesh-node-ring { fill: rgba(7, 11, 18, 0.92); stroke: var(--border); stroke-width: 1.5; }
+      .mesh-label { fill: #dce5f2; font-size: 10px; text-anchor: middle; }
+      .mesh-empty { fill: var(--muted); font-size: 13px; text-anchor: middle; }
+
+      .peers-card {
+        grid-column: span 6;
+        margin-top: 14px;
+        overflow: hidden;
+      }
+
+      .peers-card .section-header,
+      .mesh-card .section-header {
+        padding: 0;
+      }
+
+      .peers-card .section-header {
+        padding: 22px 22px 18px;
+      }
+
+      .peer-health {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+      }
+
+      .peer-health::before {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--green);
+        content: "";
       }
 
       .broadcasts-card .section-header {
@@ -343,7 +438,9 @@
         }
 
         .traffic-card,
-        .broadcasts-card {
+        .broadcasts-card,
+        .mesh-card,
+        .peers-card {
           grid-column: span 3;
         }
       }
@@ -379,8 +476,18 @@
         }
 
         .traffic-card,
-        .broadcasts-card {
+        .broadcasts-card,
+        .mesh-card,
+        .peers-card {
           grid-column: span 2;
+        }
+
+        .comparison-row {
+          grid-template-columns: 48px minmax(0, 1fr);
+        }
+
+        .comparison-row strong {
+          grid-column: 2;
         }
 
         .traffic-header,
@@ -478,6 +585,18 @@
             <span id="p2p-bar" class="traffic-segment traffic-p2p"></span>
             <span id="origin-bar" class="traffic-segment traffic-origin"></span>
           </div>
+          <div class="comparison-chart" aria-label="Traffic volume comparison">
+            <div class="comparison-row">
+              <span>P2P</span>
+              <div class="comparison-track"><span id="p2p-comparison" class="comparison-fill traffic-p2p"></span></div>
+              <strong id="p2p-comparison-value">0 B</strong>
+            </div>
+            <div class="comparison-row">
+              <span>Origin</span>
+              <div class="comparison-track"><span id="origin-comparison" class="comparison-fill traffic-origin"></span></div>
+              <strong id="origin-comparison-value">0 B</strong>
+            </div>
+          </div>
           <div class="traffic-legend">
             <div class="legend-item">
               <span class="legend-swatch traffic-p2p" aria-hidden="true"></span>
@@ -491,6 +610,42 @@
             </div>
           </div>
         </article>
+
+        <article class="card mesh-card" aria-labelledby="mesh-title">
+          <div class="section-header">
+            <div>
+              <h2 id="mesh-title">Peer mesh</h2>
+              <p class="section-note">Bright links connect peers with overlapping segment caches</p>
+            </div>
+            <p id="mesh-note" class="last-updated">0 peers</p>
+          </div>
+          <svg id="mesh-canvas" class="mesh-canvas" viewBox="0 0 520 270" role="img" aria-label="Origin and peer connection mesh"></svg>
+        </article>
+
+        <section class="card peers-card" aria-labelledby="peers-title">
+          <div class="section-header">
+            <div>
+              <h2 id="peers-title">Peer traffic</h2>
+              <p class="section-note">Cumulative download and upload counters reported by each active peer</p>
+            </div>
+          </div>
+          <div id="peer-table-wrap" class="table-wrap" hidden>
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Peer</th>
+                  <th scope="col">P2P download</th>
+                  <th scope="col">Origin download</th>
+                  <th scope="col">P2P upload</th>
+                  <th scope="col">P2P share</th>
+                  <th scope="col">Cached</th>
+                </tr>
+              </thead>
+              <tbody id="peer-rows"></tbody>
+            </table>
+          </div>
+          <p id="peer-empty" class="empty-state">No active peers</p>
+        </section>
 
         <section class="card broadcasts-card" aria-labelledby="broadcasts-title">
           <div class="section-header">
@@ -536,6 +691,15 @@
           originBar: document.getElementById("origin-bar"),
           p2pTraffic: document.getElementById("p2p-traffic"),
           originTraffic: document.getElementById("origin-traffic"),
+          p2pComparison: document.getElementById("p2p-comparison"),
+          originComparison: document.getElementById("origin-comparison"),
+          p2pComparisonValue: document.getElementById("p2p-comparison-value"),
+          originComparisonValue: document.getElementById("origin-comparison-value"),
+          meshCanvas: document.getElementById("mesh-canvas"),
+          meshNote: document.getElementById("mesh-note"),
+          peerRows: document.getElementById("peer-rows"),
+          peerTableWrap: document.getElementById("peer-table-wrap"),
+          peerEmpty: document.getElementById("peer-empty"),
           broadcastRows: document.getElementById("broadcast-rows"),
           broadcastTableWrap: document.getElementById("broadcast-table-wrap"),
           broadcastEmpty: document.getElementById("broadcast-empty"),
@@ -586,6 +750,168 @@
           cell.textContent = value;
           if (className) cell.className = className;
           row.appendChild(cell);
+        };
+
+        const selectedBroadcasts = (snapshot) => {
+          const selectedId = elements.broadcastSelector.value;
+          return selectedId === ""
+            ? snapshot.broadcasts
+            : snapshot.broadcasts.filter(
+                (entry) => String(entry.broadcast?.id ?? "") === selectedId,
+              );
+        };
+
+        const selectedPeers = (snapshot) => selectedBroadcasts(snapshot).flatMap(
+          (entry) => (Array.isArray(entry.peers) ? entry.peers : []).map((peerEntry) => ({
+            ...peerEntry,
+            broadcastId: String(entry.broadcast?.id ?? "Unknown"),
+          })),
+        );
+
+        const renderPeers = (snapshot) => {
+          const peers = selectedPeers(snapshot);
+          elements.peerRows.replaceChildren();
+          elements.peerTableWrap.hidden = peers.length === 0;
+          elements.peerEmpty.hidden = peers.length > 0;
+          peers.sort((left, right) =>
+            finiteNumber(right.stats?.bytesUploadedP2P) -
+              finiteNumber(left.stats?.bytesUploadedP2P) ||
+            String(left.peer?.id).localeCompare(String(right.peer?.id)),
+          );
+          const includeBroadcast = elements.broadcastSelector.value === "";
+          const fragment = document.createDocumentFragment();
+          for (const entry of peers) {
+            const stats = entry.stats ?? {};
+            const p2pBytes = finiteNumber(stats.bytesDownloadedP2P);
+            const originBytes = finiteNumber(stats.bytesDownloadedOrigin);
+            const row = document.createElement("tr");
+            const peerId = String(entry.peer?.id ?? "Unknown");
+            appendCell(
+              row,
+              includeBroadcast ? `${entry.broadcastId} / ${peerId}` : peerId,
+              "broadcast-id peer-health",
+            );
+            appendCell(row, formatBytes(p2pBytes));
+            appendCell(row, formatBytes(originBytes));
+            appendCell(row, formatBytes(finiteNumber(stats.bytesUploadedP2P)));
+            appendCell(row, formatPercentage(percentage(p2pBytes, p2pBytes + originBytes)));
+            appendCell(row, numberFormat.format(finiteNumber(stats.segmentsCached)));
+            fragment.appendChild(row);
+          }
+          elements.peerRows.appendChild(fragment);
+        };
+
+        const svgElement = (name, attributes = {}) => {
+          const element = document.createElementNS("http://www.w3.org/2000/svg", name);
+          for (const [key, value] of Object.entries(attributes)) {
+            element.setAttribute(key, String(value));
+          }
+          return element;
+        };
+
+        const renderMesh = (snapshot) => {
+          const allPeers = selectedPeers(snapshot);
+          const peers = allPeers.slice(0, 24);
+          elements.meshCanvas.replaceChildren();
+          elements.meshNote.textContent = allPeers.length > peers.length
+            ? `${peers.length} of ${allPeers.length} peers`
+            : `${peers.length} ${peers.length === 1 ? "peer" : "peers"}`;
+          if (peers.length === 0) {
+            const message = svgElement("text", { x: 260, y: 138, class: "mesh-empty" });
+            message.textContent = "Waiting for peers to join";
+            elements.meshCanvas.appendChild(message);
+            return;
+          }
+
+          const center = { x: 260, y: 135 };
+          const radiusX = 205;
+          const radiusY = 94;
+          const positions = peers.map((_entry, index) => {
+            const angle = (index / peers.length) * Math.PI * 2 - Math.PI / 2;
+            return {
+              x: center.x + Math.cos(angle) * radiusX,
+              y: center.y + Math.sin(angle) * radiusY,
+            };
+          });
+          const lines = svgElement("g");
+          const nodes = svgElement("g");
+
+          positions.forEach((position) => {
+            lines.appendChild(svgElement("line", {
+              x1: center.x,
+              y1: center.y,
+              x2: position.x,
+              y2: position.y,
+              class: "mesh-origin-line",
+            }));
+          });
+
+          for (let left = 0; left < peers.length; left += 1) {
+            const leftEntry = peers[left];
+            const leftSegments = new Set(leftEntry?.peer?.segments ?? []);
+            for (let right = left + 1; right < peers.length; right += 1) {
+              const rightEntry = peers[right];
+              if (leftEntry?.broadcastId !== rightEntry?.broadcastId) continue;
+              const sharesSegment = (rightEntry?.peer?.segments ?? []).some(
+                (segment) => leftSegments.has(segment),
+              );
+              if (!sharesSegment) continue;
+              lines.appendChild(svgElement("line", {
+                x1: positions[left]?.x,
+                y1: positions[left]?.y,
+                x2: positions[right]?.x,
+                y2: positions[right]?.y,
+                class: "mesh-peer-line",
+              }));
+            }
+          }
+
+          nodes.appendChild(svgElement("circle", {
+            cx: center.x,
+            cy: center.y,
+            r: 20,
+            class: "mesh-node-ring",
+          }));
+          nodes.appendChild(svgElement("circle", {
+            cx: center.x,
+            cy: center.y,
+            r: 9,
+            class: "mesh-origin-node",
+          }));
+          const originLabel = svgElement("text", {
+            x: center.x,
+            y: center.y + 36,
+            class: "mesh-label",
+          });
+          originLabel.textContent = "Origin";
+          nodes.appendChild(originLabel);
+
+          peers.forEach((entry, index) => {
+            const position = positions[index];
+            if (!position) return;
+            nodes.appendChild(svgElement("circle", {
+              cx: position.x,
+              cy: position.y,
+              r: 13,
+              class: "mesh-node-ring",
+            }));
+            nodes.appendChild(svgElement("circle", {
+              cx: position.x,
+              cy: position.y,
+              r: 6,
+              class: "mesh-peer-node",
+            }));
+            const label = svgElement("text", {
+              x: position.x,
+              y: position.y + (position.y < center.y ? -18 : 25),
+              class: "mesh-label",
+            });
+            const peerId = String(entry.peer?.id ?? "peer");
+            label.textContent = peerId.length > 16 ? `${peerId.slice(0, 13)}…` : peerId;
+            nodes.appendChild(label);
+          });
+
+          elements.meshCanvas.append(lines, nodes);
         };
 
         const renderBroadcasts = (broadcasts) => {
@@ -668,9 +994,7 @@
             finiteNumber(global.p2pSuccesses),
             finiteNumber(global.p2pRequests),
           );
-          const trafficSavings = totalBytes > 0
-            ? (1 - p2pBytes / totalBytes) * 100
-            : 0;
+          const trafficSavings = p2pShare;
 
           elements.activeBroadcasts.textContent = numberFormat.format(
             finiteNumber(global.broadcasts),
@@ -693,8 +1017,14 @@
           elements.trafficBar.setAttribute("aria-valuenow", p2pShare.toFixed(1));
           elements.p2pTraffic.textContent = `${formatBytes(p2pBytes)} · ${formatPercentage(p2pShare)}`;
           elements.originTraffic.textContent = `${formatBytes(originBytes)} · ${formatPercentage(originShare)}`;
+          elements.p2pComparison.style.width = `${p2pShare}%`;
+          elements.originComparison.style.width = `${originShare}%`;
+          elements.p2pComparisonValue.textContent = formatBytes(p2pBytes);
+          elements.originComparisonValue.textContent = formatBytes(originBytes);
 
           renderBroadcasts(snapshot.broadcasts);
+          renderPeers(snapshot);
+          renderMesh(snapshot);
           const generatedAt = new Date(snapshot.generatedAt);
           elements.lastUpdated.textContent = Number.isNaN(generatedAt.getTime())
             ? "Updated just now"

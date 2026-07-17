@@ -69,9 +69,19 @@ Opens a `text/event-stream`. Events are named `stats` or `broadcasts`; each
 {
   "generatedAt": "2026-07-17T03:38:56.074Z",
   "global": {},
-  "broadcasts": [{ "broadcast": {}, "stats": {} }]
+  "broadcasts": [
+    {
+      "broadcast": {},
+      "stats": {},
+      "peers": [{ "peer": {}, "stats": {} }]
+    }
+  ]
 }
 ```
+
+Each broadcast entry includes active peer metadata and that peer's cumulative
+traffic counters for dashboard mesh and per-peer reporting. Departed-peer
+traffic remains included only in the aggregate broadcast and global totals.
 
 ### Broadcasts
 

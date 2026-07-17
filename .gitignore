@@ -6,5 +6,6 @@ coverage/
 origin/data/
 tracker/data/
 *.log
+*.tsbuildinfo
 .env
 video/

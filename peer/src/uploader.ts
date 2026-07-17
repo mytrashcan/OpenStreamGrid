@@ -175,6 +175,7 @@ export class UploadServer {
           "content-type": "video/mp2t",
           "content-length": lease.data.byteLength,
           "cache-control": "private, max-age=60",
+          "access-control-allow-origin": "*",
         });
         if (method === "HEAD") {
           response.end();
@@ -235,6 +236,7 @@ export class UploadServer {
       "content-type": "application/json; charset=utf-8",
       "content-length": Buffer.byteLength(body),
       "cache-control": "no-store",
+      "access-control-allow-origin": "*",
       ...headers,
     });
     response.end(body);
