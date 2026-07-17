@@ -8,3 +8,4 @@ tracker/data/
 *.log
 benchmark-results.json
 .env
+video/
