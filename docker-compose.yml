@@ -20,13 +20,6 @@ x-peer-environment: &peer-environment
   CACHE_SIZE: 200MB
   MAX_UPLOAD_SPEED: 4Mbps
   MAX_CONNECTIONS: "3"
-  # Public STUN is used by default to discover server-reflexive addresses.
-  STUN_SERVER: "${STUN_SERVER:-stun:stun.l.google.com:19302}"
-  # Set these on the host to relay WebRTC through your TURN service when
-  # direct connectivity is blocked. Leave them empty to disable TURN.
-  TURN_SERVER: "${TURN_SERVER:-}"
-  TURN_USERNAME: "${TURN_USERNAME:-}"
-  TURN_CREDENTIAL: "${TURN_CREDENTIAL:-}"
 
 services:
   tracker:
@@ -37,6 +30,9 @@ services:
     environment:
       PORT: "7070"
       STALE_PEER_MS: "30000"
+      RATE_LIMIT_RPS: "100"
+      RATE_LIMIT_BURST: "200"
+      MAX_PEERS_PER_BROADCAST: "500"
       STORE_TYPE: sqlite
       DB_PATH: /app/data/tracker.db
     volumes:

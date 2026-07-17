@@ -191,10 +191,7 @@ OpenStreamGrid/
 
 ### Tracker REST API
 
-All endpoints are served from the tracker on port `7070`. When
-`TRACKER_API_KEY` is configured, every `POST`, `PUT`, and `DELETE` request must
-include `X-API-Key: <configured-value>`. `GET` endpoints, including health,
-remain public.
+All endpoints are served from the tracker on port `7070`.
 
 #### Health
 
@@ -417,19 +414,11 @@ hls.attachMedia(videoElement);
 
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
-| `PORT` | `7070` | HTTP or HTTPS server port |
-| `HOST` | `0.0.0.0` | HTTP or HTTPS server bind host |
+| `PORT` | `7070` | HTTP server port |
+| `HOST` | `0.0.0.0` | HTTP server bind host |
 | `STALE_PEER_MS` | `30000` | Milliseconds before a peer is considered stale |
 | `STORE_TYPE` | `sqlite` | Tracker store backend (`sqlite` or `memory`) |
 | `DB_PATH` | `./data/tracker.db` | SQLite database path when `STORE_TYPE=sqlite` |
-| `TRACKER_API_KEY` | — | Require this value in `X-API-Key` for all mutating REST requests |
-| `TLS_CERT_PATH` | — | TLS certificate file; enables HTTPS/WSS when used with `TLS_KEY_PATH` |
-| `TLS_KEY_PATH` | — | TLS private key file; enables HTTPS/WSS when used with `TLS_CERT_PATH` |
-
-`TLS_CERT_PATH` and `TLS_KEY_PATH` must both reference existing files. If
-neither is configured, the tracker continues to serve HTTP and WS. The
-`/health` endpoint and read-only REST endpoints remain public when API-key
-authentication is enabled.
 
 ### Origin
 
@@ -438,7 +427,6 @@ authentication is enabled.
 | `PORT` | `8080` | HTTP server port |
 | `HOST` | `0.0.0.0` | HTTP server bind host |
 | `TRACKER_URL` | `http://tracker:7070` | Tracker endpoint |
-| `TRACKER_API_KEY` | — | API key sent when registering with the tracker |
 | `BROADCAST_ID` | `live` | Broadcast identifier |
 | `PUBLIC_ORIGIN_URL` | `http://origin:8080` | Public origin URL for playlist |
 | `HLS_DIRECTORY` | `/tmp/openstreamgrid-hls` | HLS output directory |
@@ -452,7 +440,6 @@ authentication is enabled.
 | Environment Variable / CLI Flag | Default | Description |
 |-------------------------------|---------|-------------|
 | `TRACKER_URL` / `--tracker-url` | `http://tracker:7070` | Tracker endpoint |
-| `TRACKER_API_KEY` / `--tracker-api-key` | — | API key sent to tracker REST and WebSocket endpoints |
 | `BROADCAST_ID` / `--broadcast-id` | `live` | Broadcast to join |
 | `ORIGIN_URL` / `--origin-url` | — | Origin HLS URL (required) |
 | `PEER_ADDRESS` / `--peer-address` | — | Peer's own HTTP address (required) |
@@ -465,26 +452,6 @@ authentication is enabled.
 | `P2P_TIMEOUT_MS` | `2000` | Timeout for peer segment requests |
 | `UPLOAD_HOST` | `0.0.0.0` | Peer upload server bind host |
 | `WEBRTC_ENABLED` / `--webrtc-enabled` | `true` | Enable WebRTC with HTTP fallback |
-| `STUN_SERVER` | `stun:stun.l.google.com:19302` | STUN or STUNS URL used to discover public peer addresses |
-| `TURN_SERVER` | — | Optional TURN or TURNS relay URL for restrictive NATs and firewalls |
-| `TURN_USERNAME` | — | Optional username for the configured TURN server |
-| `TURN_CREDENTIAL` | — | Optional credential for the configured TURN server |
-
-`STUN_SERVER` and `TURN_SERVER` are validated when the peer starts. TURN
-credentials require `TURN_SERVER`; supplying credentials without a TURN URL is
-rejected. When ICE negotiation or WebRTC segment delivery fails, the transport
-manager automatically retries the same peer over HTTP using the existing
-fallback path.
-
-For example, configure an authenticated TLS TURN relay before starting the
-Compose stack:
-
-```bash
-export TURN_SERVER='turns:turn.example.com:5349?transport=tcp'
-export TURN_USERNAME='openstreamgrid'
-export TURN_CREDENTIAL='replace-with-a-secret'
-docker compose up --build
-```
 
 ---
 

@@ -1,12 +1,5 @@
-import { timingSafeEqual } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import {
-  createServer as createHttpServer,
-  type IncomingMessage,
-  type ServerResponse,
-} from "node:http";
-import { createServer as createHttpsServer } from "node:https";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import {
   createLogger,
@@ -31,6 +24,9 @@ import { TrackerWebSocketHub, type TrackerEvents } from "./websocket.js";
 const DEFAULT_PORT = 7070;
 const DEFAULT_HOST = "0.0.0.0";
 const DEFAULT_STALE_PEER_MS = 30_000;
+const DEFAULT_RATE_LIMIT_RPS = 100;
+const DEFAULT_RATE_LIMIT_BURST = 200;
+const DEFAULT_MAX_PEERS_PER_BROADCAST = 500;
 const STATS_EVENT_INTERVAL_MS = 3_000;
 const STATS_EVENT_RETRY_MS = 3_000;
 const MAX_BODY_BYTES = 1_000_000;
@@ -45,17 +41,9 @@ export interface TrackerConfiguration {
   port: number;
   host: string;
   stalePeerMs: number;
-  apiKey?: string;
-  tlsCertPath?: string;
-  tlsKeyPath?: string;
-}
-
-export interface TrackerSecurityOptions {
-  apiKey?: string;
-  tls?: {
-    cert: Buffer;
-    key: Buffer;
-  };
+  rateLimitRps: number;
+  rateLimitBurst: number;
+  maxPeersPerBroadcast: number;
 }
 
 const parseInteger = (
@@ -83,19 +71,6 @@ export const parseTrackerConfiguration = (
 ): TrackerConfiguration => {
   const host = environment.HOST ?? DEFAULT_HOST;
   if (host.trim() === "") throw new Error("HOST must not be empty");
-  const apiKey = environment.TRACKER_API_KEY;
-  if (apiKey !== undefined && apiKey.trim() === "") {
-    throw new Error("TRACKER_API_KEY must not be empty");
-  }
-  const tlsCertPath = environment.TLS_CERT_PATH?.trim();
-  const tlsKeyPath = environment.TLS_KEY_PATH?.trim();
-  if (Boolean(tlsCertPath) !== Boolean(tlsKeyPath)) {
-    throw new Error("TLS_CERT_PATH and TLS_KEY_PATH must be configured together");
-  }
-  if (tlsCertPath && tlsKeyPath) {
-    validateTlsFile(tlsCertPath, "TLS_CERT_PATH");
-    validateTlsFile(tlsKeyPath, "TLS_KEY_PATH");
-  }
   return {
     port: parseInteger(
       environment.PORT ?? String(DEFAULT_PORT),
@@ -109,18 +84,23 @@ export const parseTrackerConfiguration = (
       "STALE_PEER_MS",
       1,
     ),
-    ...(apiKey ? { apiKey } : {}),
-    ...(tlsCertPath && tlsKeyPath ? { tlsCertPath, tlsKeyPath } : {}),
+    rateLimitRps: parseInteger(
+      environment.RATE_LIMIT_RPS ?? String(DEFAULT_RATE_LIMIT_RPS),
+      "RATE_LIMIT_RPS",
+      1,
+    ),
+    rateLimitBurst: parseInteger(
+      environment.RATE_LIMIT_BURST ?? String(DEFAULT_RATE_LIMIT_BURST),
+      "RATE_LIMIT_BURST",
+      1,
+    ),
+    maxPeersPerBroadcast: parseInteger(
+      environment.MAX_PEERS_PER_BROADCAST ??
+        String(DEFAULT_MAX_PEERS_PER_BROADCAST),
+      "MAX_PEERS_PER_BROADCAST",
+      1,
+    ),
   };
-};
-
-const validateTlsFile = (filePath: string, label: string): void => {
-  try {
-    if (statSync(filePath).isFile()) return;
-  } catch {
-    // The common error below avoids exposing platform-specific filesystem errors.
-  }
-  throw new Error(`${label} must point to an existing file`);
 };
 
 /** Point-in-time dashboard statistics sent over SSE. */
@@ -250,8 +230,241 @@ class RequestError extends Error {
   constructor(
     message: string,
     readonly statusCode = 400,
+    readonly headers: Record<string, string> = {},
   ) {
     super(message);
+  }
+}
+
+interface TokenBucket {
+  tokens: number;
+  lastRefillMs: number;
+}
+
+/** In-memory token-bucket limiter keyed by the direct client address. */
+export class IpRateLimiter {
+  private readonly buckets = new Map<string, TokenBucket>();
+
+  constructor(
+    private readonly requestsPerSecond: number,
+    private readonly burst: number,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  consume(clientIp: string): number | undefined {
+    const nowMs = this.now();
+    const bucket = this.buckets.get(clientIp) ?? {
+      tokens: this.burst,
+      lastRefillMs: nowMs,
+    };
+    const elapsedSeconds = Math.max(0, nowMs - bucket.lastRefillMs) / 1_000;
+    bucket.tokens = Math.min(
+      this.burst,
+      bucket.tokens + elapsedSeconds * this.requestsPerSecond,
+    );
+    bucket.lastRefillMs = nowMs;
+
+    if (bucket.tokens >= 1) {
+      bucket.tokens -= 1;
+      this.buckets.set(clientIp, bucket);
+      return undefined;
+    }
+
+    this.buckets.set(clientIp, bucket);
+    return Math.max(
+      1,
+      Math.ceil((1 - bucket.tokens) / this.requestsPerSecond),
+    );
+  }
+}
+
+const REQUEST_DURATION_BUCKETS_MS = [
+  1, 5, 10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000,
+] as const;
+
+/** Minimal Prometheus collector for tracker process and store metrics. */
+export class TrackerMetrics {
+  private readonly startedAtMs: number;
+  private broadcastsTotal = 0;
+  private peersTotal = 0;
+  private rateLimitedRequestsTotal = 0;
+  private p2pRequestsTotal = 0;
+  private originRequestsTotal = 0;
+  private p2pSuccessesTotal = 0;
+  private integrityFailuresTotal = 0;
+  private fallbacksTotal = 0;
+  private lastReportedTraffic = {
+    p2pRequests: 0,
+    originRequests: 0,
+    p2pSuccesses: 0,
+    integrityFailures: 0,
+    fallbacks: 0,
+  };
+  private requestDurationCount = 0;
+  private requestDurationSumMs = 0;
+  private readonly requestDurationBuckets = REQUEST_DURATION_BUCKETS_MS.map(
+    () => 0,
+  );
+
+  constructor(private readonly now: () => number = Date.now) {
+    this.startedAtMs = now();
+  }
+
+  broadcastCreated(): void {
+    this.broadcastsTotal += 1;
+  }
+
+  peerJoined(): void {
+    this.peersTotal += 1;
+  }
+
+  requestRateLimited(): void {
+    this.rateLimitedRequestsTotal += 1;
+  }
+
+  observeRestRequest(durationMs: number): void {
+    const duration = Math.max(0, durationMs);
+    this.requestDurationCount += 1;
+    this.requestDurationSumMs += duration;
+    for (let index = 0; index < REQUEST_DURATION_BUCKETS_MS.length; index += 1) {
+      if (duration <= REQUEST_DURATION_BUCKETS_MS[index]!) {
+        this.requestDurationBuckets[index] =
+          (this.requestDurationBuckets[index] ?? 0) + 1;
+      }
+    }
+  }
+
+  synchronizeTraffic(store: TrackerStoreBackend): void {
+    const current = store.getGlobalStats();
+    this.p2pRequestsTotal += Math.max(
+      0,
+      current.p2pRequests - this.lastReportedTraffic.p2pRequests,
+    );
+    this.originRequestsTotal += Math.max(
+      0,
+      current.originRequests - this.lastReportedTraffic.originRequests,
+    );
+    this.p2pSuccessesTotal += Math.max(
+      0,
+      current.p2pSuccesses - this.lastReportedTraffic.p2pSuccesses,
+    );
+    this.integrityFailuresTotal += Math.max(
+      0,
+      current.integrityFailures - this.lastReportedTraffic.integrityFailures,
+    );
+    this.fallbacksTotal += Math.max(
+      0,
+      current.fallbacks - this.lastReportedTraffic.fallbacks,
+    );
+    this.lastReportedTraffic = {
+      p2pRequests: current.p2pRequests,
+      originRequests: current.originRequests,
+      p2pSuccesses: current.p2pSuccesses,
+      integrityFailures: current.integrityFailures,
+      fallbacks: current.fallbacks,
+    };
+  }
+
+  render(store: TrackerStoreBackend): string {
+    this.synchronizeTraffic(store);
+    const stats = store.getGlobalStats();
+    const lines: string[] = [];
+    const metric = (
+      name: string,
+      type: "counter" | "gauge",
+      help: string,
+      value: number,
+    ): void => {
+      lines.push(
+        `# HELP ${name} ${help}`,
+        `# TYPE ${name} ${type}`,
+        `${name} ${value}`,
+      );
+    };
+
+    metric(
+      "openstreamgrid_broadcasts_total",
+      "counter",
+      "Broadcasts registered since tracker startup.",
+      this.broadcastsTotal,
+    );
+    metric(
+      "openstreamgrid_peers_total",
+      "counter",
+      "Peer joins since tracker startup.",
+      this.peersTotal,
+    );
+    metric(
+      "openstreamgrid_p2p_requests_total",
+      "counter",
+      "P2P segment requests reported by peers.",
+      this.p2pRequestsTotal,
+    );
+    metric(
+      "openstreamgrid_origin_requests_total",
+      "counter",
+      "Origin segment requests reported by peers.",
+      this.originRequestsTotal,
+    );
+    metric(
+      "openstreamgrid_p2p_successes_total",
+      "counter",
+      "Successful P2P segment requests reported by peers.",
+      this.p2pSuccessesTotal,
+    );
+    metric(
+      "openstreamgrid_integrity_failures_total",
+      "counter",
+      "Segment integrity failures reported by peers.",
+      this.integrityFailuresTotal,
+    );
+    metric(
+      "openstreamgrid_fallbacks_total",
+      "counter",
+      "Origin fallbacks reported by peers.",
+      this.fallbacksTotal,
+    );
+    metric(
+      "openstreamgrid_rate_limited_requests_total",
+      "counter",
+      "REST requests rejected by tracker limits.",
+      this.rateLimitedRequestsTotal,
+    );
+    metric(
+      "openstreamgrid_active_broadcasts",
+      "gauge",
+      "Currently active broadcasts.",
+      stats.broadcasts,
+    );
+    metric(
+      "openstreamgrid_active_peers",
+      "gauge",
+      "Currently active peers.",
+      stats.peers,
+    );
+    metric(
+      "openstreamgrid_tracker_uptime_seconds",
+      "gauge",
+      "Tracker process uptime in seconds.",
+      Math.max(0, (this.now() - this.startedAtMs) / 1_000),
+    );
+
+    lines.push(
+      "# HELP openstreamgrid_request_duration_ms REST request duration in milliseconds.",
+      "# TYPE openstreamgrid_request_duration_ms histogram",
+    );
+    for (let index = 0; index < REQUEST_DURATION_BUCKETS_MS.length; index += 1) {
+      lines.push(
+        `openstreamgrid_request_duration_ms_bucket{le="${REQUEST_DURATION_BUCKETS_MS[index]}"} ${this.requestDurationBuckets[index]}`,
+      );
+    }
+    lines.push(
+      `openstreamgrid_request_duration_ms_bucket{le="+Inf"} ${this.requestDurationCount}`,
+      `openstreamgrid_request_duration_ms_sum ${this.requestDurationSumMs}`,
+      `openstreamgrid_request_duration_ms_count ${this.requestDurationCount}`,
+      "",
+    );
+    return lines.join("\n");
   }
 }
 
@@ -259,10 +472,21 @@ const sendJson = (
   response: ServerResponse,
   statusCode: number,
   value: unknown,
+  headers: Record<string, string> = {},
 ): void => {
   const body = JSON.stringify(value);
   response.writeHead(statusCode, {
     "content-type": "application/json; charset=utf-8",
+    "content-length": Buffer.byteLength(body),
+    "cache-control": "no-store",
+    ...headers,
+  });
+  response.end(body);
+};
+
+const sendPrometheus = (response: ServerResponse, body: string): void => {
+  response.writeHead(200, {
+    "content-type": "text/plain; version=0.0.4; charset=utf-8",
     "content-length": Buffer.byteLength(body),
     "cache-control": "no-store",
   });
@@ -403,46 +627,64 @@ const decodedPathComponent = (value: string): string => {
   }
 };
 
-const apiKeysMatch = (provided: string | undefined, expected: string): boolean => {
-  if (provided === undefined) return false;
-  const providedBytes = Buffer.from(provided);
-  const expectedBytes = Buffer.from(expected);
-  return (
-    providedBytes.byteLength === expectedBytes.byteLength &&
-    timingSafeEqual(providedBytes, expectedBytes)
-  );
-};
+export interface TrackerHttpOptions {
+  rateLimitRps?: number;
+  rateLimitBurst?: number;
+  maxPeersPerBroadcast?: number;
+  metrics?: TrackerMetrics;
+  rateLimiter?: IpRateLimiter;
+}
 
 /** Creates the REST and dashboard request handler for a tracker store. */
 export const createTrackerHandler = (
   store: TrackerStoreBackend,
   events: TrackerEvents = {},
   statsEvents?: TrackerStatsSse,
-  apiKey?: string,
-) =>
-  async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
+  options: TrackerHttpOptions = {},
+) => {
+  const metrics = options.metrics ?? new TrackerMetrics();
+  const rateLimiter =
+    options.rateLimiter ??
+    new IpRateLimiter(
+      options.rateLimitRps ?? DEFAULT_RATE_LIMIT_RPS,
+      options.rateLimitBurst ?? DEFAULT_RATE_LIMIT_BURST,
+    );
+  const maxPeersPerBroadcast =
+    options.maxPeersPerBroadcast ?? DEFAULT_MAX_PEERS_PER_BROADCAST;
+
+  return async (
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> => {
+    const requestStartedAt = performance.now();
+    let isRestRequest = false;
     try {
       const method = request.method ?? "GET";
       const url = new URL(request.url ?? "/", "http://tracker.local");
       const path = url.pathname;
-
-      if (
-        apiKey &&
-        (method === "POST" || method === "PUT" || method === "DELETE") &&
-        !apiKeysMatch(
-          typeof request.headers["x-api-key"] === "string"
-            ? request.headers["x-api-key"]
-            : undefined,
-          apiKey,
-        )
-      ) {
-        sendJson(response, 401, { error: "Unauthorized" });
-        return;
-      }
+      isRestRequest = path.startsWith("/api/");
 
       if (method === "GET" && path === "/health") {
         sendJson(response, 200, { status: "ok", service: "tracker" });
         return;
+      }
+      if (method === "GET" && path === "/metrics") {
+        sendPrometheus(response, metrics.render(store));
+        return;
+      }
+      if (
+        path !== "/health" &&
+        (method === "POST" || method === "PUT" || method === "DELETE")
+      ) {
+        const retryAfter = rateLimiter.consume(
+          request.socket?.remoteAddress ?? "unknown",
+        );
+        if (retryAfter !== undefined) {
+          metrics.requestRateLimited();
+          throw new RequestError("Rate limit exceeded", 429, {
+            "retry-after": String(retryAfter),
+          });
+        }
       }
       if (method === "GET" && path === "/dashboard") {
         sendHtml(response, 200, await loadDashboardHtml());
@@ -468,6 +710,7 @@ export const createTrackerHandler = (
           ...(metadata ? { metadata } : {}),
         };
         const result = store.registerBroadcast(registration);
+        if (result.created) metrics.broadcastCreated();
         sendJson(response, result.created ? 201 : 200, result.broadcast);
         events.broadcastListChanged?.();
         return;
@@ -533,6 +776,7 @@ export const createTrackerHandler = (
             );
           }
           store.reportStats(broadcastId, peerId, stats);
+          metrics.synchronizeTraffic(store);
           sendEmpty(response, 204);
           events.statsUpdated?.(broadcastId, peerId);
           return;
@@ -579,7 +823,17 @@ export const createTrackerHandler = (
           const alreadyJoined = store
             .listPeers(broadcastId)
             .some((peer) => peer.id === join.id);
+          if (
+            !alreadyJoined &&
+            store.listPeers(broadcastId).length >= maxPeersPerBroadcast
+          ) {
+            metrics.requestRateLimited();
+            throw new RequestError("Broadcast peer limit reached", 429, {
+              "retry-after": "1",
+            });
+          }
           const peer = store.joinPeer(broadcastId, join);
+          if (!alreadyJoined) metrics.peerJoined();
           sendJson(response, alreadyJoined ? 200 : 201, peer);
           if (alreadyJoined) events.peerListChanged?.(broadcastId);
           else events.peerJoined?.(broadcastId, peer);
@@ -612,7 +866,9 @@ export const createTrackerHandler = (
           return;
         }
         if (method === "DELETE") {
+          metrics.synchronizeTraffic(store);
           store.unregisterBroadcast(broadcastId);
+          metrics.synchronizeTraffic(store);
           sendEmpty(response, 204);
           events.broadcastListChanged?.();
           return;
@@ -638,12 +894,22 @@ export const createTrackerHandler = (
         });
       }
       if (!response.headersSent) {
-        sendJson(response, statusCode, { error: message });
+        sendJson(
+          response,
+          statusCode,
+          { error: message },
+          error instanceof RequestError ? error.headers : {},
+        );
       } else {
         response.destroy();
       }
+    } finally {
+      if (isRestRequest) {
+        metrics.observeRestRequest(performance.now() - requestStartedAt);
+      }
     }
   };
+};
 
 /** Factory used to create a tracker persistence backend. */
 export type TrackerStoreFactory = () => TrackerStoreBackend;
@@ -678,11 +944,19 @@ export class TrackerServer {
   constructor(
     storeFactory: TrackerStoreFactory = createConfiguredStore,
     private readonly stalePeerMs = DEFAULT_STALE_PEER_MS,
-    security: TrackerSecurityOptions = {},
+    configuration: Pick<
+      TrackerConfiguration,
+      "rateLimitRps" | "rateLimitBurst" | "maxPeersPerBroadcast"
+    > = {
+      rateLimitRps: DEFAULT_RATE_LIMIT_RPS,
+      rateLimitBurst: DEFAULT_RATE_LIMIT_BURST,
+      maxPeersPerBroadcast: DEFAULT_MAX_PEERS_PER_BROADCAST,
+    },
   ) {
     const store = storeFactory();
     this.store = store;
     this.statsEvents = new TrackerStatsSse(store);
+    const metrics = new TrackerMetrics();
     let webSockets: TrackerWebSocketHub | undefined;
     const events: TrackerEvents = {
       peerJoined: (broadcastId, peer) =>
@@ -691,21 +965,22 @@ export class TrackerServer {
         webSockets?.peerLeft(broadcastId, peerId),
       segmentsAvailable: (broadcastId, peerId, segments) =>
         webSockets?.segmentsAvailable(broadcastId, peerId, segments),
-      statsUpdated: (broadcastId, peerId) =>
-        webSockets?.statsUpdated(broadcastId, peerId),
+      statsUpdated: (broadcastId, peerId) => {
+        metrics.synchronizeTraffic(store);
+        webSockets?.statsUpdated(broadcastId, peerId);
+      },
       peerListChanged: (broadcastId) =>
         webSockets?.peerListChanged(broadcastId),
       broadcastListChanged: () => webSockets?.broadcastListChanged(),
     };
-    const handler = createTrackerHandler(
-      store,
-      events,
-      this.statsEvents,
-      security.apiKey,
+    this.server = createServer(
+      createTrackerHandler(store, events, this.statsEvents, {
+        rateLimitRps: configuration.rateLimitRps,
+        rateLimitBurst: configuration.rateLimitBurst,
+        maxPeersPerBroadcast: configuration.maxPeersPerBroadcast,
+        metrics,
+      }),
     );
-    this.server = security.tls
-      ? createHttpsServer(security.tls, handler)
-      : createHttpServer(handler);
     webSockets = new TrackerWebSocketHub(this.server, store, this.statsEvents);
     this.webSockets = webSockets;
   }
@@ -796,24 +1071,10 @@ const run = async (): Promise<void> => {
   const server = new TrackerServer(
     createConfiguredStore,
     configuration.stalePeerMs,
-    {
-      ...(configuration.apiKey ? { apiKey: configuration.apiKey } : {}),
-      ...(configuration.tlsCertPath && configuration.tlsKeyPath
-        ? {
-            tls: {
-              cert: readFileSync(configuration.tlsCertPath),
-              key: readFileSync(configuration.tlsKeyPath),
-            },
-          }
-        : {}),
-    },
+    configuration,
   );
   const actualPort = await server.start(configuration.port, configuration.host);
-  logger.info("started", {
-    port: actualPort,
-    host: configuration.host,
-    protocol: configuration.tlsCertPath ? "https" : "http",
-  });
+  logger.info("started", { port: actualPort, host: configuration.host });
 
   const shutdown = async (signal: string): Promise<void> => {
     logger.info("stopping", { signal });
