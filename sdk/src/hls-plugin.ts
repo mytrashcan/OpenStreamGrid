@@ -18,8 +18,9 @@
  *   hls.attachMedia(videoElement);
  */
 
-import type Hls from "hls.js";
+import { createLogger } from "@openstreamgrid/common";
 import type {
+  default as Hls,
   HlsConfig,
   Loader,
   LoaderCallbacks,
@@ -37,9 +38,10 @@ import type {
   SdkEvent,
 } from "./types.js";
 
-// Default max bytes: 100 MB
 const DEFAULT_MAX_CACHE_BYTES = 100 * 1024 * 1024;
 const DEFAULT_PEER_TIMEOUT_MS = 3_000;
+const MAX_PARALLEL_PEER_PROBES = 3;
+const logger = createLogger("sdk");
 
 type PeerFetchAttempt =
   | { index: number; data: Uint8Array }
@@ -281,15 +283,13 @@ export class OpenStreamGridHlsPlugin {
   attach(hls: Hls): void {
     const DefaultLoader = hls.config.loader;
 
-    // Register the custom loader
     hls.config.loader = createP2PLoader(this, DefaultLoader);
 
-    // Start WebSocket connection
     this.wsClient.start().catch((error: unknown) => {
-      console.warn(
-        "[OpenStreamGrid] Failed to connect to tracker, continuing with origin-only",
-        error,
-      );
+      logger.warn("tracker_connection_failed", {
+        error: error instanceof Error ? error.message : String(error),
+        fallback: "origin",
+      });
     });
   }
 
@@ -359,7 +359,6 @@ export class OpenStreamGridHlsPlugin {
   ): Promise<{ data: Uint8Array }> {
     this.emit({ type: "cache_miss", segment: segmentName });
 
-    // 2. Try P2P first
     const peers = this.wsClient.getPeersWithSegment(segmentName);
     if (peers.length > 0) {
       try {
@@ -373,7 +372,6 @@ export class OpenStreamGridHlsPlugin {
           this.stats.p2pRequests++;
           this.stats.p2pSuccesses++;
 
-          // Verify integrity
           if (this.verifier) {
             const verification = await this.verifier.verify(
               segmentName,
@@ -391,7 +389,6 @@ export class OpenStreamGridHlsPlugin {
             this.emit({ type: "integrity_ok", segment: segmentName });
           }
 
-          // Cache it
           this.cache.set(segmentName, result);
           this.stats.segmentsCached = this.cache.size;
           this.wsClient.reportSegments();
@@ -405,7 +402,6 @@ export class OpenStreamGridHlsPlugin {
           return { data: result };
         }
       } catch {
-        // P2P failed, fall through to origin
         this.stats.p2pFailures++;
         this.stats.fallbacks++;
         this.emit({
@@ -416,14 +412,12 @@ export class OpenStreamGridHlsPlugin {
       }
     }
 
-    // 3. Fallback to origin
     const originData = await this.fetchFromOrigin(segmentUrl, signal);
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
 
     this.stats.bytesDownloadedOrigin += originData.byteLength;
     this.stats.originRequests++;
 
-    // Cache it
     this.cache.set(segmentName, originData);
     this.stats.segmentsCached = this.cache.size;
     this.wsClient.reportSegments();
@@ -477,7 +471,7 @@ export class OpenStreamGridHlsPlugin {
 
   /**
    * Try fetching a segment from peers in order.
-   * Parallel probes the top 3 peers (sorted by trust score / latency),
+   * Probes the highest-ranked peers in parallel and uses the first success.
    * returns the first success.
    */
   private async fetchFromPeers(
@@ -490,7 +484,7 @@ export class OpenStreamGridHlsPlugin {
       return a.latencyMs - b.latencyMs;
     });
 
-    const topPeers = sorted.slice(0, 3);
+    const topPeers = sorted.slice(0, MAX_PARALLEL_PEER_PROBES);
     const controller = new AbortController();
     const onAbort = (): void => controller.abort(signal.reason);
     signal.addEventListener("abort", onAbort, { once: true });
@@ -591,7 +585,7 @@ export class OpenStreamGridHlsPlugin {
     try {
       this.onEvent?.(event);
     } catch (error) {
-      console.error("[OpenStreamGrid] onEvent callback failed", error);
+      logger.error("event_callback_failed", error);
     }
   }
 }

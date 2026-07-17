@@ -1,17 +1,18 @@
 import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
-import type {
-  Broadcast,
-  BroadcastRegistration,
-  BroadcastStats,
-  GlobalStats,
-  PeerFailureReport,
-  PeerHeartbeat,
-  PeerJoinRequest,
-  SegmentPossessionReport,
+import {
+  createLogger,
+  parsePeerTrafficStats,
+  type Broadcast,
+  type BroadcastRegistration,
+  type BroadcastStats,
+  type GlobalStats,
+  type PeerFailureReport,
+  type PeerHeartbeat,
+  type PeerJoinRequest,
+  type SegmentPossessionReport,
 } from "@openstreamgrid/common";
-import { parsePeerTrafficStats } from "@openstreamgrid/common";
 import { SQLiteStore } from "./sqlite-store.js";
 import {
   StoreError,
@@ -23,13 +24,16 @@ import { TrackerWebSocketHub, type TrackerEvents } from "./websocket.js";
 const DEFAULT_PORT = 7070;
 const DEFAULT_STALE_PEER_MS = 30_000;
 const STATS_EVENT_INTERVAL_MS = 3_000;
+const STATS_EVENT_RETRY_MS = 3_000;
 const MAX_BODY_BYTES = 1_000_000;
 const DASHBOARD_HTML_URL = new URL("./dashboard.html", import.meta.url);
+const logger = createLogger("tracker");
 
 let dashboardHtml: Promise<string> | undefined;
 
 type JsonObject = Record<string, unknown>;
 
+/** Point-in-time dashboard statistics sent over SSE. */
 export interface TrackerStatsSnapshot {
   generatedAt: string;
   global: GlobalStats;
@@ -41,6 +45,7 @@ export interface TrackerStatsSnapshot {
 
 type StatsEventName = "broadcasts" | "stats";
 
+/** Publishes tracker statistics to dashboard SSE clients. */
 export class TrackerStatsSse implements TrackerEvents {
   private readonly clients = new Set<ServerResponse>();
   private eventSequence = 0;
@@ -56,7 +61,7 @@ export class TrackerStatsSse implements TrackerEvents {
       "x-accel-buffering": "no",
     });
     response.flushHeaders();
-    response.write("retry: 3000\n\n");
+    response.write(`retry: ${STATS_EVENT_RETRY_MS}\n\n`);
     this.clients.add(response);
     response.once("close", () => {
       this.clients.delete(response);
@@ -277,6 +282,7 @@ const decodedPathComponent = (value: string): string => {
   }
 };
 
+/** Creates the REST and dashboard request handler for a tracker store. */
 export const createTrackerHandler = (
   store: TrackerStoreBackend,
   events: TrackerEvents = {},
@@ -469,9 +475,14 @@ export const createTrackerHandler = (
         error instanceof StoreError || error instanceof RequestError
           ? error.statusCode
           : 500;
-      const message = error instanceof Error ? error.message : "Internal server error";
+      const message =
+        statusCode === 500
+          ? "Internal server error"
+          : error instanceof Error
+            ? error.message
+            : "Request failed";
       if (statusCode === 500) {
-        console.error("tracker request failed", error);
+        logger.error("request_failed", error);
       }
       if (!response.headersSent) {
         sendJson(response, statusCode, { error: message });
@@ -481,8 +492,10 @@ export const createTrackerHandler = (
     }
   };
 
+/** Factory used to create a tracker persistence backend. */
 export type TrackerStoreFactory = () => TrackerStoreBackend;
 
+/** Selects the configured in-memory or SQLite tracker store. */
 export const createConfiguredStore = (
   environment: NodeJS.ProcessEnv = process.env,
 ): TrackerStoreBackend => {
@@ -494,6 +507,7 @@ export const createConfiguredStore = (
   );
 };
 
+/** Owns tracker HTTP, WebSocket, SSE, cleanup, and store lifecycles. */
 export class TrackerServer {
   readonly store: TrackerStoreBackend;
   private readonly server;
@@ -557,7 +571,7 @@ export class TrackerServer {
         try {
           this.removeStalePeers();
         } catch (error) {
-          console.error("failed to remove stale peers", error);
+          logger.error("stale_peer_cleanup_failed", error);
         }
       },
       Math.max(1_000, Math.floor(this.stalePeerMs / 2)),
@@ -620,16 +634,16 @@ const run = async (): Promise<void> => {
   );
   const server = new TrackerServer(createConfiguredStore, stalePeerMs);
   await server.start(port);
-  console.log(JSON.stringify({ event: "tracker_started", port }));
+  logger.info("started", { port });
 
   const shutdown = async (signal: string): Promise<void> => {
-    console.log(JSON.stringify({ event: "tracker_stopping", signal }));
+    logger.info("stopping", { signal });
     await server.stop();
     process.exit(0);
   };
   const requestShutdown = (signal: string): void => {
     void shutdown(signal).catch((error: unknown) => {
-      console.error("tracker shutdown failed", error);
+      logger.error("shutdown_failed", error);
       process.exitCode = 1;
     });
   };
@@ -639,7 +653,7 @@ const run = async (): Promise<void> => {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   run().catch((error: unknown) => {
-    console.error("tracker failed to start", error);
+    logger.error("start_failed", error);
     process.exit(1);
   });
 }

@@ -1,11 +1,12 @@
-import type {
-  Peer,
-  PeerFailureReport,
-  PeerHeartbeat,
-  PeerJoinRequest,
-  PeerTrafficStats,
-  WsClientMessage,
-  WsServerMessage,
+import {
+  createLogger,
+  type Peer,
+  type PeerFailureReport,
+  type PeerHeartbeat,
+  type PeerJoinRequest,
+  type PeerTrafficStats,
+  type WsClientMessage,
+  type WsServerMessage,
 } from "@openstreamgrid/common";
 import WebSocket, { type RawData } from "ws";
 import type { PeerDirectory } from "./fetcher.js";
@@ -14,6 +15,9 @@ import type { FetchFunction } from "./verifier.js";
 const DEFAULT_REPORT_INTERVAL_MS = 5_000;
 const DEFAULT_RECONNECT_INITIAL_MS = 1_000;
 const DEFAULT_RECONNECT_MAX_MS = 30_000;
+const RECONNECT_BACKOFF_MULTIPLIER = 2;
+const WEBSOCKET_NORMAL_CLOSURE_CODE = 1_000;
+const logger = createLogger("peer");
 
 type JsonObject = Record<string, unknown>;
 type PeerUpdateMessage = Extract<
@@ -137,6 +141,7 @@ const parsePeerUpdate = (data: RawData): PeerUpdateMessage | undefined => {
   }
 };
 
+/** Configuration and callbacks used by the peer tracker client. */
 export interface TrackerClientOptions {
   trackerUrl: string;
   broadcastId: string;
@@ -151,6 +156,7 @@ export interface TrackerClientOptions {
   reconnectMaxMs?: number;
 }
 
+/** Maintains tracker membership, WebSocket updates, and periodic reports. */
 export class TrackerClient implements PeerDirectory {
   private readonly fetchImpl: FetchFunction;
   private readonly webSocketFactory: (url: URL) => WebSocket;
@@ -240,7 +246,7 @@ export class TrackerClient implements PeerDirectory {
     this.socket = undefined;
     if (socket && socket.readyState !== WebSocket.CLOSED) {
       if (socket.readyState === WebSocket.CONNECTING) socket.terminate();
-      else socket.close(1000, "Peer shutting down");
+      else socket.close(WEBSOCKET_NORMAL_CLOSURE_CODE, "Peer shutting down");
     }
   }
 
@@ -285,7 +291,7 @@ export class TrackerClient implements PeerDirectory {
     try {
       socket = this.webSocketFactory(this.webSocketUrl());
     } catch (error) {
-      console.error("failed to create tracker WebSocket", error);
+      logger.error("tracker_websocket_creation_failed", error);
       this.scheduleReconnect();
       return;
     }
@@ -306,7 +312,7 @@ export class TrackerClient implements PeerDirectory {
     });
     socket.on("error", (error) => {
       if (this.socket === socket && this.started) {
-        console.error("tracker WebSocket error", error);
+        logger.error("tracker_websocket_error", error);
       }
     });
     socket.once("close", () => {
@@ -321,7 +327,7 @@ export class TrackerClient implements PeerDirectory {
     if (!this.started || this.reconnectTimer) return;
     const delayMs = this.nextReconnectMs;
     this.nextReconnectMs = Math.min(
-      this.nextReconnectMs * 2,
+      this.nextReconnectMs * RECONNECT_BACKOFF_MULTIPLIER,
       this.reconnectMaxMs,
     );
     this.reconnectTimer = setTimeout(() => {
@@ -352,7 +358,7 @@ export class TrackerClient implements PeerDirectory {
     try {
       this.reportStatus();
     } catch (error) {
-      if (this.started) console.error("failed to report peer status", error);
+      if (this.started) logger.error("status_report_failed", error);
     }
   }
 
@@ -382,7 +388,7 @@ export class TrackerClient implements PeerDirectory {
         }
       }
     } catch (error) {
-      console.error("tracker sent an invalid WebSocket message", error);
+      logger.error("invalid_tracker_message", error);
     }
   }
 
@@ -391,7 +397,7 @@ export class TrackerClient implements PeerDirectory {
       try {
         this.socket.send(JSON.stringify(message));
       } catch (error) {
-        if (this.started) console.error("failed to send tracker message", error);
+        if (this.started) logger.error("tracker_message_send_failed", error);
       }
     }
   }

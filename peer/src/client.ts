@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { hostname } from "node:os";
 import { pathToFileURL } from "node:url";
+import { createLogger } from "@openstreamgrid/common";
 import { SegmentCache } from "./cache.js";
 import { HybridSegmentFetcher } from "./fetcher.js";
 import { TrafficStats } from "./stats.js";
@@ -16,6 +17,12 @@ const DEFAULT_UPLOAD_SPEED_BPS = 1_000_000;
 const DEFAULT_MAX_CONNECTIONS = 3;
 const DEFAULT_MAX_PARALLEL_DOWNLOADS = 3;
 const DEFAULT_PLAYLIST_POLL_MS = 500;
+const MINIMUM_P2P_SEGMENTS_AHEAD = 2;
+const DEFAULT_HTTP_PORT = "80";
+const CLI_ARGUMENT_PAIR_SIZE = 2;
+const CLI_OPTION_PREFIX_LENGTH = 2;
+const PROCESS_ARGUMENT_OFFSET = 2;
+const logger = createLogger("peer");
 
 interface PeerConfiguration {
   trackerUrl: string;
@@ -119,7 +126,7 @@ class PeerApplication {
 
   async run(signal: AbortSignal): Promise<void> {
     const address = new URL(this.configuration.peerAddress);
-    const port = Number.parseInt(address.port || "80", 10);
+    const port = Number.parseInt(address.port || DEFAULT_HTTP_PORT, 10);
     await this.uploader.start(port);
     try {
       await this.tracker.join({
@@ -128,13 +135,10 @@ class PeerApplication {
         uploadBandwidthBps: this.configuration.maxUploadSpeedBps,
       });
       await Promise.all([this.tracker.start(), this.transportManager.start()]);
-      console.log(
-        JSON.stringify({
-          event: "peer_started",
-          peerId: this.configuration.peerId,
-          address: this.configuration.peerAddress,
-        }),
-      );
+      logger.info("started", {
+        peerId: this.configuration.peerId,
+        address: this.configuration.peerAddress,
+      });
       await this.consumePlaylist(signal);
     } finally {
       await this.shutdown();
@@ -169,7 +173,7 @@ class PeerApplication {
           );
         while (!signal.aborted && pending.length > 0) {
           const nonUrgent = pending.filter(
-            ({ segmentsAhead }) => segmentsAhead >= 2,
+            ({ segmentsAhead }) => segmentsAhead >= MINIMUM_P2P_SEGMENTS_AHEAD,
           );
           const batch = (
             nonUrgent.length > 0 ? nonUrgent : pending.slice(0, 1)
@@ -182,7 +186,7 @@ class PeerApplication {
           }
         }
       } catch (error) {
-        if (!signal.aborted) console.error("playlist processing failed", error);
+        if (!signal.aborted) logger.error("playlist_processing_failed", error);
       }
       await delay(this.configuration.playlistPollMs, signal);
     }
@@ -200,7 +204,7 @@ class PeerApplication {
         this.tracker.allPeers(),
       );
     } catch (error) {
-      console.error("parallel segment fetch failed", error);
+      logger.error("parallel_segment_fetch_failed", error);
       return;
     } finally {
       for (const { segmentName } of batch) {
@@ -210,26 +214,21 @@ class PeerApplication {
     for (const [segmentName, data] of fetched) {
       processed.add(segmentName);
       const source = this.fetcher.getLastSource(segmentName);
-      console.log(
-        JSON.stringify({
-          event: "segment_fetched",
-          peerId: this.configuration.peerId,
-          segment: segmentName,
-          source,
-          bytes: data.byteLength,
-          ...(source === "p2p"
-            ? { transport: this.transportManager.getStats().lastTransport }
-            : {}),
-        }),
-      );
+      logger.info("segment_fetched", {
+        peerId: this.configuration.peerId,
+        segment: segmentName,
+        source,
+        bytes: data.byteLength,
+        ...(source === "p2p"
+          ? { transport: this.transportManager.getStats().lastTransport }
+          : {}),
+      });
     }
     if (fetched.size > 0) this.tracker.reportSegments();
   }
 
   private async shutdown(): Promise<void> {
-    console.log(
-      JSON.stringify({ event: "peer_stopping", peerId: this.configuration.peerId }),
-    );
+    logger.info("stopping", { peerId: this.configuration.peerId });
     const results = await Promise.allSettled([
       this.uploader.stop(),
       this.transportManager.stop(),
@@ -237,13 +236,13 @@ class PeerApplication {
     this.tracker.stop();
     for (const result of results) {
       if (result.status === "rejected") {
-        console.error("peer shutdown operation failed", result.reason);
+        logger.error("shutdown_operation_failed", result.reason);
       }
     }
     try {
       await this.tracker.leave();
     } catch (error) {
-      console.error("peer leave failed", error);
+      logger.error("leave_failed", error);
     }
   }
 }
@@ -309,18 +308,23 @@ const originUrls = (value: string): { base: URL; playlist: URL } => {
   return { base, playlist: new URL("stream.m3u8", base) };
 };
 
+/** Parses and validates CLI arguments into a complete peer configuration. */
 export const parseArguments = (
   arguments_: string[],
   environment: NodeJS.ProcessEnv = process.env,
 ): PeerConfiguration => {
   const values = new Map<string, string>();
-  for (let index = 0; index < arguments_.length; index += 2) {
+  for (
+    let index = 0;
+    index < arguments_.length;
+    index += CLI_ARGUMENT_PAIR_SIZE
+  ) {
     const key = arguments_[index];
     const value = arguments_[index + 1];
     if (!key?.startsWith("--") || value === undefined || value.startsWith("--")) {
       throw new Error(`Invalid CLI argument near '${key ?? ""}'`);
     }
-    values.set(key.slice(2), value);
+    values.set(key.slice(CLI_OPTION_PREFIX_LENGTH), value);
   }
   const supported = new Set([
     "tracker-url",
@@ -392,7 +396,9 @@ export const parseArguments = (
 };
 
 const run = async (): Promise<void> => {
-  const configuration = parseArguments(process.argv.slice(2));
+  const configuration = parseArguments(
+    process.argv.slice(PROCESS_ARGUMENT_OFFSET),
+  );
   const controller = new AbortController();
   process.once("SIGTERM", () => controller.abort());
   process.once("SIGINT", () => controller.abort());
@@ -401,7 +407,7 @@ const run = async (): Promise<void> => {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   run().catch((error: unknown) => {
-    console.error("peer failed", error);
+    logger.error("start_failed", error);
     process.exitCode = 1;
   });
 }

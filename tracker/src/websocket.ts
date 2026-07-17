@@ -1,12 +1,13 @@
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
-import type {
-  Peer,
-  PeerHeartbeat,
-  WebRtcSignalMessage,
-  WsServerMessage,
+import {
+  createLogger,
+  parsePeerTrafficStats,
+  type Peer,
+  type PeerHeartbeat,
+  type WebRtcSignalMessage,
+  type WsServerMessage,
 } from "@openstreamgrid/common";
-import { parsePeerTrafficStats } from "@openstreamgrid/common";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 import type { TrackerStoreBackend } from "./store.js";
 
@@ -16,7 +17,12 @@ interface Subscription {
 }
 
 const MAX_BUFFERED_WEB_SOCKET_BYTES = 1024 * 1024;
+const INVALID_MESSAGE_CLOSE_CODE = 1_008;
+const UNSUPPORTED_DATA_CLOSE_CODE = 1_003;
+const MAX_CLOSE_REASON_LENGTH = 120;
+const logger = createLogger("tracker");
 
+/** Optional tracker lifecycle callbacks for downstream event consumers. */
 export interface TrackerEvents {
   broadcastListChanged?(): void;
   peerJoined?(broadcastId: string, peer: Peer): void;
@@ -62,6 +68,7 @@ const requiredSegments = (message: JsonObject): string[] => {
   return segments;
 };
 
+/** Validates tracker WebSocket messages and broadcasts peer updates. */
 export class TrackerWebSocketHub implements TrackerEvents {
   private readonly webSocketServer = new WebSocketServer({ noServer: true });
   private readonly subscriptions = new Map<WebSocket, Subscription>();
@@ -76,7 +83,10 @@ export class TrackerWebSocketHub implements TrackerEvents {
       this.subscriptions.set(socket, { broadcastId: "", peerId: "" });
       socket.on("message", (data, isBinary) => {
         if (isBinary) {
-          socket.close(1003, "Binary messages are not supported");
+          socket.close(
+            UNSUPPORTED_DATA_CLOSE_CODE,
+            "Binary messages are not supported",
+          );
           return;
         }
         this.handleMessage(socket, data);
@@ -222,7 +232,10 @@ export class TrackerWebSocketHub implements TrackerEvents {
       throw new Error(`Unsupported message type '${type}'`);
     } catch (error) {
       const reason = error instanceof Error ? error.message : "Invalid message";
-      socket.close(1008, reason.slice(0, 120));
+      socket.close(
+        INVALID_MESSAGE_CLOSE_CODE,
+        reason.slice(0, MAX_CLOSE_REASON_LENGTH),
+      );
     }
   }
 
@@ -293,7 +306,7 @@ export class TrackerWebSocketHub implements TrackerEvents {
       try {
         socket.send(JSON.stringify(message));
       } catch (error) {
-        console.error("failed to send tracker WebSocket message", error);
+        logger.error("websocket_send_failed", error);
         socket.terminate();
       }
     }

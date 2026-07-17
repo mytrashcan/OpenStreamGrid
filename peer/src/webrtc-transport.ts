@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import type { WebRtcSignalMessage, WsClientMessage } from "@openstreamgrid/common";
+import {
+  createLogger,
+  type WebRtcSignalMessage,
+  type WsClientMessage,
+} from "@openstreamgrid/common";
 import wrtc, {
   type RTCDataChannel,
   type RTCPeerConnection,
@@ -18,14 +22,17 @@ const MAX_TRACKED_PEERS = 2_000;
 const DATA_CHANNEL_LABEL = "segment-request";
 const MAX_DATA_CHANNEL_CHUNK_BYTES = 16 * 1024;
 const MAX_BUFFERED_BYTES = 1024 * 1024;
+const WEBSOCKET_NORMAL_CLOSURE_CODE = 1_000;
 const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
 ];
+const logger = createLogger("peer");
 
 type SegmentProvider = (
   segmentName: string,
 ) => Buffer | undefined | Promise<Buffer | undefined>;
 
+/** Configuration for WebRTC signaling, verification, and upload limits. */
 export interface WebRtcTransportOptions {
   timeoutMs?: number;
   iceServers?: RTCIceServer[];
@@ -78,6 +85,7 @@ const binaryBuffer = (value: unknown): Buffer | undefined => {
   return Buffer.isBuffer(value) ? value : undefined;
 };
 
+/** WebRTC DataChannel transport for requesting and serving peer segments. */
 export class WebRtcTransport implements TransportAdapter {
   readonly name = "webrtc";
   private readonly timeoutMs: number;
@@ -147,7 +155,10 @@ export class WebRtcTransport implements TransportAdapter {
     this.signalConnection = undefined;
     if (socket && socket.readyState !== WebSocket.CLOSED) {
       if (socket.readyState === WebSocket.CONNECTING) socket.terminate();
-      else socket.close(1000, "WebRTC transport stopping");
+      else socket.close(
+        WEBSOCKET_NORMAL_CLOSURE_CODE,
+        "WebRTC transport stopping",
+      );
     }
     this.rejectPendingAnswers(new Error("WebRTC transport stopped"));
     for (const connection of this.activeConnections) connection.close();
@@ -479,7 +490,7 @@ export class WebRtcTransport implements TransportAdapter {
       void this.serveSegment(event.channel, message.peerId, controller.signal)
         .catch((error: unknown) => {
           if (!controller.signal.aborted) {
-            console.error("failed to serve WebRTC segment", error);
+            logger.error("webrtc_segment_serve_failed", error);
           }
         })
         .finally(finish);

@@ -2,30 +2,36 @@ import { createHash, timingSafeEqual } from "node:crypto";
 
 const DEFAULT_MAX_CACHED_HASHES = 2_000;
 
+/** Contract for validating downloaded segment bytes. */
 export interface SegmentIntegrityVerifier {
   verify(segmentName: string, data: Buffer): Promise<boolean>;
 }
 
+/** Fetch-compatible function signature used for dependency injection. */
 export type FetchFunction = (
   input: string | URL,
   init?: RequestInit,
 ) => Promise<Response>;
 
+/** Returns the lowercase SHA-256 digest for segment bytes. */
 export const sha256 = (data: Buffer): string =>
   createHash("sha256").update(data).digest("hex");
 
+/** Parses a standard SHA-256 sidecar response. */
 export const parseSha256 = (content: string): string => {
   const match = content.trim().match(/^([a-fA-F0-9]{64})(?:\s+.+)?$/);
   if (!match?.[1]) throw new Error("Invalid SHA-256 response");
   return match[1].toLowerCase();
 };
 
+/** Compares segment bytes with an expected SHA-256 digest. */
 export const verifySegmentHash = (data: Buffer, expectedHash: string): boolean => {
   const actual = Buffer.from(sha256(data), "hex");
   const expected = Buffer.from(expectedHash, "hex");
   return expected.byteLength === actual.byteLength && timingSafeEqual(actual, expected);
 };
 
+/** Retrieves and caches origin sidecar hashes for segment verification. */
 export class OriginHashVerifier implements SegmentIntegrityVerifier {
   private readonly hashes = new Map<string, string>();
   private readonly pendingHashes = new Map<string, Promise<string>>();

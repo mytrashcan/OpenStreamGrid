@@ -8,13 +8,19 @@ import {
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { pathToFileURL } from "node:url";
-import type { BroadcastRegistration, HealthStatus } from "@openstreamgrid/common";
+import {
+  createLogger,
+  type BroadcastRegistration,
+  type HealthStatus,
+} from "@openstreamgrid/common";
 import { HlsStreamer, type StreamController } from "./streamer.js";
 
 const DEFAULT_PORT = 8080;
 const DEFAULT_TRACKER_URL = "http://tracker:7070";
 const DEFAULT_BROADCAST_ID = "live";
 const REGISTER_RETRY_MS = 1_000;
+const IMMUTABLE_CACHE_MAX_AGE_SECONDS = 3_600;
+const logger = createLogger("origin");
 
 interface OriginServerOptions {
   hlsDirectory: string;
@@ -63,6 +69,7 @@ const fileExists = async (filePath: string): Promise<boolean> => {
   }
 };
 
+/** Creates the HTTP handler that serves health and generated HLS assets. */
 export const createOriginHandler = (
   hlsDirectory: string,
   streamer: StreamController,
@@ -136,7 +143,9 @@ export const createOriginHandler = (
         "content-type": contentTypes[extension] ?? "application/octet-stream",
         "content-length": fileStats.size,
         "cache-control":
-          extension === ".m3u8" ? "no-store" : "public, max-age=3600, immutable",
+          extension === ".m3u8"
+            ? "no-store"
+            : `public, max-age=${IMMUTABLE_CACHE_MAX_AGE_SECONDS}, immutable`,
       });
       if (method === "HEAD") {
         response.end();
@@ -144,7 +153,7 @@ export const createOriginHandler = (
       }
       await pipeline(createReadStream(filePath), response);
     } catch (error) {
-      console.error("origin request failed", error);
+      logger.error("request_failed", error);
       if (!response.headersSent) {
         sendJson(response, 500, { error: "Internal server error" });
       } else {
@@ -153,6 +162,7 @@ export const createOriginHandler = (
     }
   };
 
+/** Coordinates the origin HTTP server and its FFmpeg stream controller. */
 export class OriginServer {
   private readonly server;
   private startPromise: Promise<number> | undefined;
@@ -234,6 +244,7 @@ const delay = async (milliseconds: number, signal?: AbortSignal): Promise<void> 
   });
 };
 
+/** Registers a broadcast with retry-until-success or abort semantics. */
 export const registerBroadcast = async ({
   trackerUrl,
   registration,
@@ -256,7 +267,7 @@ export const registerBroadcast = async ({
       return;
     } catch (error) {
       if (signal?.aborted) throw error;
-      console.error("broadcast registration failed; retrying", error);
+      logger.error("broadcast_registration_retry", error, { retryMs });
       await delay(retryMs, signal);
     }
   }
@@ -280,13 +291,13 @@ const run = async (): Promise<void> => {
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(JSON.stringify({ event: "origin_stopping", signal }));
+    logger.info("stopping", { signal });
     shutdownController.abort(new Error(`Received ${signal}`));
     await server.stop();
   };
   const requestShutdown = (signal: string): void => {
     void shutdown(signal).catch((error: unknown) => {
-      console.error("origin shutdown failed", error);
+      logger.error("shutdown_failed", error);
       process.exitCode = 1;
     });
   };
@@ -308,15 +319,13 @@ const run = async (): Promise<void> => {
     },
     signal: shutdownController.signal,
   });
-  console.log(
-    JSON.stringify({ event: "origin_started", port: actualPort, broadcastId }),
-  );
+  logger.info("started", { port: actualPort, broadcastId });
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   run().catch((error: unknown) => {
     if (!(error instanceof Error && error.message.startsWith("Received SIG"))) {
-      console.error("origin failed to start", error);
+      logger.error("start_failed", error);
       process.exitCode = 1;
     }
   });

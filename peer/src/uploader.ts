@@ -3,11 +3,12 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
-import type { HealthStatus } from "@openstreamgrid/common";
+import { createLogger, type HealthStatus } from "@openstreamgrid/common";
 import type { SegmentCache } from "./cache.js";
 import type { TrafficStats } from "./stats.js";
 
 const MAX_WRITE_CHUNK_BYTES = 64 * 1024;
+const logger = createLogger("peer");
 
 class TokenBucket {
   private tokens: number;
@@ -58,6 +59,7 @@ interface UploadServerOptions {
   ready?: () => boolean;
 }
 
+/** Rate- and concurrency-limited HTTP server for cached peer segments. */
 export class UploadServer {
   private readonly server;
   private readonly bucket: TokenBucket;
@@ -141,8 +143,12 @@ export class UploadServer {
         return;
       }
       if (this.activeConnections >= this.options.maxConnections) {
-        response.writeHead(429, { "retry-after": "1" });
-        response.end();
+        this.sendJson(
+          response,
+          429,
+          { error: "Upload connection limit exceeded" },
+          { "retry-after": "1" },
+        );
         return;
       }
 
@@ -180,7 +186,7 @@ export class UploadServer {
         this.activeConnections -= 1;
       }
     } catch (error) {
-      console.error("peer upload request failed", error);
+      logger.error("upload_request_failed", error);
       if (!response.headersSent) {
         this.sendJson(response, 500, { error: "Internal server error" });
       } else {
@@ -218,12 +224,14 @@ export class UploadServer {
     response: ServerResponse,
     statusCode: number,
     value: unknown,
+    headers: Record<string, string> = {},
   ): void {
     const body = JSON.stringify(value);
     response.writeHead(statusCode, {
       "content-type": "application/json; charset=utf-8",
       "content-length": Buffer.byteLength(body),
       "cache-control": "no-store",
+      ...headers,
     });
     response.end(body);
   }

@@ -91,8 +91,10 @@ const migrations: readonly Migration[] = [
   },
 ];
 
+/** Most recent tracker database schema version. */
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0;
 
+/** Applies pending tracker schema migrations in a transaction. */
 export const runSQLiteMigrations = (database: Database.Database): void => {
   const migrate = database.transaction(() => {
     const rawVersion: unknown = database.pragma("user_version", {

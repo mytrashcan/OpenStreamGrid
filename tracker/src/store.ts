@@ -1,16 +1,26 @@
-import type {
-  Broadcast,
-  BroadcastRegistration,
-  BroadcastStats,
-  GlobalStats,
-  Peer,
-  PeerFailureReport,
-  PeerHeartbeat,
-  PeerJoinRequest,
-  PeerTrafficStats,
-  TrafficTotals,
+import {
+  addPeerTrafficStats,
+  createEmptyPeerTrafficStats,
+  type Broadcast,
+  type BroadcastRegistration,
+  type BroadcastStats,
+  type GlobalStats,
+  type Peer,
+  type PeerFailureReport,
+  type PeerHeartbeat,
+  type PeerJoinRequest,
+  type PeerTrafficStats,
+  type TrafficTotals,
 } from "@openstreamgrid/common";
+import {
+  clampUnitInterval,
+  penalizePeerQuality,
+  sanitizePeerTrafficStats,
+} from "./store-utils.js";
 
+const NOT_FOUND_STATUS_CODE = 404;
+
+/** Store operation failure with its corresponding HTTP status. */
 export class StoreError extends Error {
   constructor(
     message: string,
@@ -20,6 +30,7 @@ export class StoreError extends Error {
   }
 }
 
+/** Persistence contract used by tracker HTTP and WebSocket services. */
 export interface TrackerStoreBackend {
   registerBroadcast(registration: BroadcastRegistration): {
     broadcast: Broadcast;
@@ -69,50 +80,7 @@ interface BroadcastState {
   retiredStats: PeerTrafficStats;
 }
 
-const emptyTrafficStats = (): PeerTrafficStats => ({
-  bytesDownloadedP2P: 0,
-  bytesDownloadedOrigin: 0,
-  bytesUploadedP2P: 0,
-  p2pRequests: 0,
-  p2pSuccesses: 0,
-  p2pFailures: 0,
-  originRequests: 0,
-  integrityFailures: 0,
-  fallbacks: 0,
-  segmentsCached: 0,
-});
-
-const trafficKeys: ReadonlyArray<keyof PeerTrafficStats> = [
-  "bytesDownloadedP2P",
-  "bytesDownloadedOrigin",
-  "bytesUploadedP2P",
-  "p2pRequests",
-  "p2pSuccesses",
-  "p2pFailures",
-  "originRequests",
-  "integrityFailures",
-  "fallbacks",
-  "segmentsCached",
-];
-
-const clamp = (value: number, minimum: number, maximum: number): number =>
-  Math.min(maximum, Math.max(minimum, value));
-
-const addStats = (target: PeerTrafficStats, source: PeerTrafficStats): void => {
-  for (const key of trafficKeys) {
-    target[key] += source[key];
-  }
-};
-
-const sanitizeStats = (stats: PeerTrafficStats): PeerTrafficStats => {
-  const sanitized = emptyTrafficStats();
-  for (const key of trafficKeys) {
-    const value = stats[key];
-    sanitized[key] = Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
-  }
-  return sanitized;
-};
-
+/** In-memory tracker store used for development and tests. */
 export class TrackerStore implements TrackerStoreBackend {
   private readonly broadcasts = new Map<string, BroadcastState>();
 
@@ -147,7 +115,7 @@ export class TrackerStore implements TrackerStoreBackend {
     this.broadcasts.set(registration.id, {
       broadcast,
       peers: new Map(),
-      retiredStats: emptyTrafficStats(),
+      retiredStats: createEmptyPeerTrafficStats(),
     });
     return { broadcast: this.copyBroadcast(broadcast), created: true };
   }
@@ -164,7 +132,7 @@ export class TrackerStore implements TrackerStoreBackend {
 
   unregisterBroadcast(id: string): void {
     if (!this.broadcasts.delete(id)) {
-      throw new StoreError(`Broadcast '${id}' was not found`, 404);
+      throw new StoreError(`Broadcast '${id}' was not found`, NOT_FOUND_STATUS_CODE);
     }
   }
 
@@ -188,7 +156,7 @@ export class TrackerStore implements TrackerStoreBackend {
     };
     state.peers.set(request.id, {
       peer,
-      stats: existing?.stats ?? emptyTrafficStats(),
+      stats: existing?.stats ?? createEmptyPeerTrafficStats(),
     });
     return this.copyPeer(peer);
   }
@@ -197,9 +165,9 @@ export class TrackerStore implements TrackerStoreBackend {
     const state = this.requireBroadcast(broadcastId);
     const peerState = state.peers.get(peerId);
     if (!peerState) {
-      throw new StoreError(`Peer '${peerId}' was not found`, 404);
+      throw new StoreError(`Peer '${peerId}' was not found`, NOT_FOUND_STATUS_CODE);
     }
-    addStats(state.retiredStats, peerState.stats);
+    addPeerTrafficStats(state.retiredStats, peerState.stats);
     state.peers.delete(peerId);
   }
 
@@ -243,7 +211,7 @@ export class TrackerStore implements TrackerStoreBackend {
       );
     }
     if (heartbeat.successRate !== undefined) {
-      peerState.peer.successRate = clamp(heartbeat.successRate, 0, 1);
+      peerState.peer.successRate = clampUnitInterval(heartbeat.successRate);
     }
     peerState.peer.lastSeenAt = this.timestamp();
     return this.copyPeer(peerState.peer);
@@ -255,7 +223,7 @@ export class TrackerStore implements TrackerStoreBackend {
     stats: PeerTrafficStats,
   ): void {
     const peerState = this.requirePeer(broadcastId, peerId);
-    peerState.stats = sanitizeStats(stats);
+    peerState.stats = sanitizePeerTrafficStats(stats);
     peerState.peer.lastSeenAt = this.timestamp();
   }
 
@@ -266,9 +234,9 @@ export class TrackerStore implements TrackerStoreBackend {
   ): Peer {
     const reported = this.requirePeer(broadcastId, peerId);
     this.requirePeer(broadcastId, report.reporterId);
-    const penalty = report.reason === "integrity" ? 0.35 : 0.1;
-    reported.peer.trustScore = clamp(reported.peer.trustScore - penalty, 0, 1);
-    reported.peer.successRate = clamp(reported.peer.successRate - penalty / 2, 0, 1);
+    const quality = penalizePeerQuality(reported.peer, report.reason);
+    reported.peer.trustScore = quality.trustScore;
+    reported.peer.successRate = quality.successRate;
     return this.copyPeer(reported.peer);
   }
 
@@ -278,7 +246,7 @@ export class TrackerStore implements TrackerStoreBackend {
     for (const state of this.broadcasts.values()) {
       for (const [peerId, peerState] of state.peers) {
         if (new Date(peerState.peer.lastSeenAt).getTime() < cutoff) {
-          addStats(state.retiredStats, peerState.stats);
+          addPeerTrafficStats(state.retiredStats, peerState.stats);
           state.peers.delete(peerId);
           removed += 1;
         }
@@ -297,13 +265,13 @@ export class TrackerStore implements TrackerStoreBackend {
 
   getGlobalStats(): GlobalStats {
     const totals: TrafficTotals = {
-      ...emptyTrafficStats(),
+      ...createEmptyPeerTrafficStats(),
       peers: 0,
     };
     for (const state of this.broadcasts.values()) {
       const broadcastTotals = this.totalsFor(state);
       totals.peers += broadcastTotals.peers;
-      addStats(totals, broadcastTotals);
+      addPeerTrafficStats(totals, broadcastTotals);
     }
     return {
       broadcasts: this.broadcasts.size,
@@ -315,12 +283,12 @@ export class TrackerStore implements TrackerStoreBackend {
 
   private totalsFor(state: BroadcastState): TrafficTotals {
     const totals: TrafficTotals = {
-      ...emptyTrafficStats(),
+      ...createEmptyPeerTrafficStats(),
       peers: state.peers.size,
     };
-    addStats(totals, state.retiredStats);
+    addPeerTrafficStats(totals, state.retiredStats);
     for (const peerState of state.peers.values()) {
-      addStats(totals, peerState.stats);
+      addPeerTrafficStats(totals, peerState.stats);
     }
     return totals;
   }
@@ -328,7 +296,7 @@ export class TrackerStore implements TrackerStoreBackend {
   private requireBroadcast(id: string): BroadcastState {
     const state = this.broadcasts.get(id);
     if (!state) {
-      throw new StoreError(`Broadcast '${id}' was not found`, 404);
+      throw new StoreError(`Broadcast '${id}' was not found`, NOT_FOUND_STATUS_CODE);
     }
     return state;
   }
@@ -336,7 +304,7 @@ export class TrackerStore implements TrackerStoreBackend {
   private requirePeer(broadcastId: string, peerId: string): PeerState {
     const peer = this.requireBroadcast(broadcastId).peers.get(peerId);
     if (!peer) {
-      throw new StoreError(`Peer '${peerId}' was not found`, 404);
+      throw new StoreError(`Peer '${peerId}' was not found`, NOT_FOUND_STATUS_CODE);
     }
     return peer;
   }
