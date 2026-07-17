@@ -172,6 +172,32 @@ test("falls back to HTTP when WebRTC fails", async () => {
   });
 });
 
+test("uses HTTP without starting WebRTC when WebRTC is disabled", async () => {
+  const webRtc = new StubTransport("webrtc", Buffer.from("unexpected"));
+  const http = new StubTransport("http", Buffer.from("from-http"));
+  const manager = new TransportManager({
+    webRtcEnabled: false,
+    webRtcTransport: webRtc,
+    httpTransport: http,
+  });
+
+  await manager.start();
+  const data = await manager.fetchSegment(
+    "segment.ts",
+    "http://peer-a:9090",
+  );
+
+  assert.equal(data.toString(), "from-http");
+  assert.equal(webRtc.requests, 0);
+  assert.equal(http.requests, 1);
+  assert.deepEqual(manager.getStats(), {
+    lastTransport: "http",
+    webrtc: { successes: 0, failures: 1 },
+    http: { successes: 1, failures: 0 },
+  });
+  await manager.stop();
+});
+
 test("tracks failures for both transports and resets usage stats", async () => {
   const webRtc = new StubTransport("webrtc", new Error("negotiation failed"));
   const http = new StubTransport("http", new Error("peer unavailable"));

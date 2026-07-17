@@ -15,3 +15,20 @@ test("parses the parallel download limit with a default of three", () => {
     5,
   );
 });
+
+test("supports disabling WebRTC for deterministic HTTP fallback", () => {
+  assert.equal(parseArguments([], environment).webRtcEnabled, true);
+  assert.equal(
+    parseArguments([], { ...environment, WEBRTC_ENABLED: "false" })
+      .webRtcEnabled,
+    false,
+  );
+  assert.equal(
+    parseArguments(["--webrtc-enabled", "no"], environment).webRtcEnabled,
+    false,
+  );
+  assert.throws(
+    () => parseArguments(["--webrtc-enabled", "sometimes"], environment),
+    /WebRTC enabled must be true or false/,
+  );
+});

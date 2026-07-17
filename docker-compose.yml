@@ -115,6 +115,7 @@ services:
       PEER_ID: peer-b
       PEER_ADDRESS: http://peer-b:9090
       PLAYLIST_POLL_MS: "1000"
+      WEBRTC_ENABLED: "${PEER_B_WEBRTC_ENABLED:-true}"
     depends_on:
       tracker:
         condition: service_healthy

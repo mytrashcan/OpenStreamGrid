@@ -888,14 +888,19 @@ const aggregate = (peers) => {
     latencies.push(...peer.latencies.p2p, ...peer.latencies.origin);
   }
   const downloaded = stats.bytesDownloadedP2P + stats.bytesDownloadedOrigin;
+  const completedRequests = stats.p2pSuccesses + stats.originRequests;
   return {
     stats,
     events,
     activePeers: peers.filter((peer) => peer.active).length,
     p2pSuccessPercent:
       stats.p2pRequests === 0 ? 0 : (stats.p2pSuccesses / stats.p2pRequests) * 100,
+    p2pEfficiencyPercent:
+      completedRequests === 0 ? 0 : (stats.p2pSuccesses / completedRequests) * 100,
     cdnSavingsPercent:
       downloaded === 0 ? 0 : (stats.bytesDownloadedP2P / downloaded) * 100,
+    averageUploadBytesPerPeer:
+      peers.length === 0 ? 0 : stats.bytesUploadedP2P / peers.length,
     latency: {
       p50: percentile(latencies, 0.5),
       p95: percentile(latencies, 0.95),
@@ -929,7 +934,40 @@ const printReport = (peers, totalPeers, startedAt, final = false) => {
       ` churns=${result.events.churns}` +
       ` errors=${result.events.errors + result.events.segmentFailures}`,
   );
+  return result;
 };
+
+const benchmarkResult = (result, config, startedAt) => ({
+  schemaVersion: 1,
+  generatedAt: new Date().toISOString(),
+  scenario: {
+    peerCount: config.peers,
+    configuredDurationSeconds: config.durationSeconds,
+    elapsedSeconds: Number(((Date.now() - startedAt) / 1_000).toFixed(3)),
+    rampUpSeconds: config.rampUpSeconds,
+    churnProbability: config.churn,
+    p2pEnabled: config.p2pEnabled,
+    quality: config.quality,
+  },
+  metrics: {
+    p2pEfficiencyRatioPercent: Number(result.p2pEfficiencyPercent.toFixed(3)),
+    cdnTrafficReductionPercent: Number(result.cdnSavingsPercent.toFixed(3)),
+    latencyMs: {
+      p50: Number(result.latency.p50.toFixed(3)),
+      p95: Number(result.latency.p95.toFixed(3)),
+      p99: Number(result.latency.p99.toFixed(3)),
+    },
+    averageUploadBytesPerPeer: Math.round(result.averageUploadBytesPerPeer),
+  },
+  traffic: { ...result.stats },
+  churn: {
+    events: result.events.churns,
+    sessions: result.events.sessions,
+    errors: result.events.errors,
+    segmentFailures: result.events.segmentFailures,
+    websocketDisconnects: result.events.websocketDisconnects,
+  },
+});
 
 const reportLoop = async (peers, config, startedAt, signal) => {
   while (!signal.aborted) {
@@ -990,7 +1028,8 @@ const main = async () => {
   await Promise.allSettled(peerRuns);
   await reporting;
   await uploadServer.stop();
-  printReport(peers, config.peers, startedAt, true);
+  const result = printReport(peers, config.peers, startedAt, true);
+  console.log(`[LoadTest] RESULT ${JSON.stringify(benchmarkResult(result, config, startedAt))}`);
 };
 
 main().catch((error) => {
