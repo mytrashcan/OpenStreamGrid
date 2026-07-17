@@ -45,6 +45,13 @@ type PeerFetchAttempt =
   | { index: number; data: Uint8Array }
   | { index: number; data?: never };
 
+interface InFlightSegment {
+  controller: AbortController;
+  promise: Promise<{ data: Uint8Array }>;
+  consumers: number;
+  settled: boolean;
+}
+
 /**
  * Custom loader for Hls.js that routes segment requests through the
  * OpenStreamGrid P2P network.
@@ -220,6 +227,7 @@ export class OpenStreamGridHlsPlugin {
   private readonly peerTimeoutMs: number;
   private readonly peerId: string;
   private readonly onEvent: ((event: SdkEvent) => void) | undefined;
+  private readonly inFlightSegments = new Map<string, InFlightSegment>();
 
   constructor(config: HlsjsPluginConfig) {
     this.peerId = config.peerId ?? generatePeerId();
@@ -289,6 +297,9 @@ export class OpenStreamGridHlsPlugin {
    * Detach from Hls.js and clean up.
    */
   detach(): void {
+    for (const request of this.inFlightSegments.values()) {
+      request.controller.abort(new DOMException("Plugin detached", "AbortError"));
+    }
     this.wsClient.stop();
   }
 
@@ -305,12 +316,47 @@ export class OpenStreamGridHlsPlugin {
     segmentUrl: string,
     signal: AbortSignal,
   ): Promise<{ data: Uint8Array }> {
+    if (signal.aborted) throw this.abortReason(signal);
     // 1. Check cache
     const cached = this.cache.get(segmentName);
     if (cached) {
       this.emit({ type: "cache_hit", segment: segmentName });
       return { data: cached };
     }
+
+    let request = this.inFlightSegments.get(segmentName);
+    if (!request) {
+      request = this.startSharedSegment(segmentName, segmentUrl);
+    }
+    return this.waitForSharedSegment(request, signal);
+  }
+
+  private startSharedSegment(
+    segmentName: string,
+    segmentUrl: string,
+  ): InFlightSegment {
+    const controller = new AbortController();
+    let request: InFlightSegment;
+    const promise = this.loadUncachedSegment(
+      segmentName,
+      segmentUrl,
+      controller.signal,
+    ).finally(() => {
+      request.settled = true;
+      if (this.inFlightSegments.get(segmentName) === request) {
+        this.inFlightSegments.delete(segmentName);
+      }
+    });
+    request = { controller, promise, consumers: 0, settled: false };
+    this.inFlightSegments.set(segmentName, request);
+    return request;
+  }
+
+  private async loadUncachedSegment(
+    segmentName: string,
+    segmentUrl: string,
+    signal: AbortSignal,
+  ): Promise<{ data: Uint8Array }> {
     this.emit({ type: "cache_miss", segment: segmentName });
 
     // 2. Try P2P first
@@ -391,6 +437,44 @@ export class OpenStreamGridHlsPlugin {
     return { data: originData };
   }
 
+  private waitForSharedSegment(
+    request: InFlightSegment,
+    signal: AbortSignal,
+  ): Promise<{ data: Uint8Array }> {
+    if (signal.aborted) {
+      return Promise.reject(this.abortReason(signal));
+    }
+    request.consumers += 1;
+    return new Promise((resolve, reject) => {
+      let finished = false;
+      const finish = (
+        callback: () => void,
+      ): void => {
+        if (finished) return;
+        finished = true;
+        signal.removeEventListener("abort", onAbort);
+        request.consumers -= 1;
+        callback();
+        if (request.consumers === 0 && !request.settled) {
+          request.controller.abort(
+            new DOMException("All segment consumers aborted", "AbortError"),
+          );
+        }
+      };
+      const onAbort = (): void => finish(() => reject(this.abortReason(signal)));
+      signal.addEventListener("abort", onAbort, { once: true });
+      request.promise.then(
+        (result) => finish(() => resolve(result)),
+        (error: unknown) => finish(() => reject(error)),
+      );
+      if (signal.aborted) onAbort();
+    });
+  }
+
+  private abortReason(signal: AbortSignal): unknown {
+    return signal.reason ?? new DOMException("Aborted", "AbortError");
+  }
+
   /**
    * Try fetching a segment from peers in order.
    * Parallel probes the top 3 peers (sorted by trust score / latency),
@@ -469,6 +553,7 @@ export class OpenStreamGridHlsPlugin {
 
     const onAbort = () => controller.abort();
     signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) onAbort();
 
     try {
       const url = `http://${peer.address}/segments/${encodeURIComponent(segmentName)}`;

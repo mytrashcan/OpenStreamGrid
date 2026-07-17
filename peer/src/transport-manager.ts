@@ -58,6 +58,8 @@ export class TransportManager {
     http: { successes: 0, failures: 0 },
   };
   private started = false;
+  private startPromise: Promise<void> | undefined;
+  private stopPromise: Promise<void> | undefined;
 
   constructor(options: TransportManagerOptions = {}) {
     this.webRtcEnabled = options.webRtcEnabled ?? true;
@@ -87,8 +89,17 @@ export class TransportManager {
   }
 
   async start(): Promise<void> {
-    if (this.started) return;
+    if (this.stopPromise) await this.stopPromise;
+    if (this.started) return this.startPromise;
     this.started = true;
+    const startPromise = this.startOnce().finally(() => {
+      if (this.startPromise === startPromise) this.startPromise = undefined;
+    });
+    this.startPromise = startPromise;
+    return startPromise;
+  }
+
+  private async startOnce(): Promise<void> {
     try {
       await Promise.all([
         this.httpTransport.start(this.transportOptions),
@@ -106,11 +117,20 @@ export class TransportManager {
 
   async stop(): Promise<void> {
     this.started = false;
-    await Promise.allSettled([
-      this.webRtcTransport.stop(),
-      this.httpTransport.stop(),
-    ]);
-    this.peerIdsByAddress.clear();
+    if (this.stopPromise) return this.stopPromise;
+    const pendingStart = this.startPromise;
+    const stopPromise = (async (): Promise<void> => {
+      await pendingStart?.catch(() => undefined);
+      await Promise.allSettled([
+        this.webRtcTransport.stop(),
+        this.httpTransport.stop(),
+      ]);
+      this.peerIdsByAddress.clear();
+    })().finally(() => {
+      if (this.stopPromise === stopPromise) this.stopPromise = undefined;
+    });
+    this.stopPromise = stopPromise;
+    return stopPromise;
   }
 
   async fetchSegment(

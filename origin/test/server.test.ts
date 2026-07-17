@@ -6,13 +6,19 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import test from "node:test";
-import { createOriginHandler, registerBroadcast } from "../src/server.js";
+import {
+  createOriginHandler,
+  OriginServer,
+  registerBroadcast,
+} from "../src/server.js";
 import { HlsStreamer, type StreamController } from "../src/streamer.js";
 
 class FakeStreamer implements StreamController {
   readonly playlistPath: string;
   readonly qualities: string[] = ['low', 'med', 'high'];
   private running = false;
+  starts = 0;
+  stops = 0;
 
   constructor(private readonly directory: string) {
     this.playlistPath = path.join(directory, "stream.m3u8");
@@ -23,10 +29,12 @@ class FakeStreamer implements StreamController {
   }
 
   async start(): Promise<void> {
+    this.starts += 1;
     this.running = true;
   }
 
   async stop(): Promise<void> {
+    this.stops += 1;
     this.running = false;
   }
 
@@ -122,6 +130,25 @@ test("registers a broadcast with the tracker", async () => {
     id: "live",
     playlistUrl: "http://origin:8080/hls/stream.m3u8",
   });
+});
+
+test("coalesces concurrent origin server starts and stops", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "openstreamgrid-origin-"));
+  const streamer = new FakeStreamer(directory);
+  const server = new OriginServer({ hlsDirectory: directory, streamer });
+  try {
+    const [firstPort, secondPort] = await Promise.all([
+      server.start(0, "127.0.0.1"),
+      server.start(0, "127.0.0.1"),
+    ]);
+    assert.equal(firstPort, secondPort);
+    assert.equal(streamer.starts, 1);
+    await Promise.all([server.stop(), server.stop()]);
+    assert.equal(streamer.stops, 1);
+  } finally {
+    await server.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("creates hashes for nested variant segments without allowing traversal", async () => {

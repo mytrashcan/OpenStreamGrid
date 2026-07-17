@@ -183,6 +183,7 @@ export class WsTrackerClient {
   private readonly reportIntervalMs: number;
   private started = false;
   private firstConnectResolve: (() => void) | null = null;
+  private firstConnectPromise: Promise<void> | null = null;
   /** Track known peers. */
   private readonly peers = new Map<string, PeerInfo>();
 
@@ -193,21 +194,34 @@ export class WsTrackerClient {
       options.reconnectMaxMs ?? DEFAULT_RECONNECT_MAX_MS;
     this.reportIntervalMs =
       options.reportIntervalMs ?? DEFAULT_REPORT_INTERVAL_MS;
+    for (const [label, value] of [
+      ["Report interval", this.reportIntervalMs],
+      ["Initial reconnect delay", this.reconnectInitialMs],
+      ["Maximum reconnect delay", this.reconnectMaxMs],
+    ] as const) {
+      if (!Number.isSafeInteger(value) || value <= 0) {
+        throw new Error(`${label} must be a positive integer`);
+      }
+    }
+    if (this.reconnectMaxMs < this.reconnectInitialMs) {
+      throw new Error("Maximum reconnect delay cannot be less than the initial delay");
+    }
     this.nextReconnectMs = this.reconnectInitialMs;
   }
 
   /** Start the WebSocket connection. Resolves on first successful connection. */
   start(): Promise<void> {
-    if (this.started) return Promise.resolve();
+    if (this.started) return this.firstConnectPromise ?? Promise.resolve();
     this.started = true;
     this.reportTimer = setInterval(
       () => this.reportStatusSafely(),
       this.reportIntervalMs,
     );
-    return new Promise<void>((resolve) => {
+    this.firstConnectPromise = new Promise<void>((resolve) => {
       this.firstConnectResolve = resolve;
       this.openSocket();
     });
+    return this.firstConnectPromise;
   }
 
   /** Gracefully stop and clean up. */
@@ -220,6 +234,7 @@ export class WsTrackerClient {
     this.reconnectTimer = null;
     this.firstConnectResolve?.();
     this.firstConnectResolve = null;
+    this.firstConnectPromise = null;
     if (this.ws) {
       this.ws.onclose = null; // prevent reconnect
       this.ws.onerror = null;
@@ -279,7 +294,6 @@ export class WsTrackerClient {
 
     ws.onopen = () => {
       if (this.ws !== ws || !this.started) return;
-      this.nextReconnectMs = this.reconnectInitialMs;
 
       // Subscribe to our broadcast
       this.send({
@@ -297,16 +311,19 @@ export class WsTrackerClient {
     };
 
     ws.onmessage = (event: MessageEvent) => {
-      this.handleMessage(event.data);
+      if (this.ws === ws) this.handleMessage(event.data);
     };
 
     ws.onerror = (event: Event) => {
-      console.error("[OpenStreamGrid] WebSocket error");
-      callSafely("onError", () => this.options.onError?.(event));
+      if (this.ws === ws && this.started) {
+        console.error("[OpenStreamGrid] WebSocket error");
+        callSafely("onError", () => this.options.onError?.(event));
+      }
     };
 
     ws.onclose = () => {
-      if (this.ws === ws) this.ws = null;
+      if (this.ws !== ws) return;
+      this.ws = null;
       this.peers.clear();
       callSafely("onDisconnected", () => this.options.onDisconnected?.());
       if (this.started) this.scheduleReconnect();
@@ -366,6 +383,7 @@ export class WsTrackerClient {
 
       switch (msg.type) {
         case "peer_list": {
+          this.nextReconnectMs = this.reconnectInitialMs;
           this.peers.clear();
           for (const peer of msg.peers) {
             this.peers.set(peer.id, { ...peer, segments: [...peer.segments] });

@@ -420,9 +420,13 @@ export const createTrackerHandler = (
             ...(uploadBandwidthBps !== undefined ? { uploadBandwidthBps } : {}),
             ...(metadata ? { metadata } : {}),
           };
+          const alreadyJoined = store
+            .listPeers(broadcastId)
+            .some((peer) => peer.id === join.id);
           const peer = store.joinPeer(broadcastId, join);
-          sendJson(response, 201, peer);
-          events.peerJoined?.(broadcastId, peer);
+          sendJson(response, alreadyJoined ? 200 : 201, peer);
+          if (alreadyJoined) events.peerListChanged?.(broadcastId);
+          else events.peerJoined?.(broadcastId, peer);
           return;
         }
         if (!encodedPeerId && method === "GET") {
@@ -496,6 +500,8 @@ export class TrackerServer {
   private readonly webSockets: TrackerWebSocketHub;
   private readonly statsEvents: TrackerStatsSse;
   private cleanupTimer: NodeJS.Timeout | undefined;
+  private startPromise: Promise<number> | undefined;
+  private stopPromise: Promise<void> | undefined;
 
   constructor(
     storeFactory: TrackerStoreFactory = createConfiguredStore,
@@ -526,6 +532,19 @@ export class TrackerServer {
   }
 
   async start(port = DEFAULT_PORT, host = "0.0.0.0"): Promise<number> {
+    if (this.stopPromise) {
+      throw new Error("Tracker server cannot be started after shutdown begins");
+    }
+    if (this.startPromise) return this.startPromise;
+    const startPromise = this.startOnce(port, host).catch((error: unknown) => {
+      if (this.startPromise === startPromise) this.startPromise = undefined;
+      throw error;
+    });
+    this.startPromise = startPromise;
+    return startPromise;
+  }
+
+  private async startOnce(port: number, host: string): Promise<number> {
     await new Promise<void>((resolve, reject) => {
       this.server.once("error", reject);
       this.server.listen(port, host, () => {
@@ -549,6 +568,12 @@ export class TrackerServer {
   }
 
   async stop(): Promise<void> {
+    this.stopPromise ??= this.stopOnce();
+    return this.stopPromise;
+  }
+
+  private async stopOnce(): Promise<void> {
+    await this.startPromise?.catch(() => undefined);
     if (this.cleanupTimer) clearInterval(this.cleanupTimer);
     this.cleanupTimer = undefined;
     if (!this.server.listening) {

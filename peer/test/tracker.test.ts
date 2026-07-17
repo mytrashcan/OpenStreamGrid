@@ -114,3 +114,38 @@ test("uses validated WebSocket peer updates and reconnects after disconnect", as
     });
   }
 });
+
+test("backs off when sockets close before a valid peer list", async (context) => {
+  context.mock.method(console, "error", () => {});
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  const port = (server.address() as AddressInfo).port;
+  const connectedAt: number[] = [];
+  server.on("connection", (socket) => {
+    connectedAt.push(Date.now());
+    socket.close();
+  });
+  const client = new TrackerClient({
+    trackerUrl: `http://127.0.0.1:${port}`,
+    broadcastId: "live",
+    peerId: "peer-a",
+    heartbeat: () => ({}),
+    stats,
+    segments: () => [],
+    reconnectInitialMs: 20,
+    reconnectMaxMs: 80,
+  });
+
+  try {
+    await client.start();
+    await waitFor(() => connectedAt.length >= 3);
+    assert.ok((connectedAt[1] ?? 0) - (connectedAt[0] ?? 0) >= 15);
+    assert.ok((connectedAt[2] ?? 0) - (connectedAt[1] ?? 0) >= 35);
+  } finally {
+    client.stop();
+    for (const socket of server.clients) socket.terminate();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+});

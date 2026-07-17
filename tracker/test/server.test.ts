@@ -92,6 +92,38 @@ test("exposes the broadcast and peer lifecycle over REST", async () => {
   assert.equal(health.status, 200);
 });
 
+test("treats a duplicate peer join as an idempotent update", async () => {
+  const store = new TrackerStore();
+  const joinedPeers: string[] = [];
+  const changedBroadcasts: string[] = [];
+  const handler = createTrackerHandler(store, {
+    peerJoined: (broadcastId, peer) => joinedPeers.push(`${broadcastId}:${peer.id}`),
+    peerListChanged: (broadcastId) => changedBroadcasts.push(broadcastId),
+  });
+  await invoke(handler, "POST", "/api/v1/broadcasts", {
+    id: "live",
+    playlistUrl: "http://origin/live.m3u8",
+  });
+
+  const first = await invoke(handler, "POST", "/api/v1/broadcasts/live/peers", {
+    id: "peer-a",
+    address: "http://peer-a:9090",
+  });
+  const duplicate = await invoke(
+    handler,
+    "POST",
+    "/api/v1/broadcasts/live/peers",
+    { id: "peer-a", address: "http://peer-a:9191" },
+  );
+
+  assert.equal(first.status, 201);
+  assert.equal(duplicate.status, 200);
+  assert.deepEqual(joinedPeers, ["live:peer-a"]);
+  assert.deepEqual(changedBroadcasts, ["live"]);
+  assert.equal(store.listPeers("live").length, 1);
+  assert.equal(store.listPeers("live")[0]?.address, "http://peer-a:9191");
+});
+
 test("rejects malformed stats and URL path encoding", async () => {
   const handler = createTrackerHandler(new TrackerStore());
   await invoke(handler, "POST", "/api/v1/broadcasts", {

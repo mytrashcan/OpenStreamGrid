@@ -164,6 +164,7 @@ export class TrackerClient implements PeerDirectory {
   private nextReconnectMs: number;
   private started = false;
   private firstConnectionResolver: (() => void) | undefined;
+  private firstConnectionPromise: Promise<void> | undefined;
 
   constructor(private readonly options: TrackerClientOptions) {
     this.fetchImpl = options.fetchImpl ?? fetch;
@@ -174,6 +175,18 @@ export class TrackerClient implements PeerDirectory {
     this.reconnectInitialMs =
       options.reconnectInitialMs ?? DEFAULT_RECONNECT_INITIAL_MS;
     this.reconnectMaxMs = options.reconnectMaxMs ?? DEFAULT_RECONNECT_MAX_MS;
+    for (const [label, value] of [
+      ["Report interval", this.reportIntervalMs],
+      ["Initial reconnect delay", this.reconnectInitialMs],
+      ["Maximum reconnect delay", this.reconnectMaxMs],
+    ] as const) {
+      if (!Number.isSafeInteger(value) || value <= 0) {
+        throw new Error(`${label} must be a positive integer`);
+      }
+    }
+    if (this.reconnectMaxMs < this.reconnectInitialMs) {
+      throw new Error("Maximum reconnect delay cannot be less than the initial delay");
+    }
     this.nextReconnectMs = this.reconnectInitialMs;
   }
 
@@ -198,18 +211,19 @@ export class TrackerClient implements PeerDirectory {
     }
   }
 
-  async start(): Promise<void> {
-    if (this.started) return;
+  start(): Promise<void> {
+    if (this.started) return this.firstConnectionPromise ?? Promise.resolve();
     this.started = true;
     this.reportTimer = setInterval(
       () => this.reportStatusSafely(),
       this.reportIntervalMs,
     );
     this.reportTimer.unref();
-    await new Promise<void>((resolve) => {
+    this.firstConnectionPromise = new Promise<void>((resolve) => {
       this.firstConnectionResolver = resolve;
       this.openSocket();
     });
+    return this.firstConnectionPromise;
   }
 
   stop(): void {
@@ -221,6 +235,7 @@ export class TrackerClient implements PeerDirectory {
     this.reconnectTimer = undefined;
     this.firstConnectionResolver?.();
     this.firstConnectionResolver = undefined;
+    this.firstConnectionPromise = undefined;
     const socket = this.socket;
     this.socket = undefined;
     if (socket && socket.readyState !== WebSocket.CLOSED) {
@@ -277,7 +292,6 @@ export class TrackerClient implements PeerDirectory {
     this.socket = socket;
     socket.once("open", () => {
       if (this.socket !== socket || !this.started) return;
-      this.nextReconnectMs = this.reconnectInitialMs;
       this.send({
         type: "subscribe",
         broadcastId: this.options.broadcastId,
@@ -288,13 +302,16 @@ export class TrackerClient implements PeerDirectory {
       this.firstConnectionResolver = undefined;
     });
     socket.on("message", (data, isBinary) => {
-      if (!isBinary) this.handleMessage(data);
+      if (this.socket === socket && !isBinary) this.handleMessage(data);
     });
     socket.on("error", (error) => {
-      if (this.started) console.error("tracker WebSocket error", error);
+      if (this.socket === socket && this.started) {
+        console.error("tracker WebSocket error", error);
+      }
     });
     socket.once("close", () => {
-      if (this.socket === socket) this.socket = undefined;
+      if (this.socket !== socket) return;
+      this.socket = undefined;
       this.peers.clear();
       if (this.started) this.scheduleReconnect();
     });
@@ -345,6 +362,7 @@ export class TrackerClient implements PeerDirectory {
       if (!message) return;
       if (message.broadcastId !== this.options.broadcastId) return;
       if (message.type === "peer_list") {
+        this.nextReconnectMs = this.reconnectInitialMs;
         this.peers.clear();
         for (const peer of message.peers) this.peers.set(peer.id, this.copyPeer(peer));
         return;
