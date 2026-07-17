@@ -147,21 +147,33 @@ const invoke = async (
   return response;
 };
 
-test("serves HLS assets, creates hashes, and exposes readiness", async () => {
+test("serves HLS assets, creates hashes, and exposes readiness", async (context) => {
   const directory = await mkdtemp(path.join(tmpdir(), "openstreamgrid-origin-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
   const streamer = new FakeStreamer(directory);
   const handler = createOriginHandler(directory, streamer);
 
   await streamer.start();
   let response = await invoke(handler, "/health");
   assert.equal(response.statusCode, 503);
+  assert.deepEqual(JSON.parse(response.body.toString()), {
+    status: "starting",
+    service: "origin",
+    details: { ffmpegRunning: true, playlistAvailable: false },
+  });
 
   await writeFile(streamer.playlistPath, "#EXTM3U\nsegment_000001.ts\n");
   await writeFile(path.join(directory, "segment_000001.ts"), "segment-data");
 
   response = await invoke(handler, "/health");
   assert.equal(response.statusCode, 200);
+  assert.deepEqual(JSON.parse(response.body.toString()), {
+    status: "ok",
+    service: "origin",
+    details: { ffmpegRunning: true, playlistAvailable: true },
+  });
   response = await invoke(handler, "/hls/segment_000001.ts");
+  assert.equal(response.statusCode, 200);
   assert.equal(response.body.toString(), "segment-data");
   response = await invoke(handler, "/hls/segment_000001.ts.sha256");
   assert.match(
@@ -169,7 +181,6 @@ test("serves HLS assets, creates hashes, and exposes readiness", async () => {
     /^[a-f0-9]{64}  segment_000001\.ts\n$/,
   );
   await streamer.stop();
-  await rm(directory, { recursive: true, force: true });
 });
 
 test("registers a broadcast with the tracker", async () => {
@@ -213,8 +224,9 @@ test("coalesces concurrent origin server starts and stops", async () => {
   }
 });
 
-test("creates hashes for nested variant segments without allowing traversal", async () => {
+test("creates hashes for nested variant segments without allowing traversal", async (context) => {
   const directory = await mkdtemp(path.join(tmpdir(), "openstreamgrid-streamer-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
   const segmentDirectory = path.join(directory, "low");
   const segmentName = "low/segment_000001.ts";
   await mkdir(segmentDirectory, { recursive: true });
@@ -234,5 +246,4 @@ test("creates hashes for nested variant segments without allowing traversal", as
     streamer.ensureHash("../outside.ts"),
     /Invalid segment name/,
   );
-  await rm(directory, { recursive: true, force: true });
 });

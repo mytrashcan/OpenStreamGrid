@@ -105,19 +105,40 @@ test("exposes the broadcast and peer lifecycle over REST", async () => {
     playlistUrl: "http://origin/live.m3u8",
   });
   assert.equal(registration.status, 201);
+  assert.deepEqual(registration.json, {
+    id: "live",
+    playlistUrl: "http://origin/live.m3u8",
+    createdAt: (registration.json as { createdAt: string }).createdAt,
+    updatedAt: (registration.json as { updatedAt: string }).updatedAt,
+  });
+  assert.match((registration.json as { createdAt: string }).createdAt, /^\d{4}-/);
 
   const join = await invoke(handler, "POST", "/api/v1/broadcasts/live/peers", {
     id: "peer-a",
     address: "http://peer-a:9090",
   });
   assert.equal(join.status, 201);
+  assert.deepEqual(join.json, {
+    id: "peer-a",
+    address: "http://peer-a:9090",
+    segments: [],
+    joinedAt: (join.json as { joinedAt: string }).joinedAt,
+    lastSeenAt: (join.json as { lastSeenAt: string }).lastSeenAt,
+    latencyMs: 0,
+    successRate: 1,
+    trustScore: 1,
+  });
 
-  await invoke(
+  const segmentReport = await invoke(
     handler,
     "POST",
     "/api/v1/broadcasts/live/peers/peer-a/segments",
     { segments: ["segment_1.ts"] },
   );
+  assert.equal(segmentReport.status, 200);
+  assert.deepEqual((segmentReport.json as { segments: string[] }).segments, [
+    "segment_1.ts",
+  ]);
   const peers = await invoke(
     handler,
     "GET",
@@ -128,6 +149,7 @@ test("exposes the broadcast and peer lifecycle over REST", async () => {
 
   const health = await invoke(handler, "GET", "/health");
   assert.equal(health.status, 200);
+  assert.deepEqual(health.json, { status: "ok", service: "tracker" });
 });
 
 test("treats a duplicate peer join as an idempotent update", async () => {
@@ -156,6 +178,8 @@ test("treats a duplicate peer join as an idempotent update", async () => {
 
   assert.equal(first.status, 201);
   assert.equal(duplicate.status, 200);
+  assert.equal((first.json as { address: string }).address, "http://peer-a:9090");
+  assert.equal((duplicate.json as { address: string }).address, "http://peer-a:9191");
   assert.deepEqual(joinedPeers, ["live:peer-a"]);
   assert.deepEqual(changedBroadcasts, ["live"]);
   assert.equal(store.listPeers("live").length, 1);
