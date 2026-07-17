@@ -153,9 +153,10 @@
 
     // Configuration — override via URL query params
     const params = new URLSearchParams(window.location.search);
-    const trackerUrl = params.get("tracker") || "ws://tracker:7070/ws";
-    const broadcastId = params.get("broadcast") || "test-broadcast";
-    const streamUrl = params.get("stream") || "http://localhost:8080/stream.m3u8";
+    const trackerUrl = params.get("tracker") || "ws://localhost:7070/ws";
+    const broadcastId = params.get("broadcast") || "live";
+    const streamUrl = params.get("stream") || "http://localhost:8080/hls/stream.m3u8";
+    const originBaseUrl = params.get("origin") || "http://localhost:8080/hls";
 
     addEvent("cache-miss", `Tracker: ${trackerUrl}`);
     addEvent("cache-miss", `Broadcast: ${broadcastId}`);
@@ -164,6 +165,7 @@
     plugin = new OpenStreamGridHlsPlugin({
       trackerUrl,
       broadcastId,
+      originBaseUrl,
       maxCacheBytes: 50 * 1024 * 1024,  // 50 MB
       peerTimeoutMs: 3000,
       verifySegments: true,

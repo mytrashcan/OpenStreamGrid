@@ -128,9 +128,9 @@ wait_for_http_transport_log() {
   local attempts="${1:-90}"
   local attempt
   for ((attempt = 1; attempt <= attempts; attempt += 1)); do
-    if "${COMPOSE[@]}" logs --no-color peer-b 2>/dev/null \
+    if "${COMPOSE[@]}" logs --no-color peer-a peer-b 2>/dev/null \
       | grep -q '"source":"p2p".*"transport":"http"'; then
-      log "peer-b completed a P2P transfer through HTTP with WebRTC disabled"
+      log "A peer completed a P2P transfer through HTTP with WebRTC unavailable"
       return 0
     fi
     sleep 1

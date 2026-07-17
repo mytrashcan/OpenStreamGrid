@@ -44,8 +44,13 @@ const MAX_PARALLEL_PEER_PROBES = 3;
 const logger = createLogger("sdk");
 
 type PeerFetchAttempt =
-  | { index: number; data: Uint8Array }
+  | { index: number; peerId: string; data: Uint8Array }
   | { index: number; data?: never };
+
+interface PeerFetchResult {
+  data: Uint8Array;
+  peerId: string;
+}
 
 interface InFlightSegment {
   controller: AbortController;
@@ -124,7 +129,6 @@ class OpenStreamGridLoader implements Loader<LoaderContext> {
       segmentName,
       url,
       context,
-      config,
       callbacks,
       this.abortController.signal,
     );
@@ -136,7 +140,6 @@ class OpenStreamGridLoader implements Loader<LoaderContext> {
     segmentName: string,
     url: string,
     context: LoaderContext,
-    config: LoaderConfiguration,
     callbacks: LoaderCallbacks<LoaderContext>,
     signal: AbortSignal,
   ): Promise<void> {
@@ -152,8 +155,21 @@ class OpenStreamGridLoader implements Loader<LoaderContext> {
         context,
         null,
       );
-    } catch {
-      if (!this.aborted) this.fallbackToOrigin(context, config, callbacks);
+    } catch (error) {
+      if (this.aborted) return;
+      this.stats.loading.end = performance.now();
+      callbacks.onError(
+        {
+          code: 0,
+          text:
+            error instanceof Error
+              ? error.message
+              : "OpenStreamGrid segment load failed",
+        },
+        context,
+        null,
+        this.stats,
+      );
     }
   }
 
@@ -231,6 +247,9 @@ export class OpenStreamGridHlsPlugin {
   private readonly peerId: string;
   private readonly onEvent: ((event: SdkEvent) => void) | undefined;
   private readonly inFlightSegments = new Map<string, InFlightSegment>();
+  private attachedHls: Hls | undefined;
+  private originalLoader: HlsConfig["loader"] | undefined;
+  private installedLoader: HlsConfig["loader"] | undefined;
 
   constructor(config: HlsjsPluginConfig) {
     if (config.peerId !== undefined && config.peerId.trim() === "") {
@@ -274,8 +293,7 @@ export class OpenStreamGridHlsPlugin {
       trackerUrl: config.trackerUrl,
       broadcastId: config.broadcastId,
       peerId: this.peerId,
-      getSegments: () => this.cache.keys(),
-      getStats: () => ({ ...this.stats }),
+      reportPeerState: false,
       onConnected: () => {
         this.emit({ type: "ws_connected" });
         config.onReady?.();
@@ -291,9 +309,16 @@ export class OpenStreamGridHlsPlugin {
    * Replaces the default loader with OpenStreamGrid's P2P-aware loader.
    */
   attach(hls: Hls): void {
+    if (this.attachedHls && this.attachedHls !== hls) {
+      throw new Error("Plugin is already attached to another Hls.js instance");
+    }
+    if (this.attachedHls === hls) return;
     const DefaultLoader = hls.config.loader;
-
-    hls.config.loader = createP2PLoader(this, DefaultLoader);
+    const loader = createP2PLoader(this, DefaultLoader);
+    this.attachedHls = hls;
+    this.originalLoader = DefaultLoader;
+    this.installedLoader = loader;
+    hls.config.loader = loader;
 
     this.wsClient.start().catch((error: unknown) => {
       logger.warn("tracker_connection_failed", {
@@ -311,6 +336,16 @@ export class OpenStreamGridHlsPlugin {
       request.controller.abort(new DOMException("Plugin detached", "AbortError"));
     }
     this.wsClient.stop();
+    if (
+      this.attachedHls &&
+      this.originalLoader &&
+      this.attachedHls.config.loader === this.installedLoader
+    ) {
+      this.attachedHls.config.loader = this.originalLoader;
+    }
+    this.attachedHls = undefined;
+    this.originalLoader = undefined;
+    this.installedLoader = undefined;
   }
 
   /**
@@ -327,21 +362,22 @@ export class OpenStreamGridHlsPlugin {
     signal: AbortSignal,
   ): Promise<{ data: Uint8Array }> {
     if (signal.aborted) throw this.abortReason(signal);
-    // 1. Check cache
-    const cached = this.cache.get(segmentName);
+    const cacheKey = this.segmentCacheKey(segmentUrl);
+    const cached = this.cache.get(cacheKey);
     if (cached) {
       this.emit({ type: "cache_hit", segment: segmentName });
       return { data: cached };
     }
 
-    let request = this.inFlightSegments.get(segmentName);
+    let request = this.inFlightSegments.get(cacheKey);
     if (!request) {
-      request = this.startSharedSegment(segmentName, segmentUrl);
+      request = this.startSharedSegment(cacheKey, segmentName, segmentUrl);
     }
     return this.waitForSharedSegment(request, signal);
   }
 
   private startSharedSegment(
+    cacheKey: string,
     segmentName: string,
     segmentUrl: string,
   ): InFlightSegment {
@@ -353,12 +389,12 @@ export class OpenStreamGridHlsPlugin {
       controller.signal,
     ).finally(() => {
       request.settled = true;
-      if (this.inFlightSegments.get(segmentName) === request) {
-        this.inFlightSegments.delete(segmentName);
+      if (this.inFlightSegments.get(cacheKey) === request) {
+        this.inFlightSegments.delete(cacheKey);
       }
     });
     request = { controller, promise, consumers: 0, settled: false };
-    this.inFlightSegments.set(segmentName, request);
+    this.inFlightSegments.set(cacheKey, request);
     return request;
   }
 
@@ -371,6 +407,7 @@ export class OpenStreamGridHlsPlugin {
 
     const peers = this.wsClient.getPeersWithSegment(segmentName);
     if (peers.length > 0) {
+      this.stats.p2pRequests++;
       try {
         const result = await this.fetchFromPeers(
           segmentName,
@@ -378,14 +415,13 @@ export class OpenStreamGridHlsPlugin {
           signal,
         );
         if (result && !signal.aborted) {
-          this.stats.bytesDownloadedP2P += result.byteLength;
-          this.stats.p2pRequests++;
+          this.stats.bytesDownloadedP2P += result.data.byteLength;
           this.stats.p2pSuccesses++;
 
           if (this.verifier) {
-            const verification = await this.verifier.verify(
-              segmentName,
-              result,
+            const verification = await this.verifier.verifyUrl(
+              segmentUrl,
+              result.data,
             );
             if (!verification.valid) {
               this.stats.integrityFailures++;
@@ -399,17 +435,16 @@ export class OpenStreamGridHlsPlugin {
             this.emit({ type: "integrity_ok", segment: segmentName });
           }
 
-          this.cache.set(segmentName, result);
+          this.cache.set(this.segmentCacheKey(segmentUrl), result.data);
           this.stats.segmentsCached = this.cache.size;
-          this.wsClient.reportSegments();
 
           this.emit({
             type: "peer_fetched",
             segment: segmentName,
-            ...(peers[0] ? { peerId: peers[0].id } : {}),
+            peerId: result.peerId,
           });
 
-          return { data: result };
+          return { data: result.data };
         }
       } catch {
         this.stats.p2pFailures++;
@@ -428,9 +463,22 @@ export class OpenStreamGridHlsPlugin {
     this.stats.bytesDownloadedOrigin += originData.byteLength;
     this.stats.originRequests++;
 
-    this.cache.set(segmentName, originData);
+    if (this.verifier) {
+      const verification = await this.verifier.verifyUrl(segmentUrl, originData);
+      if (!verification.valid) {
+        this.stats.integrityFailures++;
+        this.emit({
+          type: "integrity_fail",
+          segment: segmentName,
+          message: `Expected ${verification.expectedHash}, got ${verification.actualHash}`,
+        });
+        throw new Error("Origin segment integrity check failed");
+      }
+      this.emit({ type: "integrity_ok", segment: segmentName });
+    }
+
+    this.cache.set(this.segmentCacheKey(segmentUrl), originData);
     this.stats.segmentsCached = this.cache.size;
-    this.wsClient.reportSegments();
 
     this.emit({
       type: "origin_fallback",
@@ -488,7 +536,7 @@ export class OpenStreamGridHlsPlugin {
     segmentName: string,
     peers: PeerInfo[],
     signal: AbortSignal,
-  ): Promise<Uint8Array | null> {
+  ): Promise<PeerFetchResult | null> {
     const sorted = [...peers].sort((a, b) => {
       if (b.trustScore !== a.trustScore) return b.trustScore - a.trustScore;
       return a.latencyMs - b.latencyMs;
@@ -514,7 +562,7 @@ export class OpenStreamGridHlsPlugin {
       while (pending.size > 0) {
         const result = await Promise.race(pending.values());
         pending.delete(result.index);
-        if (result.data) return result.data;
+        if (result.data) return { data: result.data, peerId: result.peerId };
       }
       return null;
     } finally {
@@ -536,7 +584,7 @@ export class OpenStreamGridHlsPlugin {
         this.peerTimeoutMs,
         signal,
       );
-      return { index, data };
+      return { index, peerId: peer.id, data };
     } catch {
       return { index };
     }
@@ -544,7 +592,7 @@ export class OpenStreamGridHlsPlugin {
 
   /**
    * Fetch a single segment from a peer via HTTP.
-   * Peer address is `http://<peer.address>/segments/<segmentName>`.
+   * Peer addresses are absolute HTTP URLs from the tracker API.
    */
   private async fetchFromPeer(
     peer: PeerInfo,
@@ -560,7 +608,10 @@ export class OpenStreamGridHlsPlugin {
     if (signal.aborted) onAbort();
 
     try {
-      const url = `http://${peer.address}/segments/${encodeURIComponent(segmentName)}`;
+      const url = new URL(
+        `/segments/${encodeURIComponent(segmentName)}`,
+        peer.address,
+      );
       const response = await fetch(url, {
         signal: controller.signal,
         method: "GET",
@@ -596,6 +647,15 @@ export class OpenStreamGridHlsPlugin {
       this.onEvent?.(event);
     } catch (error) {
       logger.error("event_callback_failed", error);
+    }
+  }
+
+  private segmentCacheKey(segmentUrl: string): string {
+    try {
+      const url = new URL(segmentUrl, globalThis.location?.href);
+      return `${url.origin}${url.pathname}`;
+    } catch {
+      return segmentUrl;
     }
   }
 }

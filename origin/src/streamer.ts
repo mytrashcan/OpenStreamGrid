@@ -169,7 +169,7 @@ export class HlsStreamer implements StreamController {
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk: string) => {
       for (const line of chunk.trimEnd().split("\n")) {
-        if (line) logger.error("ffmpeg_stderr", line);
+        if (line) logger.warn("ffmpeg_stderr", { message: line });
       }
     });
     child.once("exit", (code, signal) => {

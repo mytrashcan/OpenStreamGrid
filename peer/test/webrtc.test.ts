@@ -76,9 +76,11 @@ test("transfers and reassembles a segment over a real DataChannel", async () => 
   const port = (server.address() as AddressInfo).port;
   const subscriptions = new Map<string, WebSocket>();
   server.on("connection", (socket) => {
+    let subscribedPeerId: string | undefined;
     socket.on("message", (data) => {
       const message = JSON.parse(data.toString()) as Record<string, unknown>;
       if (message.type === "subscribe" && typeof message.peerId === "string") {
+        subscribedPeerId = message.peerId;
         subscriptions.set(message.peerId, socket);
         return;
       }
@@ -87,6 +89,14 @@ test("transfers and reassembles a segment over a real DataChannel", async () => 
         typeof message.targetPeerId === "string"
       ) {
         subscriptions.get(message.targetPeerId)?.send(JSON.stringify(message));
+      }
+    });
+    socket.once("close", () => {
+      if (
+        subscribedPeerId &&
+        subscriptions.get(subscribedPeerId) === socket
+      ) {
+        subscriptions.delete(subscribedPeerId);
       }
     });
   });
@@ -101,6 +111,7 @@ test("transfers and reassembles a segment over a real DataChannel", async () => 
     onUpload: (bytes) => {
       uploadedBytes += bytes;
     },
+    signalReconnectMs: 10,
   });
 
   try {
@@ -124,6 +135,19 @@ test("transfers and reassembles a segment over a real DataChannel", async () => 
     assert.equal(uploadedBytes, segment.byteLength);
     assert.equal(requester.getStats().segmentsFetched, 1);
     assert.deepEqual(requester.peers, ["peer-b"]);
+
+    const disconnectedSocket = subscriptions.get("peer-b");
+    disconnectedSocket?.terminate();
+    await waitFor(
+      () =>
+        subscriptions.has("peer-b") &&
+        subscriptions.get("peer-b") !== disconnectedSocket,
+    );
+    const receivedAfterReconnect = await requester.requestSegment(
+      "peer-b",
+      "segment.ts",
+    );
+    assert.deepEqual(receivedAfterReconnect, segment);
   } finally {
     await Promise.all([requester.stop(), responder.stop()]);
     for (const socket of server.clients) socket.terminate();

@@ -18,6 +18,7 @@ import type { SegmentIntegrityVerifier } from "./verifier.js";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_UPLOAD_CONNECTIONS = 3;
+const DEFAULT_SIGNAL_RECONNECT_MS = 1_000;
 const MAX_TRACKED_PEERS = 2_000;
 const DATA_CHANNEL_LABEL = "segment-request";
 const MAX_DATA_CHANNEL_CHUNK_BYTES = 16 * 1024;
@@ -40,6 +41,7 @@ export interface WebRtcTransportOptions {
   verifier?: SegmentIntegrityVerifier;
   onUpload?: (bytes: number) => void;
   maxUploadConnections?: number;
+  signalReconnectMs?: number;
   peerConnectionFactory?: (configuration: RTCConfiguration) => RTCPeerConnection;
   webSocketFactory?: (url: URL) => WebSocket;
 }
@@ -94,6 +96,7 @@ export class WebRtcTransport implements TransportAdapter {
   private readonly verifier: SegmentIntegrityVerifier | undefined;
   private readonly onUpload: ((bytes: number) => void) | undefined;
   private readonly maxUploadConnections: number;
+  private readonly signalReconnectMs: number;
   private readonly peerConnectionFactory: (
     configuration: RTCConfiguration,
   ) => RTCPeerConnection;
@@ -111,6 +114,7 @@ export class WebRtcTransport implements TransportAdapter {
   private transportOptions: TransportOptions | undefined;
   private signalSocket: WebSocket | undefined;
   private signalConnection: Promise<WebSocket> | undefined;
+  private signalReconnectTimer: NodeJS.Timeout | undefined;
   private stopped = true;
 
   constructor(options: WebRtcTransportOptions = {}) {
@@ -130,6 +134,11 @@ export class WebRtcTransport implements TransportAdapter {
     ) {
       throw new Error("Maximum WebRTC upload connections must be a positive integer");
     }
+    this.signalReconnectMs =
+      options.signalReconnectMs ?? DEFAULT_SIGNAL_RECONNECT_MS;
+    if (!Number.isSafeInteger(this.signalReconnectMs) || this.signalReconnectMs <= 0) {
+      throw new Error("WebRTC signaling reconnect delay must be a positive integer");
+    }
     this.peerConnectionFactory =
       options.peerConnectionFactory ??
       ((configuration) => new wrtc.RTCPeerConnection(configuration));
@@ -145,11 +154,18 @@ export class WebRtcTransport implements TransportAdapter {
     this.transportOptions = options;
     this.stopped = false;
     if (!options.signalUrl || !options.peerId || !options.broadcastId) return;
-    await this.ensureSignalSocket(options.signal);
+    try {
+      await this.ensureSignalSocket(options.signal);
+    } catch (error) {
+      this.scheduleSignalReconnect();
+      throw error;
+    }
   }
 
   async stop(): Promise<void> {
     this.stopped = true;
+    if (this.signalReconnectTimer) clearTimeout(this.signalReconnectTimer);
+    this.signalReconnectTimer = undefined;
     const socket = this.signalSocket;
     this.signalSocket = undefined;
     this.signalConnection = undefined;
@@ -351,14 +367,39 @@ export class WebRtcTransport implements TransportAdapter {
         this.handleSignalMessage(data);
       }
     });
+    socket.on("error", (error) => {
+      if (this.signalSocket === socket && !this.stopped) {
+        logger.error("webrtc_signaling_socket_error", error);
+      }
+    });
     socket.once("close", () => {
       if (this.signalSocket !== socket) return;
       this.signalSocket = undefined;
       this.rejectPendingAnswers(
         new Error("WebRTC signaling socket closed during negotiation"),
       );
+      this.scheduleSignalReconnect();
     });
     return trackedConnection;
+  }
+
+  private scheduleSignalReconnect(): void {
+    if (this.stopped || this.signalReconnectTimer) return;
+    const signal = this.transportOptions?.signal;
+    if (signal?.aborted) return;
+    this.signalReconnectTimer = setTimeout(() => {
+      this.signalReconnectTimer = undefined;
+      void this.ensureSignalSocket(signal).catch((error: unknown) => {
+        if (!this.stopped) {
+          logger.warn("webrtc_signaling_reconnect_failed", {
+            error: error instanceof Error ? error.message : String(error),
+            retryMs: this.signalReconnectMs,
+          });
+          this.scheduleSignalReconnect();
+        }
+      });
+    }, this.signalReconnectMs);
+    this.signalReconnectTimer.unref();
   }
 
   private rejectPendingAnswers(error: Error): void {
@@ -708,18 +749,21 @@ export class WebRtcTransport implements TransportAdapter {
                   : "Peer could not serve segment",
               );
             }
+            const { byteLength, chunkCount } = message;
             if (
               message.type !== "segment_response" ||
               message.segmentName !== segmentName ||
-              !Number.isSafeInteger(message.byteLength) ||
-              !Number.isSafeInteger(message.chunkCount) ||
-              (message.byteLength as number) < 0 ||
-              (message.chunkCount as number) < 0
+              typeof byteLength !== "number" ||
+              typeof chunkCount !== "number" ||
+              !Number.isSafeInteger(byteLength) ||
+              !Number.isSafeInteger(chunkCount) ||
+              byteLength < 0 ||
+              chunkCount < 0
             ) {
               throw new Error("Invalid WebRTC segment response metadata");
             }
-            expectedBytes = message.byteLength as number;
-            expectedChunks = message.chunkCount as number;
+            expectedBytes = byteLength;
+            expectedChunks = chunkCount;
             complete();
             return;
           }

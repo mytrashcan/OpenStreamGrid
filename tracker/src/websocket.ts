@@ -57,6 +57,28 @@ const optionalNumber = (
   return value;
 };
 
+const optionalNonNegativeNumber = (
+  message: JsonObject,
+  key: string,
+): number | undefined => {
+  const value = optionalNumber(message, key);
+  if (value !== undefined && value < 0) {
+    throw new Error(`'${key}' must be non-negative`);
+  }
+  return value;
+};
+
+const optionalUnitInterval = (
+  message: JsonObject,
+  key: string,
+): number | undefined => {
+  const value = optionalNumber(message, key);
+  if (value !== undefined && (value < 0 || value > 1)) {
+    throw new Error(`'${key}' must be between 0 and 1`);
+  }
+  return value;
+};
+
 const requiredSegments = (message: JsonObject): string[] => {
   const segments = message.segments;
   if (
@@ -199,9 +221,12 @@ export class TrackerWebSocketHub implements TrackerEvents {
         return;
       }
       if (type === "heartbeat") {
-        const latencyMs = optionalNumber(parsed, "latencyMs");
-        const uploadBandwidthBps = optionalNumber(parsed, "uploadBandwidthBps");
-        const successRate = optionalNumber(parsed, "successRate");
+        const latencyMs = optionalNonNegativeNumber(parsed, "latencyMs");
+        const uploadBandwidthBps = optionalNonNegativeNumber(
+          parsed,
+          "uploadBandwidthBps",
+        );
+        const successRate = optionalUnitInterval(parsed, "successRate");
         const heartbeat: PeerHeartbeat = {
           ...(latencyMs !== undefined ? { latencyMs } : {}),
           ...(uploadBandwidthBps !== undefined ? { uploadBandwidthBps } : {}),
@@ -213,8 +238,10 @@ export class TrackerWebSocketHub implements TrackerEvents {
       }
       if (type === "report_segments") {
         const segments = requiredSegments(parsed);
-        const replace =
-          typeof parsed.replace === "boolean" ? parsed.replace : undefined;
+        if (parsed.replace !== undefined && typeof parsed.replace !== "boolean") {
+          throw new Error("'replace' must be a boolean");
+        }
+        const replace = parsed.replace;
         if (replace && this.hasSameSegments(broadcastId, peerId, segments)) return;
         this.store.reportSegments(broadcastId, peerId, segments, replace);
         this.segmentsAvailable(broadcastId, peerId, segments);

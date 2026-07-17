@@ -186,7 +186,10 @@ export class UploadServer {
         this.activeConnections -= 1;
       }
     } catch (error) {
-      logger.error("upload_request_failed", error);
+      logger.error("upload_request_failed", error, {
+        method: request.method ?? "GET",
+        path: request.url ?? "/",
+      });
       if (!response.headersSent) {
         this.sendJson(response, 500, { error: "Internal server error" });
       } else {

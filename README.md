@@ -397,7 +397,6 @@ const plugin = new OpenStreamGridHlsPlugin({
   trackerUrl: "ws://localhost:7070/ws",
   broadcastId: "live",
   peerId: "browser-client-1",
-  peerAddress: "http://localhost:9090",
   originBaseUrl: "http://localhost:8080/hls",
 });
 
@@ -469,6 +468,7 @@ hls.attachMedia(videoElement);
 
 ```bash
 npm install
+npm install --prefix sdk
 npm run build
 ```
 

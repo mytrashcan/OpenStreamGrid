@@ -296,6 +296,37 @@ const optionalNumber = (body: JsonObject, key: string): number | undefined => {
   return value;
 };
 
+const optionalNonNegativeNumber = (
+  body: JsonObject,
+  key: string,
+): number | undefined => {
+  const value = optionalNumber(body, key);
+  if (value !== undefined && value < 0) {
+    throw new RequestError(`'${key}' must be non-negative`);
+  }
+  return value;
+};
+
+const optionalUnitInterval = (
+  body: JsonObject,
+  key: string,
+): number | undefined => {
+  const value = optionalNumber(body, key);
+  if (value !== undefined && (value < 0 || value > 1)) {
+    throw new RequestError(`'${key}' must be between 0 and 1`);
+  }
+  return value;
+};
+
+const optionalBoolean = (body: JsonObject, key: string): boolean | undefined => {
+  const value = body[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") {
+    throw new RequestError(`'${key}' must be a boolean`);
+  }
+  return value;
+};
+
 const optionalMetadata = (
   body: JsonObject,
 ): Record<string, string> | undefined => {
@@ -394,9 +425,10 @@ export const createTrackerHandler = (
         const action = peerActionMatch[3];
         const body = await readJson(request);
         if (action === "segments" && method === "POST") {
+          const replace = optionalBoolean(body, "replace");
           const report: SegmentPossessionReport = {
             segments: stringArray(body, "segments"),
-            ...(typeof body.replace === "boolean" ? { replace: body.replace } : {}),
+            ...(replace !== undefined ? { replace } : {}),
           };
           const peer = store.reportSegments(
             broadcastId,
@@ -409,12 +441,12 @@ export const createTrackerHandler = (
           return;
         }
         if (action === "heartbeat" && method === "PUT") {
-          const latencyMs = optionalNumber(body, "latencyMs");
-          const uploadBandwidthBps = optionalNumber(
+          const latencyMs = optionalNonNegativeNumber(body, "latencyMs");
+          const uploadBandwidthBps = optionalNonNegativeNumber(
             body,
             "uploadBandwidthBps",
           );
-          const successRate = optionalNumber(body, "successRate");
+          const successRate = optionalUnitInterval(body, "successRate");
           const heartbeat: PeerHeartbeat = {
             ...(latencyMs !== undefined ? { latencyMs } : {}),
             ...(uploadBandwidthBps !== undefined ? { uploadBandwidthBps } : {}),
@@ -466,7 +498,10 @@ export const createTrackerHandler = (
         const encodedPeerId = peerMatch[2];
         if (!encodedPeerId && method === "POST") {
           const body = await readJson(request);
-          const uploadBandwidthBps = optionalNumber(body, "uploadBandwidthBps");
+          const uploadBandwidthBps = optionalNonNegativeNumber(
+            body,
+            "uploadBandwidthBps",
+          );
           const metadata = optionalMetadata(body);
           const join: PeerJoinRequest = {
             id: requiredString(body, "id"),
@@ -530,7 +565,10 @@ export const createTrackerHandler = (
             ? error.message
             : "Request failed";
       if (statusCode === 500) {
-        logger.error("request_failed", error);
+        logger.error("request_failed", error, {
+          method: request.method ?? "GET",
+          path: request.url ?? "/",
+        });
       }
       if (!response.headersSent) {
         sendJson(response, statusCode, { error: message });

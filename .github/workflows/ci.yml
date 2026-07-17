@@ -26,6 +26,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install browser SDK dependencies
+        run: npm ci --prefix sdk
+
       - name: Type check
         run: npm run typecheck
 
@@ -37,6 +40,3 @@ jobs:
 
       - name: Lint
         run: npx eslint .
-
-      - name: Build browser SDK
-        run: cd sdk && npm ci && node scripts/build.mjs
