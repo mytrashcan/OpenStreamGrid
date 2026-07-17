@@ -199,6 +199,11 @@ test("persists tracker state across close and reopen with WAL enabled", (context
     peers: 1,
     ...trafficStats(),
   });
+  assert.deepEqual(second.getPragmaSettings(), {
+    journalMode: "wal",
+    synchronous: 1,
+    cacheSize: -65_536,
+  });
   second.close();
 
   const database = new Database(databasePath, { readonly: true });

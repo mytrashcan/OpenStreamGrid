@@ -11,6 +11,8 @@ test("parses the parallel download limit with a default of three", () => {
   assert.equal(parseArguments([], environment).maxParallelDownloads, 3);
   assert.equal(parseArguments([], environment).p2pTimeoutMs, 2_000);
   assert.equal(parseArguments([], environment).uploadHost, "0.0.0.0");
+  assert.equal(parseArguments([], environment).cacheSizeBytes, 512_000_000);
+  assert.equal(parseArguments([], environment).cacheTtlMs, 300_000);
   assert.equal(
     parseArguments([], { ...environment, UPLOAD_HOST: "127.0.0.1" }).uploadHost,
     "127.0.0.1",
@@ -128,5 +130,9 @@ test("validates required peer environment configuration", () => {
   assert.throws(
     () => parseArguments([], { ...environment, P2P_TIMEOUT_MS: "0" }),
     /P2P timeout must be a positive integer/,
+  );
+  assert.throws(
+    () => parseArguments([], { ...environment, CACHE_TTL_MS: "0" }),
+    /Cache TTL must be a positive integer/,
   );
 });

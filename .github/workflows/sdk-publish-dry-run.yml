@@ -1,0 +1,33 @@
+name: SDK publish dry run
+
+on:
+  pull_request:
+    paths:
+      - "sdk/**"
+      - "common/**"
+      - ".github/workflows/sdk-publish-dry-run.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            sdk/package-lock.json
+      - run: npm ci
+      - run: npm ci --prefix sdk
+      - run: npm run build --workspace @openstreamgrid/common
+      - run: npm run build --prefix sdk
+      - name: Verify npm package contents without publishing
+        working-directory: sdk
+        run: npm publish --dry-run

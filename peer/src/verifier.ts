@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
+import { keepAliveFetch } from "./http-client.js";
 
 const DEFAULT_MAX_CACHED_HASHES = 2_000;
 
@@ -38,7 +39,7 @@ export class OriginHashVerifier implements SegmentIntegrityVerifier {
 
   constructor(
     private readonly originBaseUrl: URL,
-    private readonly fetchImpl: FetchFunction = fetch,
+    private readonly fetchImpl: FetchFunction = keepAliveFetch,
     private readonly maxCachedHashes = DEFAULT_MAX_CACHED_HASHES,
   ) {
     if (!Number.isSafeInteger(maxCachedHashes) || maxCachedHashes <= 0) {

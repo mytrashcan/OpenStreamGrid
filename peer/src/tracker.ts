@@ -10,6 +10,7 @@ import {
 } from "@openstreamgrid/common";
 import WebSocket, { type RawData } from "ws";
 import type { PeerDirectory } from "./fetcher.js";
+import { keepAliveFetch } from "./http-client.js";
 import type { FetchFunction } from "./verifier.js";
 
 const DEFAULT_REPORT_INTERVAL_MS = 5_000;
@@ -174,7 +175,7 @@ export class TrackerClient implements PeerDirectory {
   private firstConnectionPromise: Promise<void> | undefined;
 
   constructor(private readonly options: TrackerClientOptions) {
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.fetchImpl = options.fetchImpl ?? keepAliveFetch;
     this.webSocketFactory =
       options.webSocketFactory ??
       ((url) =>

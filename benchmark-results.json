@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-17T03:38:56.074Z",
+  "scenario": {
+    "peerCount": 10,
+    "configuredDurationSeconds": 60,
+    "elapsedSeconds": 60.014,
+    "rampUpSeconds": 5,
+    "churnProbability": 0.15,
+    "p2pEnabled": true,
+    "quality": "low"
+  },
+  "metrics": {
+    "p2pEfficiencyRatioPercent": 46.071,
+    "cdnTrafficReductionPercent": 47.438,
+    "latencyMs": {
+      "p50": 10.019,
+      "p95": 1682.712,
+      "p99": 1776.94
+    },
+    "averageUploadBytesPerPeer": 13440813
+  },
+  "traffic": {
+    "bytesDownloadedP2P": 104720324,
+    "bytesDownloadedOrigin": 116030592,
+    "bytesUploadedP2P": 134408132,
+    "p2pRequests": 362,
+    "p2pSuccesses": 129,
+    "p2pFailures": 233,
+    "originRequests": 151,
+    "integrityFailures": 0,
+    "fallbacks": 119,
+    "segmentsCached": 239
+  },
+  "churn": {
+    "events": 7,
+    "sessions": 16,
+    "errors": 0,
+    "segmentFailures": 0,
+    "websocketDisconnects": 0
+  }
+}
