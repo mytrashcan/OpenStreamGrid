@@ -8,6 +8,7 @@ import { createLogger } from "@openstreamgrid/common";
 import type {
   PeerInfo,
   PeerTrafficStats,
+  WebRtcSignalMessage,
   WsClientMessage,
   WsServerMessage,
 } from "./types.js";
@@ -139,6 +140,24 @@ const parseServerMessage = (raw: unknown): WsServerMessage => {
         peerId: value.peerId,
         stats: value.stats,
       };
+    case "webrtc_offer":
+    case "webrtc_answer":
+      if (
+        typeof value.peerId !== "string" ||
+        typeof value.targetPeerId !== "string" ||
+        typeof value.requestId !== "string" ||
+        typeof value.sdp !== "string"
+      ) {
+        throw new TypeError("WebRTC signaling message is invalid");
+      }
+      return {
+        type: value.type,
+        broadcastId,
+        peerId: value.peerId,
+        targetPeerId: value.targetPeerId,
+        requestId: value.requestId,
+        sdp: value.sdp,
+      };
     default:
       throw new TypeError(`Unsupported WebSocket message type '${value.type}'`);
   }
@@ -166,6 +185,7 @@ export interface WsClientOptions {
   onPeerJoined?: (peer: PeerInfo) => void;
   onPeerLeft?: (peerId: string) => void;
   onSegmentAvailable?: (peerId: string, segments: string[]) => void;
+  onWebRtcSignal?: (message: WebRtcSignalMessage) => void;
   onConnected?: () => void;
   onDisconnected?: () => void;
   onError?: (error: Event) => void;
@@ -194,6 +214,7 @@ export class WsTrackerClient {
   private started = false;
   private firstConnectResolve: (() => void) | null = null;
   private firstConnectPromise: Promise<void> | null = null;
+  private reportPeerState: boolean;
   /** Track known peers. */
   private readonly peers = new Map<string, PeerInfo>();
 
@@ -237,18 +258,14 @@ export class WsTrackerClient {
       throw new Error("Maximum reconnect delay cannot be less than the initial delay");
     }
     this.nextReconnectMs = this.reconnectInitialMs;
+    this.reportPeerState = options.reportPeerState !== false;
   }
 
   /** Start the WebSocket connection. Resolves on first successful connection. */
   start(): Promise<void> {
     if (this.started) return this.firstConnectPromise ?? Promise.resolve();
     this.started = true;
-    if (this.options.reportPeerState !== false) {
-      this.reportTimer = setInterval(
-        () => this.reportStatusSafely(),
-        this.reportIntervalMs,
-      );
-    }
+    this.startReportTimer();
     this.firstConnectPromise = new Promise<void>((resolve) => {
       this.firstConnectResolve = resolve;
       this.openSocket();
@@ -298,7 +315,7 @@ export class WsTrackerClient {
 
   /** Send a report_segments message immediately. */
   reportSegments(): void {
-    if (this.options.reportPeerState === false) return;
+    if (!this.reportPeerState) return;
     const segments = this.options.getSegments?.() ?? [];
     this.send({
       type: "report_segments",
@@ -307,6 +324,28 @@ export class WsTrackerClient {
       segments,
       replace: true,
     });
+  }
+
+  /** Enables heartbeat, segment, and traffic reports after REST registration. */
+  enablePeerStateReporting(): void {
+    if (this.reportPeerState) return;
+    this.reportPeerState = true;
+    this.startReportTimer();
+    this.reportStatusSafely();
+  }
+
+  /** Relays a WebRTC offer or answer over the active tracker socket. */
+  sendWebRtcSignal(message: WebRtcSignalMessage): void {
+    if (
+      message.broadcastId !== this.options.broadcastId ||
+      message.peerId !== this.options.peerId
+    ) {
+      throw new Error("WebRTC signal does not match this client");
+    }
+    if (this.ws?.readyState !== WebSocket.OPEN) {
+      throw new Error("Tracker WebSocket is not open");
+    }
+    this.send(message);
   }
 
   private openSocket(): void {
@@ -335,7 +374,7 @@ export class WsTrackerClient {
         peerId: this.options.peerId,
       });
 
-      if (this.options.reportPeerState !== false) this.reportStatusSafely();
+      if (this.reportPeerState) this.reportStatusSafely();
 
       this.firstConnectResolve?.();
       this.firstConnectResolve = null;
@@ -447,6 +486,14 @@ export class WsTrackerClient {
           );
           break;
         }
+        case "webrtc_offer":
+        case "webrtc_answer":
+          if (msg.targetPeerId === this.options.peerId) {
+            callSafely("onWebRtcSignal", () =>
+              this.options.onWebRtcSignal?.(msg),
+            );
+          }
+          break;
       }
     } catch (error) {
       logger.error("invalid_tracker_message", error);
@@ -461,6 +508,14 @@ export class WsTrackerClient {
         logger.error("tracker_message_send_failed", error);
       }
     }
+  }
+
+  private startReportTimer(): void {
+    if (!this.started || !this.reportPeerState || this.reportTimer) return;
+    this.reportTimer = setInterval(
+      () => this.reportStatusSafely(),
+      this.reportIntervalMs,
+    );
   }
 
   private buildWsUrl(): string {

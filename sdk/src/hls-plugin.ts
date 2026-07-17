@@ -30,6 +30,7 @@ import type {
 } from "hls.js";
 import { SegmentCache } from "./cache.js";
 import { OriginHashVerifier } from "./verifier.js";
+import { BrowserWebRtcPeer } from "./webrtc-peer.js";
 import { WsTrackerClient } from "./ws-client.js";
 import type {
   HlsjsPluginConfig,
@@ -50,6 +51,11 @@ type PeerFetchAttempt =
 interface PeerFetchResult {
   data: Uint8Array;
   peerId: string;
+}
+
+interface PeerCandidate {
+  peer: PeerInfo;
+  segmentId: string;
 }
 
 interface InFlightSegment {
@@ -245,8 +251,23 @@ export class OpenStreamGridHlsPlugin {
   private readonly verifier: OriginHashVerifier | undefined;
   private readonly peerTimeoutMs: number;
   private readonly peerId: string;
+  private readonly broadcastId: string;
+  private readonly trackerUrl: string;
+  private readonly trackerApiKey: string | undefined;
+  private readonly peerParticipation: boolean;
+  private readonly webRtcOptions: Pick<
+    HlsjsPluginConfig,
+    | "iceServers"
+    | "maxUploadConnections"
+    | "maxUploadBitrate"
+    | "peerConnectionFactory"
+  >;
   private readonly onEvent: ((event: SdkEvent) => void) | undefined;
   private readonly inFlightSegments = new Map<string, InFlightSegment>();
+  private readonly cacheKeysBySegmentId = new Map<string, string>();
+  private webRtcPeer: BrowserWebRtcPeer | undefined;
+  private registered = false;
+  private registrationRetry: ReturnType<typeof setTimeout> | undefined;
   private attachedHls: Hls | undefined;
   private originalLoader: HlsConfig["loader"] | undefined;
   private installedLoader: HlsConfig["loader"] | undefined;
@@ -256,6 +277,22 @@ export class OpenStreamGridHlsPlugin {
       throw new Error("peerId must not be empty");
     }
     this.peerId = config.peerId?.trim() ?? generatePeerId();
+    this.broadcastId = config.broadcastId;
+    this.trackerUrl = config.trackerUrl;
+    this.trackerApiKey = config.trackerApiKey?.trim() || undefined;
+    this.peerParticipation = config.peerParticipation !== false;
+    this.webRtcOptions = {
+      ...(config.iceServers ? { iceServers: config.iceServers } : {}),
+      ...(config.maxUploadConnections !== undefined
+        ? { maxUploadConnections: config.maxUploadConnections }
+        : {}),
+      ...(config.maxUploadBitrate !== undefined
+        ? { maxUploadBitrate: config.maxUploadBitrate }
+        : {}),
+      ...(config.peerConnectionFactory
+        ? { peerConnectionFactory: config.peerConnectionFactory }
+        : {}),
+    };
     this.peerTimeoutMs = config.peerTimeoutMs ?? DEFAULT_PEER_TIMEOUT_MS;
     if (!Number.isSafeInteger(this.peerTimeoutMs) || this.peerTimeoutMs <= 0) {
       throw new Error("peerTimeoutMs must be a positive integer");
@@ -293,7 +330,10 @@ export class OpenStreamGridHlsPlugin {
       trackerUrl: config.trackerUrl,
       broadcastId: config.broadcastId,
       peerId: this.peerId,
+      getSegments: () => this.cachedSegmentIds(),
+      getStats: () => ({ ...this.stats }),
       reportPeerState: false,
+      onWebRtcSignal: (message) => this.webRtcPeer?.handleSignal(message),
       onConnected: () => {
         this.emit({ type: "ws_connected" });
         config.onReady?.();
@@ -320,12 +360,17 @@ export class OpenStreamGridHlsPlugin {
     this.installedLoader = loader;
     hls.config.loader = loader;
 
+    this.webRtcPeer = this.createWebRtcPeer();
+
     this.wsClient.start().catch((error: unknown) => {
       logger.warn("tracker_connection_failed", {
         error: error instanceof Error ? error.message : String(error),
         fallback: "origin",
       });
     });
+    if (this.peerParticipation) {
+      this.startPeerRegistration();
+    }
   }
 
   /**
@@ -336,6 +381,11 @@ export class OpenStreamGridHlsPlugin {
       request.controller.abort(new DOMException("Plugin detached", "AbortError"));
     }
     this.wsClient.stop();
+    this.webRtcPeer?.stop();
+    this.webRtcPeer = undefined;
+    if (this.registrationRetry) clearTimeout(this.registrationRetry);
+    this.registrationRetry = undefined;
+    if (this.registered) void this.unregisterPeer();
     if (
       this.attachedHls &&
       this.originalLoader &&
@@ -405,13 +455,13 @@ export class OpenStreamGridHlsPlugin {
   ): Promise<{ data: Uint8Array }> {
     this.emit({ type: "cache_miss", segment: segmentName });
 
-    const peers = this.wsClient.getPeersWithSegment(segmentName);
-    if (peers.length > 0) {
+    const segmentId = this.segmentPeerId(segmentUrl);
+    const candidates = this.peerCandidates(segmentId, segmentName);
+    if (candidates.length > 0) {
       this.stats.p2pRequests++;
       try {
         const result = await this.fetchFromPeers(
-          segmentName,
-          peers,
+          candidates,
           signal,
         );
         if (result && !signal.aborted) {
@@ -435,8 +485,7 @@ export class OpenStreamGridHlsPlugin {
             this.emit({ type: "integrity_ok", segment: segmentName });
           }
 
-          this.cache.set(this.segmentCacheKey(segmentUrl), result.data);
-          this.stats.segmentsCached = this.cache.size;
+          this.cacheSegment(cacheKeyFrom(segmentUrl), segmentId, result.data);
 
           this.emit({
             type: "peer_fetched",
@@ -477,8 +526,7 @@ export class OpenStreamGridHlsPlugin {
       this.emit({ type: "integrity_ok", segment: segmentName });
     }
 
-    this.cache.set(this.segmentCacheKey(segmentUrl), originData);
-    this.stats.segmentsCached = this.cache.size;
+    this.cacheSegment(cacheKeyFrom(segmentUrl), segmentId, originData);
 
     this.emit({
       type: "origin_fallback",
@@ -533,13 +581,14 @@ export class OpenStreamGridHlsPlugin {
    * returns the first success.
    */
   private async fetchFromPeers(
-    segmentName: string,
-    peers: PeerInfo[],
+    candidates: PeerCandidate[],
     signal: AbortSignal,
   ): Promise<PeerFetchResult | null> {
-    const sorted = [...peers].sort((a, b) => {
-      if (b.trustScore !== a.trustScore) return b.trustScore - a.trustScore;
-      return a.latencyMs - b.latencyMs;
+    const sorted = [...candidates].sort((a, b) => {
+      if (b.peer.trustScore !== a.peer.trustScore) {
+        return b.peer.trustScore - a.peer.trustScore;
+      }
+      return a.peer.latencyMs - b.peer.latencyMs;
     });
 
     const topPeers = sorted.slice(0, MAX_PARALLEL_PEER_PROBES);
@@ -549,12 +598,11 @@ export class OpenStreamGridHlsPlugin {
     if (signal.aborted) onAbort();
     try {
       const pending = new Map(
-        topPeers.map((peer, index) => [
+        topPeers.map((candidate, index) => [
           index,
           this.fetchPeerAttempt(
             index,
-            peer,
-            segmentName,
+            candidate,
             controller.signal,
           ),
         ]),
@@ -573,30 +621,24 @@ export class OpenStreamGridHlsPlugin {
 
   private async fetchPeerAttempt(
     index: number,
-    peer: PeerInfo,
-    segmentName: string,
+    candidate: PeerCandidate,
     signal: AbortSignal,
   ): Promise<PeerFetchAttempt> {
     try {
       const data = await this.fetchFromPeer(
-        peer,
-        segmentName,
+        candidate,
         this.peerTimeoutMs,
         signal,
       );
-      return { index, peerId: peer.id, data };
+      return { index, peerId: candidate.peer.id, data };
     } catch {
       return { index };
     }
   }
 
-  /**
-   * Fetch a single segment from a peer via HTTP.
-   * Peer addresses are absolute HTTP URLs from the tracker API.
-   */
+  /** Fetch a segment through browser WebRTC or the Node peer HTTP endpoint. */
   private async fetchFromPeer(
-    peer: PeerInfo,
-    segmentName: string,
+    candidate: PeerCandidate,
     timeoutMs: number,
     signal: AbortSignal,
   ): Promise<Uint8Array> {
@@ -608,8 +650,23 @@ export class OpenStreamGridHlsPlugin {
     if (signal.aborted) onAbort();
 
     try {
+      const { peer, segmentId } = candidate;
+      const webRtcOnly =
+        peer.address.startsWith("webrtc:") ||
+        peer.metadata?.transport === "webrtc";
+      if (this.webRtcPeer && webRtcOnly) {
+        try {
+          return await this.webRtcPeer.requestSegment(
+            peer.id,
+            segmentId,
+            controller.signal,
+          );
+        } catch {
+          throw new Error("WebRTC peer unavailable");
+        }
+      }
       const url = new URL(
-        `/segments/${encodeURIComponent(segmentName)}`,
+        `/segments/${encodeURIComponent(this.segmentFileName(segmentId))}`,
         peer.address,
       );
       const response = await fetch(url, {
@@ -651,14 +708,142 @@ export class OpenStreamGridHlsPlugin {
   }
 
   private segmentCacheKey(segmentUrl: string): string {
+    return cacheKeyFrom(segmentUrl);
+  }
+
+  private segmentPeerId(segmentUrl: string): string {
     try {
-      const url = new URL(segmentUrl, globalThis.location?.href);
-      return `${url.origin}${url.pathname}`;
+      return new URL(segmentUrl, globalThis.location?.href).pathname.replace(/^\/+/, "");
     } catch {
-      return segmentUrl;
+      return segmentUrl.replace(/^\/+/, "");
     }
   }
+
+  private segmentFileName(segmentId: string): string {
+    const parts = segmentId.split("/");
+    return parts[parts.length - 1] ?? segmentId;
+  }
+
+  private peerCandidates(segmentId: string, segmentName: string): PeerCandidate[] {
+    const candidates = new Map<string, PeerCandidate>();
+    for (const peer of this.wsClient.getPeersWithSegment(segmentId)) {
+      if (peer.id !== this.peerId) candidates.set(peer.id, { peer, segmentId });
+    }
+    for (const peer of this.wsClient.getPeersWithSegment(segmentName)) {
+      if (peer.id !== this.peerId && !candidates.has(peer.id)) {
+        candidates.set(peer.id, { peer, segmentId: segmentName });
+      }
+    }
+    return [...candidates.values()];
+  }
+
+  private cacheSegment(cacheKey: string, segmentId: string, data: Uint8Array): void {
+    if (!this.cache.set(cacheKey, data)) return;
+    this.cacheKeysBySegmentId.set(segmentId, cacheKey);
+    this.stats.segmentsCached = this.cache.size;
+    if (this.registered) this.wsClient.reportSegments();
+  }
+
+  private cachedSegmentIds(): string[] {
+    for (const [segmentId, cacheKey] of this.cacheKeysBySegmentId) {
+      if (!this.cache.has(cacheKey)) this.cacheKeysBySegmentId.delete(segmentId);
+    }
+    return [...this.cacheKeysBySegmentId.keys()];
+  }
+
+  private createWebRtcPeer(): BrowserWebRtcPeer | undefined {
+    if (typeof RTCPeerConnection === "undefined" && !this.webRtcOptions.peerConnectionFactory) {
+      return undefined;
+    }
+    return new BrowserWebRtcPeer({
+      broadcastId: this.broadcastId,
+      peerId: this.peerId,
+      sendSignal: (message) => this.wsClient.sendWebRtcSignal(message),
+      segmentProvider: (segmentId) => {
+        const cacheKey = this.cacheKeysBySegmentId.get(segmentId);
+        return cacheKey ? this.cache.get(cacheKey) : undefined;
+      },
+      onUpload: (bytes) => {
+        this.stats.bytesUploadedP2P += bytes;
+      },
+      timeoutMs: this.peerTimeoutMs,
+      ...this.webRtcOptions,
+    });
+  }
+
+  private async registerPeer(): Promise<void> {
+    const response = await fetch(this.peerCollectionUrl(), {
+      method: "POST",
+      headers: this.trackerHeaders(true),
+      body: JSON.stringify({
+        id: this.peerId,
+        address: `webrtc://${this.peerId}`,
+        uploadBandwidthBps: this.webRtcOptions.maxUploadBitrate ?? 1_000_000,
+        metadata: { runtime: "browser", transport: "webrtc" },
+      }),
+    });
+    if (!response.ok) throw new Error(`Tracker registration returned HTTP ${response.status}`);
+    this.registered = true;
+    if (!this.attachedHls) {
+      await this.unregisterPeer();
+      return;
+    }
+    this.wsClient.enablePeerStateReporting();
+  }
+
+  private startPeerRegistration(): void {
+    void this.registerPeer().catch((error: unknown) => {
+      logger.warn("browser_peer_registration_failed", {
+        error: error instanceof Error ? error.message : String(error),
+        fallback: "origin",
+      });
+      if (!this.attachedHls || this.registrationRetry) return;
+      this.registrationRetry = setTimeout(() => {
+        this.registrationRetry = undefined;
+        if (this.attachedHls && !this.registered) this.startPeerRegistration();
+      }, 5_000);
+    });
+  }
+
+  private async unregisterPeer(): Promise<void> {
+    this.registered = false;
+    try {
+      await fetch(`${this.peerCollectionUrl()}/${encodeURIComponent(this.peerId)}`, {
+        method: "DELETE",
+        headers: this.trackerHeaders(false),
+        keepalive: true,
+      });
+    } catch {
+      // The tracker expires stale peers if page teardown prevents delivery.
+    }
+  }
+
+  private peerCollectionUrl(): string {
+    const url = new URL(this.trackerUrl);
+    if (url.protocol === "ws:") url.protocol = "http:";
+    if (url.protocol === "wss:") url.protocol = "https:";
+    url.pathname = `/api/v1/broadcasts/${encodeURIComponent(this.broadcastId)}/peers`;
+    url.search = "";
+    url.hash = "";
+    return url.href;
+  }
+
+  private trackerHeaders(json: boolean): Headers {
+    const headers = new Headers();
+    if (json) headers.set("Content-Type", "application/json");
+    if (this.trackerApiKey) headers.set("X-API-Key", this.trackerApiKey);
+    return headers;
+  }
 }
+
+const cacheKeyFrom = (segmentUrl: string): string => {
+  try {
+    const url = new URL(segmentUrl, globalThis.location?.href);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return segmentUrl;
+  }
+};
 
 /** Generate a random peer ID using Web Crypto API. */
 function generatePeerId(): string {

@@ -88,6 +88,7 @@ test("keeps rendition cache entries isolated by segment URL", async (context) =>
     trackerUrl: "ws://tracker.example/ws",
     broadcastId: "live",
     verifySegments: false,
+    peerParticipation: false,
   });
 
   const low = await plugin.loadSegment(
@@ -111,6 +112,7 @@ test("restores the Hls.js loader when detached", (context) => {
     trackerUrl: "ws://tracker.example/ws",
     broadcastId: "live",
     verifySegments: false,
+    peerParticipation: false,
   });
   context.mock.method(plugin.wsClient, "start", async () => {});
   context.mock.method(plugin.wsClient, "stop", () => {});
@@ -124,4 +126,49 @@ test("restores the Hls.js loader when detached", (context) => {
   plugin.detach();
 
   assert.equal(hls.config.loader, OriginalLoader);
+});
+
+test("registers and unregisters a zero-install browser peer", async (context) => {
+  const requests: Array<{ url: string; method: string; body?: string }> = [];
+  context.mock.method(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    requests.push({
+      url: String(input),
+      method: init?.method ?? "GET",
+      ...(typeof init?.body === "string" ? { body: init.body } : {}),
+    });
+    return new Response("{}", { status: init?.method === "POST" ? 201 : 204 });
+  });
+  const plugin = new OpenStreamGridHlsPlugin({
+    trackerUrl: "wss://tracker.example/ws",
+    broadcastId: "live event",
+    peerId: "browser-a",
+    verifySegments: false,
+  });
+  context.mock.method(plugin.wsClient, "start", async () => {});
+  context.mock.method(plugin.wsClient, "stop", () => {});
+  context.mock.method(plugin.wsClient, "enablePeerStateReporting", () => {});
+  class OriginalLoader {}
+  const hls = { config: { loader: OriginalLoader } } as unknown as Hls;
+
+  plugin.attach(hls);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  plugin.detach();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(requests[0]?.method, "POST");
+  assert.equal(
+    requests[0]?.url,
+    "https://tracker.example/api/v1/broadcasts/live%20event/peers",
+  );
+  assert.deepEqual(JSON.parse(requests[0]?.body ?? "null"), {
+    id: "browser-a",
+    address: "webrtc://browser-a",
+    uploadBandwidthBps: 1_000_000,
+    metadata: { runtime: "browser", transport: "webrtc" },
+  });
+  assert.equal(requests[1]?.method, "DELETE");
+  assert.equal(
+    requests[1]?.url,
+    "https://tracker.example/api/v1/broadcasts/live%20event/peers/browser-a",
+  );
 });

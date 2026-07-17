@@ -1,6 +1,6 @@
 {
   "name": "@openstreamgrid/sdk",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "OpenStreamGrid Browser SDK — hybrid P2P-CDN live streaming middleware for Hls.js",
   "type": "module",
   "main": "./dist/sdk.cjs",
@@ -30,6 +30,7 @@
   },
   "devDependencies": {
     "@openstreamgrid/common": "file:../common",
+    "@roamhq/wrtc": "^0.10.0",
     "esbuild": "^0.24.0",
     "typescript": "^5.5.0"
   },

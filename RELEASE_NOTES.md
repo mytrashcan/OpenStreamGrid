@@ -1,4 +1,31 @@
-# OpenStreamGrid 0.2.0 Release Notes
+# OpenStreamGrid 0.4.0 Release Notes
+
+OpenStreamGrid 0.4.0 removes the installation barrier for viewer peers. A page
+using the Hls.js SDK now registers the viewer with the tracker, advertises
+verified cached segments, exchanges those segments over WebRTC DataChannels,
+reports traffic, and leaves cleanly when playback ends. Origin fallback remains
+active throughout the lifecycle.
+
+## Highlights
+
+- No viewer executable or Chrome extension is required.
+- Browser-to-browser uploads use WebRTC DataChannels and tracker-relayed SDP.
+- Browser peers use path-qualified segment IDs so adaptive renditions remain
+  isolated.
+- Uploads default to 1 Mbps and three concurrent connections, both configurable.
+- REST registration is retried after transient tracker failures.
+- Browser peers continue to consume existing HTTP Node peers.
+- The SDK suite includes a real two-peer DataChannel transfer test.
+
+## Upgrade
+
+The browser peer path is enabled by default. Existing applications can opt out
+with `peerParticipation: false`. Production deployments should provide HTTPS,
+WSS, and a TURN service for restrictive NAT and firewall environments.
+
+---
+
+## OpenStreamGrid 0.2.0 Release Notes
 
 OpenStreamGrid 0.2.0 delivers the complete four-phase prototype for adding
 hybrid P2P-CDN delivery to an existing HLS live-streaming service. It is

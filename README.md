@@ -93,6 +93,36 @@ playlist URLs through the same API.
 - Real-time dashboard, Prometheus metrics, SSE updates, and SQLite history.
 - Docker Compose, load-test scenarios, Kubernetes/Helm manifests, and CI.
 
+## Zero-install browser peers
+
+The Hls.js SDK turns each viewer into a WebRTC peer automatically. It registers
+the viewer, caches verified segments, advertises availability, serves cached
+bytes through a rate-limited DataChannel, reports traffic, and unregisters on
+detach. Viewers do not install an executable or browser extension.
+
+```ts
+const plugin = new OpenStreamGridHlsPlugin({
+  trackerUrl: "https://stream.example.com",
+  broadcastId: "live",
+  originBaseUrl: "https://stream.example.com/hls/low",
+  maxUploadBitrate: 1_000_000,
+  maxUploadConnections: 3,
+  iceServers: [
+    { urls: "stun:stun.example.com:3478" },
+    {
+      urls: "turns:turn.example.com:5349",
+      username: "viewer",
+      credential: "short-lived-credential",
+    },
+  ],
+});
+plugin.attach(hls);
+```
+
+Set `peerParticipation: false` for receive-only playback. A native agent or
+browser extension can still be useful as an optional dedicated seed in managed
+environments, but it is not part of the normal viewer path.
+
 ## Tracker API
 
 Tracker resources are under `/api/v1`. When `TRACKER_API_KEY` is set, send
@@ -183,6 +213,18 @@ codes, and origin/peer endpoints.
 
 Equivalent CLI flags are available for the primary peer options. Benchmark
 configuration is available through the following environment variables.
+
+### Browser SDK
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `peerParticipation` | `true` | Register and upload as a zero-install browser peer |
+| `iceServers` | public Google STUN | STUN/TURN servers for WebRTC NAT traversal |
+| `maxUploadBitrate` | `1000000` | Browser upload limit in bits per second |
+| `maxUploadConnections` | `3` | Concurrent browser DataChannel uploads |
+| `peerTimeoutMs` | `3000` | Peer request and negotiation deadline |
+| `maxCacheBytes` | `100 MB` | Browser segment-cache limit |
+| `trackerApiKey` | unset | API key for REST peer registration |
 
 ### Benchmark
 
