@@ -182,6 +182,15 @@ const fileExists = async (filePath: string): Promise<boolean> => {
   }
 };
 
+const resolveHlsAssetPath = (hlsDirectory: string, fileName: string): string => {
+  const root = path.resolve(hlsDirectory);
+  const assetPath = path.resolve(root, fileName);
+  if (!assetPath.startsWith(`${root}${path.sep}`)) {
+    throw new Error("Invalid file path");
+  }
+  return assetPath;
+};
+
 /** Creates the HTTP handler that serves health and generated HLS assets. */
 export const createOriginHandler = (
   hlsDirectory: string,
@@ -225,7 +234,13 @@ export const createOriginHandler = (
         return;
       }
 
-      let filePath = path.join(hlsDirectory, fileName);
+      let filePath: string;
+      try {
+        filePath = resolveHlsAssetPath(hlsDirectory, fileName);
+      } catch {
+        sendJson(response, 400, { error: "Invalid file path" });
+        return;
+      }
       if (extension === ".sha256" && !(await fileExists(filePath))) {
         const segmentName = fileName.slice(0, -".sha256".length);
         try {
@@ -266,7 +281,10 @@ export const createOriginHandler = (
       }
       await pipeline(createReadStream(filePath), response);
     } catch (error) {
-      logger.error("request_failed", error);
+      logger.error("request_failed", error, {
+        method: request.method ?? "GET",
+        path: request.url ?? "/",
+      });
       if (!response.headersSent) {
         sendJson(response, 500, { error: "Internal server error" });
       } else {
@@ -380,7 +398,11 @@ export const registerBroadcast = async ({
       return;
     } catch (error) {
       if (signal?.aborted) throw error;
-      logger.error("broadcast_registration_retry", error, { retryMs });
+      logger.error("broadcast_registration_retry", error, {
+        trackerUrl: endpoint.href,
+        broadcastId: registration.id,
+        retryMs,
+      });
       await delay(retryMs, signal);
     }
   }

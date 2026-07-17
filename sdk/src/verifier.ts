@@ -83,6 +83,33 @@ export class OriginHashVerifier {
     return verifySegmentHash(data, expectedHash);
   }
 
+  /** Verifies a segment using the sidecar adjacent to its variant URL. */
+  async verifyUrl(
+    segmentUrl: string,
+    data: Uint8Array,
+  ): Promise<SegmentVerificationResult> {
+    const url = new URL(segmentUrl);
+    const basePath = this.originBaseUrl.pathname.endsWith("/")
+      ? this.originBaseUrl.pathname
+      : `${this.originBaseUrl.pathname}/`;
+    if (
+      url.origin !== this.originBaseUrl.origin ||
+      !url.pathname.startsWith(basePath)
+    ) {
+      throw new Error("Segment URL is outside the configured origin base URL");
+    }
+    url.search = "";
+    url.hash = "";
+    url.pathname = `${url.pathname}.sha256`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch hash for '${segmentUrl}': HTTP ${response.status}`,
+      );
+    }
+    return verifySegmentHash(data, parseSha256(await response.text()));
+  }
+
   private async expectedHash(segmentName: string): Promise<string> {
     const pending = this.pendingHashes.get(segmentName);
     if (pending) return pending;

@@ -186,7 +186,7 @@ test("treats a duplicate peer join as an idempotent update", async () => {
   assert.equal(store.listPeers("live")[0]?.address, "http://peer-a:9191");
 });
 
-test("rejects malformed stats and URL path encoding", async () => {
+test("rejects malformed peer payloads and URL path encoding", async () => {
   const handler = createTrackerHandler(new TrackerStore());
   await invoke(handler, "POST", "/api/v1/broadcasts", {
     id: "live",
@@ -206,6 +206,28 @@ test("rejects malformed stats and URL path encoding", async () => {
   assert.equal(stats.status, 400);
   assert.deepEqual(stats.json, {
     error: "Peer traffic stat 'bytesDownloadedP2P' must be a non-negative number",
+  });
+
+  const invalidSegments = await invoke(
+    handler,
+    "POST",
+    "/api/v1/broadcasts/live/peers/peer-a/segments",
+    { segments: ["segment.ts"], replace: "yes" },
+  );
+  assert.equal(invalidSegments.status, 400);
+  assert.deepEqual(invalidSegments.json, {
+    error: "'replace' must be a boolean",
+  });
+
+  const invalidHeartbeat = await invoke(
+    handler,
+    "PUT",
+    "/api/v1/broadcasts/live/peers/peer-a/heartbeat",
+    { successRate: 1.1 },
+  );
+  assert.equal(invalidHeartbeat.status, 400);
+  assert.deepEqual(invalidHeartbeat.json, {
+    error: "'successRate' must be between 0 and 1",
   });
 
   const invalidPath = await invoke(

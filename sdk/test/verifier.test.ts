@@ -67,3 +67,29 @@ test("reports hash endpoint failures and mismatched content", async (context) =>
   assert.equal(mismatch.actualHash, digest);
   assert.equal(mismatch.expectedHash, "0".repeat(64));
 });
+
+test("verifies a variant segment against its adjacent sidecar", async (context) => {
+  context.mock.method(globalThis, "fetch", async (input: RequestInfo | URL) => {
+    assert.equal(
+      String(input),
+      "https://origin.example/hls/high/segment.ts.sha256",
+    );
+    return new Response(`${digest}  segment.ts\n`);
+  });
+  const verifier = new OriginHashVerifier("https://origin.example/hls");
+
+  const result = await verifier.verifyUrl(
+    "https://origin.example/hls/high/segment.ts?token=ignored",
+    data,
+  );
+
+  assert.equal(result.valid, true);
+  await assert.rejects(
+    verifier.verifyUrl("https://other.example/hls/high/segment.ts", data),
+    /outside the configured origin base URL/,
+  );
+  await assert.rejects(
+    verifier.verifyUrl("https://origin.example/private/segment.ts", data),
+    /outside the configured origin base URL/,
+  );
+});

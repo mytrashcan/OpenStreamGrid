@@ -172,6 +172,10 @@ export interface WsClientOptions {
   reconnectInitialMs?: number;
   reconnectMaxMs?: number;
   reportIntervalMs?: number;
+  /** Send peer heartbeat, stats, and segment reports. Requires prior REST join. */
+  reportPeerState?: boolean;
+  /** Dependency injection hook used by browser-client tests. */
+  webSocketFactory?: (url: string) => WebSocket;
 }
 
 /**
@@ -186,6 +190,7 @@ export class WsTrackerClient {
   private readonly reconnectInitialMs: number;
   private readonly reconnectMaxMs: number;
   private readonly reportIntervalMs: number;
+  private readonly webSocketFactory: (url: string) => WebSocket;
   private started = false;
   private firstConnectResolve: (() => void) | null = null;
   private firstConnectPromise: Promise<void> | null = null;
@@ -217,6 +222,8 @@ export class WsTrackerClient {
       options.reconnectMaxMs ?? DEFAULT_RECONNECT_MAX_MS;
     this.reportIntervalMs =
       options.reportIntervalMs ?? DEFAULT_REPORT_INTERVAL_MS;
+    this.webSocketFactory =
+      options.webSocketFactory ?? ((url) => new WebSocket(url));
     for (const [label, value] of [
       ["Report interval", this.reportIntervalMs],
       ["Initial reconnect delay", this.reconnectInitialMs],
@@ -236,10 +243,12 @@ export class WsTrackerClient {
   start(): Promise<void> {
     if (this.started) return this.firstConnectPromise ?? Promise.resolve();
     this.started = true;
-    this.reportTimer = setInterval(
-      () => this.reportStatusSafely(),
-      this.reportIntervalMs,
-    );
+    if (this.options.reportPeerState !== false) {
+      this.reportTimer = setInterval(
+        () => this.reportStatusSafely(),
+        this.reportIntervalMs,
+      );
+    }
     this.firstConnectPromise = new Promise<void>((resolve) => {
       this.firstConnectResolve = resolve;
       this.openSocket();
@@ -289,6 +298,7 @@ export class WsTrackerClient {
 
   /** Send a report_segments message immediately. */
   reportSegments(): void {
+    if (this.options.reportPeerState === false) return;
     const segments = this.options.getSegments?.() ?? [];
     this.send({
       type: "report_segments",
@@ -306,7 +316,7 @@ export class WsTrackerClient {
     let ws: WebSocket;
 
     try {
-      ws = new WebSocket(url);
+      ws = this.webSocketFactory(url);
     } catch (error) {
       logger.error("websocket_creation_failed", error);
       this.scheduleReconnect();
@@ -325,8 +335,7 @@ export class WsTrackerClient {
         peerId: this.options.peerId,
       });
 
-      // Report initial status
-      this.reportStatusSafely();
+      if (this.options.reportPeerState !== false) this.reportStatusSafely();
 
       this.firstConnectResolve?.();
       this.firstConnectResolve = null;

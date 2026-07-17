@@ -183,6 +183,22 @@ test("serves HLS assets, creates hashes, and exposes readiness", async (context)
   await streamer.stop();
 });
 
+test("rejects encoded traversal outside the HLS directory", async (context) => {
+  const parent = await mkdtemp(path.join(tmpdir(), "openstreamgrid-origin-parent-"));
+  context.after(() => rm(parent, { recursive: true, force: true }));
+  const directory = path.join(parent, "hls");
+  await mkdir(directory);
+  await writeFile(path.join(parent, "outside.ts"), "outside-data");
+  const handler = createOriginHandler(directory, new FakeStreamer(directory));
+
+  const response = await invoke(handler, "/hls/..%2Foutside.ts");
+
+  assert.equal(response.statusCode, 400);
+  assert.deepEqual(JSON.parse(response.body.toString()), {
+    error: "Invalid file path",
+  });
+});
+
 test("registers a broadcast with the tracker", async () => {
   let received: unknown;
 

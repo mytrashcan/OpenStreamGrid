@@ -46,7 +46,7 @@ export class SegmentCache {
     this.entries.set(segmentName, { data, storedAt: Date.now() });
     this.totalBytes += data.byteLength;
     while (this.totalBytes > this.maxBytes) {
-      const oldestKey = this.entries.keys().next().value as string | undefined;
+      const oldestKey = this.entries.keys().next().value;
       if (oldestKey === undefined) break;
       const oldest = this.entries.get(oldestKey);
       this.entries.delete(oldestKey);

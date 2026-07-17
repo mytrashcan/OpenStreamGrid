@@ -420,7 +420,6 @@ export class HybridSegmentFetcher {
           () => controller.abort(new Error("P2P request timed out")),
           this.p2pTimeoutMs,
         );
-    timer?.unref();
     try {
       let data: Buffer;
       if (this.options.transportManager) {
