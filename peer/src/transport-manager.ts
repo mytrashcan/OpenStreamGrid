@@ -12,6 +12,8 @@ import type { FetchFunction, SegmentIntegrityVerifier } from "./verifier.js";
 
 export type ManagedTransportName = "webrtc" | "http";
 
+const MAX_TRACKED_PEERS = 2_000;
+
 export interface TransportAttemptStats {
   successes: number;
   failures: number;
@@ -88,14 +90,10 @@ export class TransportManager {
     if (this.started) return;
     this.started = true;
     try {
-      await this.httpTransport.start(this.transportOptions);
-      if (this.webRtcEnabled) {
-        try {
-          await this.webRtcTransport.start(this.transportOptions);
-        } catch {
-          // Signaling can be retried lazily by requestSegment; HTTP stays usable.
-        }
-      }
+      await Promise.all([
+        this.httpTransport.start(this.transportOptions),
+        this.startWebRtc(),
+      ]);
     } catch (error) {
       this.started = false;
       await Promise.allSettled([
@@ -160,7 +158,13 @@ export class TransportManager {
   }
 
   registerPeer(peer: TransportPeer): void {
+    this.peerIdsByAddress.delete(peer.address);
     this.peerIdsByAddress.set(peer.address, peer.id);
+    while (this.peerIdsByAddress.size > MAX_TRACKED_PEERS) {
+      const oldest = this.peerIdsByAddress.keys().next().value;
+      if (oldest === undefined) break;
+      this.peerIdsByAddress.delete(oldest);
+    }
   }
 
   get peers(): string[] {
@@ -199,6 +203,15 @@ export class TransportManager {
   private recordSuccess(name: ManagedTransportName): void {
     this.usage[name].successes += 1;
     this.usage.lastTransport = name;
+  }
+
+  private async startWebRtc(): Promise<void> {
+    if (!this.webRtcEnabled) return;
+    try {
+      await this.webRtcTransport.start(this.transportOptions);
+    } catch {
+      // Signaling can be retried lazily by requestSegment; HTTP stays usable.
+    }
   }
 
   private recordFailure(name: ManagedTransportName): void {

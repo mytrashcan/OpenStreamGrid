@@ -15,6 +15,8 @@ interface Subscription {
   peerId: string;
 }
 
+const MAX_BUFFERED_WEB_SOCKET_BYTES = 1024 * 1024;
+
 export interface TrackerEvents {
   broadcastListChanged?(): void;
   peerJoined?(broadcastId: string, peer: Peer): void;
@@ -165,7 +167,6 @@ export class TrackerWebSocketHub implements TrackerEvents {
       const peerId = requiredString(parsed, "peerId");
 
       if (type === "subscribe") {
-        this.store.listPeers(broadcastId);
         this.subscriptions.set(socket, { broadcastId, peerId });
         this.send(socket, {
           type: "peer_list",
@@ -204,6 +205,7 @@ export class TrackerWebSocketHub implements TrackerEvents {
         const segments = requiredSegments(parsed);
         const replace =
           typeof parsed.replace === "boolean" ? parsed.replace : undefined;
+        if (replace && this.hasSameSegments(broadcastId, peerId, segments)) return;
         this.store.reportSegments(broadcastId, peerId, segments, replace);
         this.segmentsAvailable(broadcastId, peerId, segments);
         return;
@@ -247,6 +249,22 @@ export class TrackerWebSocketHub implements TrackerEvents {
     });
   }
 
+  private hasSameSegments(
+    broadcastId: string,
+    peerId: string,
+    segments: string[],
+  ): boolean {
+    const peer = this.store
+      .listPeers(broadcastId)
+      .find((candidate) => candidate.id === peerId);
+    if (!peer) return false;
+    const expected = new Set(segments);
+    return (
+      peer.segments.length === expected.size &&
+      peer.segments.every((segment) => expected.has(segment))
+    );
+  }
+
   private relayWebRtcSignal(message: WebRtcSignalMessage): void {
     for (const [socket, subscription] of this.subscriptions) {
       if (
@@ -268,6 +286,10 @@ export class TrackerWebSocketHub implements TrackerEvents {
 
   private send(socket: WebSocket, message: WsServerMessage): void {
     if (socket.readyState === WebSocket.OPEN) {
+      if (socket.bufferedAmount > MAX_BUFFERED_WEB_SOCKET_BYTES) {
+        socket.terminate();
+        return;
+      }
       try {
         socket.send(JSON.stringify(message));
       } catch (error) {

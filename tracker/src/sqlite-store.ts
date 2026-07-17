@@ -81,6 +81,10 @@ interface SegmentRow {
   segment_name: string;
 }
 
+interface BroadcastSegmentRow extends SegmentRow {
+  peer_id: string;
+}
+
 interface PeerIdentityRow {
   broadcast_id: string;
   peer_id: string;
@@ -204,6 +208,12 @@ const prepareStatements = (database: Database.Database) => ({
     FROM peer_segments
     WHERE broadcast_id = @broadcastId AND peer_id = @peerId
     ORDER BY rowid
+  `),
+  listBroadcastSegments: database.prepare(`
+    SELECT peer_id, segment_name
+    FROM peer_segments
+    WHERE broadcast_id = @broadcastId
+    ORDER BY peer_id, rowid
   `),
   deletePeerSegments: database.prepare(`
     DELETE FROM peer_segments
@@ -481,7 +491,18 @@ export class SQLiteStore implements TrackerStoreBackend {
           broadcastId,
           segment,
         }) as PeerRow[]);
-    return rows.map((row) => this.mapPeer(row));
+    if (segment !== undefined) return rows.map((row) => this.mapPeer(row));
+
+    const segmentsByPeer = new Map<string, string[]>();
+    const segmentRows = this.statements.listBroadcastSegments.all({
+      broadcastId,
+    }) as BroadcastSegmentRow[];
+    for (const row of segmentRows) {
+      const segments = segmentsByPeer.get(row.peer_id);
+      if (segments) segments.push(row.segment_name);
+      else segmentsByPeer.set(row.peer_id, [row.segment_name]);
+    }
+    return rows.map((row) => this.mapPeer(row, segmentsByPeer.get(row.peer_id) ?? []));
   }
 
   reportSegments(
@@ -695,7 +716,10 @@ export class SQLiteStore implements TrackerStoreBackend {
     };
   }
 
-  private mapPeer(row: PeerRow): Peer {
+  private mapPeer(
+    row: PeerRow,
+    segments = this.getSegments(row.broadcast_id, row.peer_id),
+  ): Peer {
     const metadata = this.parseMetadata(row.metadata);
     return {
       id: row.peer_id,
@@ -704,7 +728,7 @@ export class SQLiteStore implements TrackerStoreBackend {
         ? {}
         : { uploadBandwidthBps: row.upload_bandwidth_bps }),
       ...(metadata ? { metadata } : {}),
-      segments: this.getSegments(row.broadcast_id, row.peer_id),
+      segments,
       joinedAt: row.joined_at,
       lastSeenAt: row.last_seen_at,
       latencyMs: row.latency_ms,

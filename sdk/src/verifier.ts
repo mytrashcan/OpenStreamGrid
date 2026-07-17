@@ -61,6 +61,7 @@ export async function verifySegmentHash(
  */
 export class OriginHashVerifier {
   private readonly originBaseUrl: URL;
+  private readonly pendingHashes = new Map<string, Promise<string>>();
 
   constructor(originBaseUrl: string) {
     this.originBaseUrl = new URL(
@@ -69,6 +70,23 @@ export class OriginHashVerifier {
   }
 
   async verify(segmentName: string, data: Uint8Array): Promise<SegmentVerificationResult> {
+    const expectedHash = await this.expectedHash(segmentName);
+    return verifySegmentHash(data, expectedHash);
+  }
+
+  private async expectedHash(segmentName: string): Promise<string> {
+    const pending = this.pendingHashes.get(segmentName);
+    if (pending) return pending;
+    const request = this.fetchHash(segmentName).finally(() => {
+      if (this.pendingHashes.get(segmentName) === request) {
+        this.pendingHashes.delete(segmentName);
+      }
+    });
+    this.pendingHashes.set(segmentName, request);
+    return request;
+  }
+
+  private async fetchHash(segmentName: string): Promise<string> {
     const hashUrl = new URL(
       `${encodeURIComponent(segmentName)}.sha256`,
       this.originBaseUrl,
@@ -79,7 +97,6 @@ export class OriginHashVerifier {
         `Failed to fetch hash for '${segmentName}': HTTP ${response.status}`,
       );
     }
-    const expectedHash = parseSha256(await response.text());
-    return verifySegmentHash(data, expectedHash);
+    return parseSha256(await response.text());
   }
 }

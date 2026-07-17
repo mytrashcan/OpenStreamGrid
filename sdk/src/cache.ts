@@ -42,7 +42,7 @@ export class SegmentCache {
 
   /** Store a segment. Returns false if the segment is larger than maxBytes. */
   set(segmentName: string, data: Uint8Array, hash?: string): boolean {
-    if (data.byteLength > this.maxBytes) return false;
+    if (data.byteLength === 0 || data.byteLength > this.maxBytes) return false;
 
     const existing = this.map.get(segmentName);
     if (existing) {

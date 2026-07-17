@@ -34,13 +34,13 @@ export class SegmentCache {
   }
 
   set(segmentName: string, data: Buffer): boolean {
+    if (data.byteLength === 0 || data.byteLength > this.maxBytes) return false;
+
     const existing = this.entries.get(segmentName);
     if (existing) {
       this.totalBytes -= existing.data.byteLength;
       this.entries.delete(segmentName);
     }
-    if (data.byteLength > this.maxBytes) return false;
-
     this.entries.set(segmentName, { data, storedAt: Date.now() });
     this.totalBytes += data.byteLength;
     while (this.totalBytes > this.maxBytes) {

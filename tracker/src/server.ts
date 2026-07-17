@@ -131,6 +131,7 @@ export class TrackerStatsSse implements TrackerEvents {
       this.clients.delete(client);
       return;
     }
+    if (client.writableNeedDrain) return;
     client.write(`event: ${eventName}\nid: ${eventId}\ndata: ${payload}\n\n`);
   }
 
@@ -494,7 +495,7 @@ export class TrackerServer {
   private readonly server;
   private readonly webSockets: TrackerWebSocketHub;
   private readonly statsEvents: TrackerStatsSse;
-  private cleanupTimer?: NodeJS.Timeout;
+  private cleanupTimer: NodeJS.Timeout | undefined;
 
   constructor(
     storeFactory: TrackerStoreFactory = createConfiguredStore,
@@ -549,6 +550,7 @@ export class TrackerServer {
 
   async stop(): Promise<void> {
     if (this.cleanupTimer) clearInterval(this.cleanupTimer);
+    this.cleanupTimer = undefined;
     if (!this.server.listening) {
       this.store.close();
       return;

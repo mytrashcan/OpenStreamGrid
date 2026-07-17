@@ -14,7 +14,9 @@ x-service-defaults: &service-defaults
 x-peer-environment: &peer-environment
   TRACKER_URL: http://tracker:7070
   BROADCAST_ID: live
-  ORIGIN_URL: http://origin:8080/hls
+  # The Node peer consumes one media rendition; the master playlist remains
+  # available at /hls/stream.m3u8 for HLS players and the browser SDK.
+  ORIGIN_URL: http://origin:8080/hls/low
   CACHE_SIZE: 200MB
   MAX_UPLOAD_SPEED: 4Mbps
   MAX_CONNECTIONS: "3"

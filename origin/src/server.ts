@@ -199,16 +199,19 @@ const delay = async (milliseconds: number, signal?: AbortSignal): Promise<void> 
       reject(signal.reason);
       return;
     }
-    const timer = setTimeout(resolve, milliseconds);
+    const cleanup = (): void => signal?.removeEventListener("abort", onAbort);
+    const onTimeout = (): void => {
+      cleanup();
+      resolve();
+    };
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      cleanup();
+      reject(signal?.reason);
+    };
+    const timer = setTimeout(onTimeout, milliseconds);
     timer.unref();
-    signal?.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        reject(signal.reason);
-      },
-      { once: true },
-    );
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 };
 
