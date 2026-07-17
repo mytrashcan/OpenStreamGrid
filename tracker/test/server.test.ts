@@ -1,8 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { Readable } from "node:stream";
 import test from "node:test";
 import type { WsServerMessage } from "@openstreamgrid/common";
@@ -31,6 +28,9 @@ test("validates tracker environment configuration", () => {
     port: 7070,
     host: "0.0.0.0",
     stalePeerMs: 30_000,
+    rateLimitRps: 100,
+    rateLimitBurst: 200,
+    maxPeersPerBroadcast: 500,
   });
   assert.deepEqual(
     parseTrackerConfiguration({
@@ -38,7 +38,14 @@ test("validates tracker environment configuration", () => {
       HOST: "127.0.0.1",
       STALE_PEER_MS: "5000",
     }),
-    { port: 8081, host: "127.0.0.1", stalePeerMs: 5_000 },
+    {
+      port: 8081,
+      host: "127.0.0.1",
+      stalePeerMs: 5_000,
+      rateLimitRps: 100,
+      rateLimitBurst: 200,
+      maxPeersPerBroadcast: 500,
+    },
   );
   assert.throws(
     () => parseTrackerConfiguration({ PORT: "0" }),
@@ -57,48 +64,20 @@ test("validates tracker environment configuration", () => {
     /HOST must not be empty/,
   );
   assert.throws(
-    () => parseTrackerConfiguration({ TRACKER_API_KEY: " " }),
-    /TRACKER_API_KEY must not be empty/,
+    () => parseTrackerConfiguration({ RATE_LIMIT_RPS: "0" }),
+    /RATE_LIMIT_RPS must be an integer/,
   );
   assert.throws(
-    () => parseTrackerConfiguration({ TLS_CERT_PATH: "/tmp/cert.pem" }),
-    /TLS_CERT_PATH and TLS_KEY_PATH must be configured together/,
+    () => parseTrackerConfiguration({ RATE_LIMIT_BURST: "1.5" }),
+    /RATE_LIMIT_BURST must be an integer/,
   );
   assert.throws(
-    () =>
-      parseTrackerConfiguration({
-        TLS_CERT_PATH: "/missing/cert.pem",
-        TLS_KEY_PATH: "/missing/key.pem",
-      }),
-    /TLS_CERT_PATH must point to an existing file/,
+    () => parseTrackerConfiguration({ MAX_PEERS_PER_BROADCAST: "0" }),
+    /MAX_PEERS_PER_BROADCAST must be an integer/,
   );
   assert.throws(
     () => createConfiguredStore({ STORE_TYPE: "sqlite", DB_PATH: " " }),
     /DB_PATH must not be empty/,
-  );
-});
-
-test("accepts complete TLS and API key configuration", async (context) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "openstreamgrid-tls-"));
-  context.after(() => rm(directory, { recursive: true, force: true }));
-  const certPath = path.join(directory, "cert.pem");
-  const keyPath = path.join(directory, "key.pem");
-  await Promise.all([writeFile(certPath, "certificate"), writeFile(keyPath, "key")]);
-
-  assert.deepEqual(
-    parseTrackerConfiguration({
-      TRACKER_API_KEY: "test-secret",
-      TLS_CERT_PATH: certPath,
-      TLS_KEY_PATH: keyPath,
-    }),
-    {
-      port: 7070,
-      host: "0.0.0.0",
-      stalePeerMs: 30_000,
-      apiKey: "test-secret",
-      tlsCertPath: certPath,
-      tlsKeyPath: keyPath,
-    },
   );
 });
 
@@ -107,13 +86,11 @@ const invoke = async (
   method: string,
   url: string,
   body?: unknown,
-  headers: Record<string, string> = {},
 ): Promise<TestResponse> => {
   const payload = body === undefined ? [] : [JSON.stringify(body)];
   const request = Object.assign(Readable.from(payload), {
     method,
     url,
-    headers,
   }) as unknown as IncomingMessage;
   let status = 0;
   let responseBody = "";
@@ -142,38 +119,174 @@ const invoke = async (
   };
 };
 
-test("requires the configured API key for mutating REST requests", async () => {
-  const handler = createTrackerHandler(
-    new TrackerStore(),
-    {},
-    undefined,
-    "test-secret",
-  );
+const invokeRaw = async (
+  handler: ReturnType<typeof createTrackerHandler>,
+  method: string,
+  url: string,
+  body: unknown,
+  remoteAddress: string,
+): Promise<{
+  status: number;
+  body: string;
+  headers: Record<string, string | number>;
+}> => {
+  const payload = body === undefined ? [] : [JSON.stringify(body)];
+  const request = Object.assign(Readable.from(payload), {
+    method,
+    url,
+    socket: { remoteAddress },
+  }) as unknown as IncomingMessage;
+  let status = 0;
+  let responseBody = "";
+  let responseHeaders: Record<string, string | number> = {};
+  let headersSent = false;
+  const response = {
+    get headersSent() {
+      return headersSent;
+    },
+    writeHead(
+      statusCode: number,
+      headers: Record<string, string | number> = {},
+    ) {
+      status = statusCode;
+      responseHeaders = headers;
+      headersSent = true;
+      return response;
+    },
+    end(chunk?: string) {
+      if (chunk) responseBody += chunk;
+      return response;
+    },
+    destroy() {
+      return response;
+    },
+  } as unknown as ServerResponse;
+  await handler(request, response);
+  return { status, body: responseBody, headers: responseHeaders };
+};
 
-  assert.equal((await invoke(handler, "GET", "/health")).status, 200);
-  assert.equal((await invoke(handler, "GET", "/api/v1/broadcasts")).status, 200);
-  for (const method of ["POST", "PUT", "DELETE"]) {
-    assert.deepEqual(await invoke(handler, method, "/not-a-route"), {
-      status: 401,
-      json: { error: "Unauthorized" },
-    });
-    assert.equal(
-      (
-        await invoke(handler, method, "/not-a-route", undefined, {
-          "x-api-key": "wrong-secret",
-        })
-      ).status,
-      401,
-    );
-    assert.equal(
-      (
-        await invoke(handler, method, "/not-a-route", undefined, {
-          "x-api-key": "test-secret",
-        })
-      ).status,
-      404,
-    );
-  }
+test("rate limits mutations per IP and enforces the broadcast peer cap", async () => {
+  const handler = createTrackerHandler(new TrackerStore(), {}, undefined, {
+    rateLimitRps: 1,
+    rateLimitBurst: 1,
+    maxPeersPerBroadcast: 1,
+  });
+
+  assert.equal(
+    (
+      await invokeRaw(
+        handler,
+        "POST",
+        "/health",
+        undefined,
+        "192.0.2.1",
+      )
+    ).status,
+    404,
+  );
+  const firstMutation = await invokeRaw(
+    handler,
+    "POST",
+    "/not-a-route",
+    undefined,
+    "192.0.2.1",
+  );
+  const limitedMutation = await invokeRaw(
+    handler,
+    "POST",
+    "/not-a-route",
+    undefined,
+    "192.0.2.1",
+  );
+  assert.equal(firstMutation.status, 404);
+  assert.equal(limitedMutation.status, 429);
+  assert.equal(limitedMutation.headers["retry-after"], "1");
+
+  assert.equal(
+    (
+      await invokeRaw(
+        handler,
+        "POST",
+        "/api/v1/broadcasts",
+        { id: "live", playlistUrl: "http://origin/live.m3u8" },
+        "192.0.2.2",
+      )
+    ).status,
+    201,
+  );
+  assert.equal(
+    (
+      await invokeRaw(
+        handler,
+        "POST",
+        "/api/v1/broadcasts/live/peers",
+        { id: "peer-a", address: "http://peer-a:9090" },
+        "192.0.2.3",
+      )
+    ).status,
+    201,
+  );
+  const peerLimit = await invokeRaw(
+    handler,
+    "POST",
+    "/api/v1/broadcasts/live/peers",
+    { id: "peer-b", address: "http://peer-b:9090" },
+    "192.0.2.4",
+  );
+  assert.equal(peerLimit.status, 429);
+  assert.equal(peerLimit.headers["retry-after"], "1");
+  assert.deepEqual(JSON.parse(peerLimit.body), {
+    error: "Broadcast peer limit reached",
+  });
+});
+
+test("exports tracker counters, gauges, and REST duration metrics", async () => {
+  const handler = createTrackerHandler(new TrackerStore());
+  await invoke(handler, "POST", "/api/v1/broadcasts", {
+    id: "live",
+    playlistUrl: "http://origin/live.m3u8",
+  });
+  await invoke(handler, "POST", "/api/v1/broadcasts/live/peers", {
+    id: "peer-a",
+    address: "http://peer-a:9090",
+  });
+  await invoke(handler, "POST", "/api/v1/broadcasts/live/peers/peer-a/stats", {
+    stats: {
+      bytesDownloadedP2P: 100,
+      bytesDownloadedOrigin: 50,
+      bytesUploadedP2P: 100,
+      p2pRequests: 3,
+      p2pSuccesses: 2,
+      p2pFailures: 1,
+      originRequests: 1,
+      integrityFailures: 1,
+      fallbacks: 1,
+      segmentsCached: 2,
+    },
+  });
+
+  const response = await invokeRaw(
+    handler,
+    "GET",
+    "/metrics",
+    undefined,
+    "192.0.2.5",
+  );
+  assert.equal(response.status, 200);
+  assert.match(
+    String(response.headers["content-type"]),
+    /^text\/plain; version=0\.0\.4/,
+  );
+  assert.match(response.body, /openstreamgrid_broadcasts_total 1\n/);
+  assert.match(response.body, /openstreamgrid_peers_total 1\n/);
+  assert.match(response.body, /openstreamgrid_p2p_requests_total 3\n/);
+  assert.match(response.body, /openstreamgrid_origin_requests_total 1\n/);
+  assert.match(response.body, /openstreamgrid_p2p_successes_total 2\n/);
+  assert.match(response.body, /openstreamgrid_integrity_failures_total 1\n/);
+  assert.match(response.body, /openstreamgrid_fallbacks_total 1\n/);
+  assert.match(response.body, /openstreamgrid_active_broadcasts 1\n/);
+  assert.match(response.body, /openstreamgrid_active_peers 1\n/);
+  assert.match(response.body, /openstreamgrid_request_duration_ms_count 3\n/);
 });
 
 test("exposes the broadcast and peer lifecycle over REST", async () => {
