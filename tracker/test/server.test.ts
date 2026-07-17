@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Readable } from "node:stream";
 import test from "node:test";
 import type { WsServerMessage } from "@openstreamgrid/common";
@@ -54,8 +57,48 @@ test("validates tracker environment configuration", () => {
     /HOST must not be empty/,
   );
   assert.throws(
+    () => parseTrackerConfiguration({ TRACKER_API_KEY: " " }),
+    /TRACKER_API_KEY must not be empty/,
+  );
+  assert.throws(
+    () => parseTrackerConfiguration({ TLS_CERT_PATH: "/tmp/cert.pem" }),
+    /TLS_CERT_PATH and TLS_KEY_PATH must be configured together/,
+  );
+  assert.throws(
+    () =>
+      parseTrackerConfiguration({
+        TLS_CERT_PATH: "/missing/cert.pem",
+        TLS_KEY_PATH: "/missing/key.pem",
+      }),
+    /TLS_CERT_PATH must point to an existing file/,
+  );
+  assert.throws(
     () => createConfiguredStore({ STORE_TYPE: "sqlite", DB_PATH: " " }),
     /DB_PATH must not be empty/,
+  );
+});
+
+test("accepts complete TLS and API key configuration", async (context) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "openstreamgrid-tls-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const certPath = path.join(directory, "cert.pem");
+  const keyPath = path.join(directory, "key.pem");
+  await Promise.all([writeFile(certPath, "certificate"), writeFile(keyPath, "key")]);
+
+  assert.deepEqual(
+    parseTrackerConfiguration({
+      TRACKER_API_KEY: "test-secret",
+      TLS_CERT_PATH: certPath,
+      TLS_KEY_PATH: keyPath,
+    }),
+    {
+      port: 7070,
+      host: "0.0.0.0",
+      stalePeerMs: 30_000,
+      apiKey: "test-secret",
+      tlsCertPath: certPath,
+      tlsKeyPath: keyPath,
+    },
   );
 });
 
@@ -64,11 +107,13 @@ const invoke = async (
   method: string,
   url: string,
   body?: unknown,
+  headers: Record<string, string> = {},
 ): Promise<TestResponse> => {
   const payload = body === undefined ? [] : [JSON.stringify(body)];
   const request = Object.assign(Readable.from(payload), {
     method,
     url,
+    headers,
   }) as unknown as IncomingMessage;
   let status = 0;
   let responseBody = "";
@@ -96,6 +141,40 @@ const invoke = async (
     json: responseBody ? (JSON.parse(responseBody) as unknown) : undefined,
   };
 };
+
+test("requires the configured API key for mutating REST requests", async () => {
+  const handler = createTrackerHandler(
+    new TrackerStore(),
+    {},
+    undefined,
+    "test-secret",
+  );
+
+  assert.equal((await invoke(handler, "GET", "/health")).status, 200);
+  assert.equal((await invoke(handler, "GET", "/api/v1/broadcasts")).status, 200);
+  for (const method of ["POST", "PUT", "DELETE"]) {
+    assert.deepEqual(await invoke(handler, method, "/not-a-route"), {
+      status: 401,
+      json: { error: "Unauthorized" },
+    });
+    assert.equal(
+      (
+        await invoke(handler, method, "/not-a-route", undefined, {
+          "x-api-key": "wrong-secret",
+        })
+      ).status,
+      401,
+    );
+    assert.equal(
+      (
+        await invoke(handler, method, "/not-a-route", undefined, {
+          "x-api-key": "test-secret",
+        })
+      ).status,
+      404,
+    );
+  }
+});
 
 test("exposes the broadcast and peer lifecycle over REST", async () => {
   const handler = createTrackerHandler(new TrackerStore());

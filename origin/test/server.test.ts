@@ -88,6 +88,14 @@ test("validates origin environment configuration", () => {
     () => parseOriginConfiguration({ PLAYLIST_SIZE: "2.5" }),
     /PLAYLIST_SIZE must be a positive integer/,
   );
+  assert.equal(
+    parseOriginConfiguration({ TRACKER_API_KEY: "test-secret" }).trackerApiKey,
+    "test-secret",
+  );
+  assert.throws(
+    () => parseOriginConfiguration({ TRACKER_API_KEY: " " }),
+    /TRACKER_API_KEY must not be empty/,
+  );
 });
 
 test("validates HLS streamer configuration before startup", () => {
@@ -204,6 +212,7 @@ test("registers a broadcast with the tracker", async () => {
 
   await registerBroadcast({
     trackerUrl: "http://tracker:7070",
+    apiKey: "test-secret",
     registration: {
       id: "live",
       playlistUrl: "http://origin:8080/hls/stream.m3u8",
@@ -211,6 +220,10 @@ test("registers a broadcast with the tracker", async () => {
     fetchImpl: async (input, init) => {
       assert.equal(String(input), "http://tracker:7070/api/v1/broadcasts");
       assert.equal(init?.method, "POST");
+      assert.equal(
+        new Headers(init?.headers).get("X-API-Key"),
+        "test-secret",
+      );
       received = JSON.parse(String(init?.body)) as unknown;
       return new Response(null, { status: 201 });
     },

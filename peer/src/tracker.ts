@@ -144,6 +144,7 @@ const parsePeerUpdate = (data: RawData): PeerUpdateMessage | undefined => {
 /** Configuration and callbacks used by the peer tracker client. */
 export interface TrackerClientOptions {
   trackerUrl: string;
+  apiKey?: string;
   broadcastId: string;
   peerId: string;
   heartbeat: () => PeerHeartbeat;
@@ -175,7 +176,14 @@ export class TrackerClient implements PeerDirectory {
   constructor(private readonly options: TrackerClientOptions) {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.webSocketFactory =
-      options.webSocketFactory ?? ((url) => new WebSocket(url));
+      options.webSocketFactory ??
+      ((url) =>
+        new WebSocket(
+          url,
+          options.apiKey
+            ? { headers: { "X-API-Key": options.apiKey } }
+            : undefined,
+        ));
     this.reportIntervalMs =
       options.reportIntervalMs ?? DEFAULT_REPORT_INTERVAL_MS;
     this.reconnectInitialMs =
@@ -210,7 +218,7 @@ export class TrackerClient implements PeerDirectory {
         `${this.peersUrl().pathname}/${encodeURIComponent(this.options.peerId)}`,
         this.options.trackerUrl,
       ),
-      { method: "DELETE" },
+      this.withApiKey({ method: "DELETE" }),
     );
     if (!response.ok && response.status !== 404) {
       throw new Error(`Tracker leave returned HTTP ${response.status}`);
@@ -419,11 +427,18 @@ export class TrackerClient implements PeerDirectory {
     endpoint: URL,
     init?: RequestInit,
   ): Promise<unknown> {
-    const response = await this.fetchImpl(endpoint, init);
+    const response = await this.fetchImpl(endpoint, this.withApiKey(init));
     if (!response.ok) {
       throw new Error(`Tracker returned HTTP ${response.status}`);
     }
     return response.json();
+  }
+
+  private withApiKey(init: RequestInit = {}): RequestInit {
+    if (!this.options.apiKey) return init;
+    const headers = new Headers(init.headers);
+    headers.set("X-API-Key", this.options.apiKey);
+    return { ...init, headers };
   }
 
   private copyPeer(peer: Peer): Peer {
