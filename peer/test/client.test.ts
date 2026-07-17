@@ -39,6 +39,48 @@ test("supports disabling WebRTC for deterministic HTTP fallback", () => {
   );
 });
 
+test("builds ICE server configuration from STUN and TURN environment values", () => {
+  assert.deepEqual(parseArguments([], environment).iceServers, [
+    { urls: "stun:stun.l.google.com:19302" },
+  ]);
+  assert.deepEqual(
+    parseArguments([], {
+      ...environment,
+      STUN_SERVER: "stuns:stun.example.com:5349",
+      TURN_SERVER: "turns:turn.example.com:5349?transport=tcp",
+      TURN_USERNAME: "peer-user",
+      TURN_CREDENTIAL: "peer-secret",
+    }).iceServers,
+    [
+      { urls: "stuns:stun.example.com:5349" },
+      {
+        urls: "turns:turn.example.com:5349?transport=tcp",
+        username: "peer-user",
+        credential: "peer-secret",
+      },
+    ],
+  );
+});
+
+test("validates STUN and TURN environment configuration", () => {
+  assert.throws(
+    () => parseArguments([], { ...environment, STUN_SERVER: "https://stun.example.com" }),
+    /STUN server must use STUN or STUNS/,
+  );
+  assert.throws(
+    () => parseArguments([], { ...environment, TURN_SERVER: "stun:turn.example.com" }),
+    /TURN server must use TURN or TURNS/,
+  );
+  assert.throws(
+    () => parseArguments([], { ...environment, TURN_SERVER: "turn:" }),
+    /TURN server must include a host/,
+  );
+  assert.throws(
+    () => parseArguments([], { ...environment, TURN_USERNAME: "orphaned" }),
+    /TURN_SERVER is required when TURN credentials are configured/,
+  );
+});
+
 test("validates required peer environment configuration", () => {
   assert.throws(
     () => parseArguments([], {}),

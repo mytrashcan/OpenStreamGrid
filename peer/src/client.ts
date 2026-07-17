@@ -9,6 +9,7 @@ import { TrackerClient } from "./tracker.js";
 import { TransportManager } from "./transport-manager.js";
 import { UploadServer } from "./uploader.js";
 import { OriginHashVerifier } from "./verifier.js";
+import { DEFAULT_STUN_SERVER } from "./webrtc-transport.js";
 
 const DEFAULT_TRACKER_URL = "http://tracker:7070";
 const DEFAULT_BROADCAST_ID = "live";
@@ -41,6 +42,7 @@ interface PeerConfiguration {
   playlistPollMs: number;
   p2pTimeoutMs: number;
   webRtcEnabled: boolean;
+  iceServers: RTCIceServer[];
 }
 
 const delay = async (milliseconds: number, signal: AbortSignal): Promise<void> => {
@@ -110,6 +112,7 @@ class PeerApplication {
       peerId: configuration.peerId,
       broadcastId: configuration.broadcastId,
       webRtcEnabled: configuration.webRtcEnabled,
+      iceServers: configuration.iceServers,
       p2pTimeoutMs: configuration.p2pTimeoutMs,
       webRtc: {
         segmentProvider: (segmentName) => this.cache.get(segmentName),
@@ -280,6 +283,74 @@ const nonEmptyValue = (value: string, label: string): string => {
   return value.trim();
 };
 
+const optionalValue = (value: string | undefined): string | undefined => {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+};
+
+const iceServerUrl = (
+  value: string,
+  label: string,
+  protocols: readonly string[],
+): string => {
+  const normalized = nonEmptyValue(value, label);
+  let url: URL;
+  try {
+    url = new URL(normalized);
+  } catch {
+    throw new Error(`${label} must be a valid absolute URL`);
+  }
+  const protocol = url.protocol.slice(0, -1).toLowerCase();
+  if (!protocols.includes(protocol)) {
+    throw new Error(
+      `${label} must use ${protocols.map((item) => item.toUpperCase()).join(" or ")}`,
+    );
+  }
+
+  const endpoint = normalized
+    .slice(normalized.indexOf(":") + 1)
+    .split(/[?#]/, 1)[0];
+  try {
+    const parsedEndpoint = new URL(`http://${endpoint}`);
+    if (
+      !parsedEndpoint.hostname ||
+      parsedEndpoint.pathname !== "/" ||
+      parsedEndpoint.username ||
+      parsedEndpoint.password
+    ) {
+      throw new Error("invalid ICE endpoint");
+    }
+  } catch {
+    throw new Error(`${label} must include a host and optional port`);
+  }
+  if (url.hash) throw new Error(`${label} must not include a fragment`);
+  return normalized;
+};
+
+const iceServers = (environment: NodeJS.ProcessEnv): RTCIceServer[] => {
+  const stunServer = iceServerUrl(
+    environment.STUN_SERVER ?? DEFAULT_STUN_SERVER,
+    "STUN server",
+    ["stun", "stuns"],
+  );
+  const turnServer = optionalValue(environment.TURN_SERVER);
+  const username = optionalValue(environment.TURN_USERNAME);
+  const credential = optionalValue(environment.TURN_CREDENTIAL);
+  if (!turnServer && (username || credential)) {
+    throw new Error("TURN_SERVER is required when TURN credentials are configured");
+  }
+
+  const servers: RTCIceServer[] = [{ urls: stunServer }];
+  if (turnServer) {
+    servers.push({
+      urls: iceServerUrl(turnServer, "TURN server", ["turn", "turns"]),
+      ...(username ? { username } : {}),
+      ...(credential ? { credential } : {}),
+    });
+  }
+  return servers;
+};
+
 const httpUrl = (value: string, label: string): URL => {
   let url: URL;
   try {
@@ -446,6 +517,7 @@ export const parseArguments = (
       values.get("webrtc-enabled") ?? environment.WEBRTC_ENABLED ?? "true",
       "WebRTC enabled",
     ),
+    iceServers: iceServers(environment),
   };
 };
 

@@ -452,6 +452,26 @@ hls.attachMedia(videoElement);
 | `P2P_TIMEOUT_MS` | `2000` | Timeout for peer segment requests |
 | `UPLOAD_HOST` | `0.0.0.0` | Peer upload server bind host |
 | `WEBRTC_ENABLED` / `--webrtc-enabled` | `true` | Enable WebRTC with HTTP fallback |
+| `STUN_SERVER` | `stun:stun.l.google.com:19302` | STUN or STUNS URL used to discover public peer addresses |
+| `TURN_SERVER` | — | Optional TURN or TURNS relay URL for restrictive NATs and firewalls |
+| `TURN_USERNAME` | — | Optional username for the configured TURN server |
+| `TURN_CREDENTIAL` | — | Optional credential for the configured TURN server |
+
+`STUN_SERVER` and `TURN_SERVER` are validated when the peer starts. TURN
+credentials require `TURN_SERVER`; supplying credentials without a TURN URL is
+rejected. When ICE negotiation or WebRTC segment delivery fails, the transport
+manager automatically retries the same peer over HTTP using the existing
+fallback path.
+
+For example, configure an authenticated TLS TURN relay before starting the
+Compose stack:
+
+```bash
+export TURN_SERVER='turns:turn.example.com:5349?transport=tcp'
+export TURN_USERNAME='openstreamgrid'
+export TURN_CREDENTIAL='replace-with-a-secret'
+docker compose up --build
+```
 
 ---
 

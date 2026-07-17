@@ -44,6 +44,7 @@ export interface TransportManagerOptions
   verifier?: SegmentIntegrityVerifier;
   p2pTimeoutMs?: number;
   webRtcEnabled?: boolean;
+  iceServers?: RTCIceServer[];
   webRtc?: WebRtcTransportOptions;
   /** Dependency injection hooks used by transport-level unit tests. */
   webRtcTransport?: TransportAdapter;
@@ -72,6 +73,7 @@ export class TransportManager {
       options.webRtcTransport ??
       new WebRtcTransport({
         ...options.webRtc,
+        ...(options.iceServers ? { iceServers: options.iceServers } : {}),
         ...(options.webRtc?.verifier ?? options.verifier
           ? { verifier: options.webRtc?.verifier ?? options.verifier }
           : {}),
