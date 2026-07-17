@@ -92,6 +92,39 @@ test("exposes the broadcast and peer lifecycle over REST", async () => {
   assert.equal(health.status, 200);
 });
 
+test("rejects malformed stats and URL path encoding", async () => {
+  const handler = createTrackerHandler(new TrackerStore());
+  await invoke(handler, "POST", "/api/v1/broadcasts", {
+    id: "live",
+    playlistUrl: "http://origin/live.m3u8",
+  });
+  await invoke(handler, "POST", "/api/v1/broadcasts/live/peers", {
+    id: "peer-a",
+    address: "http://peer-a:9090",
+  });
+
+  const stats = await invoke(
+    handler,
+    "POST",
+    "/api/v1/broadcasts/live/peers/peer-a/stats",
+    { stats: { bytesDownloadedP2P: "not-a-number" } },
+  );
+  assert.equal(stats.status, 400);
+  assert.deepEqual(stats.json, {
+    error: "Peer traffic stat 'bytesDownloadedP2P' must be a non-negative number",
+  });
+
+  const invalidPath = await invoke(
+    handler,
+    "GET",
+    "/api/v1/broadcasts/%E0%A4%A",
+  );
+  assert.equal(invalidPath.status, 400);
+  assert.deepEqual(invalidPath.json, {
+    error: "URL path contains invalid percent encoding",
+  });
+});
+
 const waitForMessage = async (
   socket: WebSocket,
   predicate: (message: WsServerMessage) => boolean,

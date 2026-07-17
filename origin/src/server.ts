@@ -262,8 +262,14 @@ const run = async (): Promise<void> => {
     shutdownController.abort(new Error(`Received ${signal}`));
     await server.stop();
   };
-  process.once("SIGTERM", () => void shutdown("SIGTERM"));
-  process.once("SIGINT", () => void shutdown("SIGINT"));
+  const requestShutdown = (signal: string): void => {
+    void shutdown(signal).catch((error: unknown) => {
+      console.error("origin shutdown failed", error);
+      process.exitCode = 1;
+    });
+  };
+  process.once("SIGTERM", () => requestShutdown("SIGTERM"));
+  process.once("SIGINT", () => requestShutdown("SIGINT"));
 
   const actualPort = await server.start(port);
   await registerBroadcast({

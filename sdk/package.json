@@ -18,7 +18,8 @@
     "src/"
   ],
   "scripts": {
-    "build": "node scripts/build.mjs",
+    "build": "npm run typecheck && node scripts/build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepublishOnly": "npm run build"
   },
   "peerDependencies": {

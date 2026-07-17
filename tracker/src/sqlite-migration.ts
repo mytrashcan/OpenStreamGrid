@@ -95,9 +95,17 @@ export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0;
 
 export const runSQLiteMigrations = (database: Database.Database): void => {
   const migrate = database.transaction(() => {
-    const currentVersion = database.pragma("user_version", {
+    const rawVersion: unknown = database.pragma("user_version", {
       simple: true,
-    }) as number;
+    });
+    if (
+      typeof rawVersion !== "number" ||
+      !Number.isSafeInteger(rawVersion) ||
+      rawVersion < 0
+    ) {
+      throw new Error("Tracker database returned an invalid schema version");
+    }
+    const currentVersion = rawVersion;
     if (currentVersion > LATEST_SCHEMA_VERSION) {
       throw new Error(
         `Tracker database schema version ${currentVersion} is newer than supported version ${LATEST_SCHEMA_VERSION}`,

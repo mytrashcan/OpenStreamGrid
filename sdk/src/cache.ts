@@ -53,7 +53,7 @@ export class SegmentCache {
     const node: CacheNode = {
       key: segmentName,
       data,
-      hash,
+      ...(hash !== undefined ? { hash } : {}),
       storedAt: Date.now(),
       prev: null,
       next: null,
@@ -80,7 +80,11 @@ export class SegmentCache {
   peek(segmentName: string): CachedSegment | undefined {
     const node = this.map.get(segmentName);
     if (!node) return undefined;
-    return { data: node.data, storedAt: node.storedAt, hash: node.hash };
+    return {
+      data: node.data,
+      storedAt: node.storedAt,
+      ...(node.hash !== undefined ? { hash: node.hash } : {}),
+    };
   }
 
   /** Delete all entries. */

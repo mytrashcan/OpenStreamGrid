@@ -335,7 +335,7 @@ export class WebRtcTransport implements TransportAdapter {
   private handleSignalMessage(data: RawData): void {
     if (this.stopped) return;
     try {
-      const message = parseJsonObject(data.toString()) as Partial<WebRtcSignalMessage>;
+      const message = parseJsonObject(data.toString());
       const configuration = this.requireConfiguration();
       if (
         message.broadcastId !== configuration.broadcastId ||
@@ -355,7 +355,15 @@ export class WebRtcTransport implements TransportAdapter {
         return;
       }
       if (message.type === "webrtc_offer") {
-        void this.acceptOffer(message as WebRtcSignalMessage).catch(() => {
+        const offer: WebRtcSignalMessage = {
+          type: "webrtc_offer",
+          broadcastId: configuration.broadcastId,
+          peerId: message.peerId,
+          targetPeerId: configuration.peerId,
+          requestId: message.requestId,
+          sdp: message.sdp,
+        };
+        void this.acceptOffer(offer).catch(() => {
           // The requester owns the timeout and HTTP fallback path.
         });
       }
@@ -436,11 +444,13 @@ export class WebRtcTransport implements TransportAdapter {
         event.channel.close();
         return;
       }
-      void this.serveSegment(
-        event.channel,
-        message.peerId,
-        controller.signal,
-      ).finally(finish);
+      void this.serveSegment(event.channel, message.peerId, controller.signal)
+        .catch((error: unknown) => {
+          if (!controller.signal.aborted) {
+            console.error("failed to serve WebRTC segment", error);
+          }
+        })
+        .finally(finish);
     };
 
     try {

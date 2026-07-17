@@ -730,9 +730,19 @@ export class SQLiteStore implements TrackerStoreBackend {
   }
 
   private parseMetadata(value: string | null): Record<string, string> | undefined {
-    return value === null
-      ? undefined
-      : (JSON.parse(value) as Record<string, string>);
+    if (value === null) return undefined;
+    const parsed: unknown = JSON.parse(value);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("Tracker database contains invalid metadata");
+    }
+    const metadata: Record<string, string> = {};
+    for (const [key, item] of Object.entries(parsed)) {
+      if (typeof item !== "string") {
+        throw new Error("Tracker database contains invalid metadata");
+      }
+      metadata[key] = item;
+    }
+    return metadata;
   }
 
   private timestamp(): string {

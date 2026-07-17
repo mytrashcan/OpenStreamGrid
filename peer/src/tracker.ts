@@ -15,6 +15,128 @@ const DEFAULT_REPORT_INTERVAL_MS = 5_000;
 const DEFAULT_RECONNECT_INITIAL_MS = 1_000;
 const DEFAULT_RECONNECT_MAX_MS = 30_000;
 
+type JsonObject = Record<string, unknown>;
+type PeerUpdateMessage = Extract<
+  WsServerMessage,
+  {
+    type: "peer_list" | "peer_joined" | "peer_left" | "segment_available";
+  }
+>;
+
+const isObject = (value: unknown): value is JsonObject =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+const isStringArray = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((item) => typeof item === "string");
+
+const parseMetadata = (value: unknown): Record<string, string> | undefined => {
+  if (value === undefined) return undefined;
+  if (!isObject(value)) {
+    throw new TypeError("Peer metadata must contain only strings");
+  }
+  const metadata: Record<string, string> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item !== "string") {
+      throw new TypeError("Peer metadata must contain only strings");
+    }
+    metadata[key] = item;
+  }
+  return metadata;
+};
+
+const parsePeer = (value: unknown): Peer => {
+  if (!isObject(value)) throw new TypeError("Peer must be an object");
+  const {
+    id,
+    address,
+    segments,
+    joinedAt,
+    lastSeenAt,
+    latencyMs,
+    successRate,
+    trustScore,
+  } = value;
+  if (
+    typeof id !== "string" ||
+    typeof address !== "string" ||
+    !isStringArray(segments) ||
+    typeof joinedAt !== "string" ||
+    typeof lastSeenAt !== "string" ||
+    typeof latencyMs !== "number" ||
+    !Number.isFinite(latencyMs) ||
+    typeof successRate !== "number" ||
+    !Number.isFinite(successRate) ||
+    typeof trustScore !== "number" ||
+    !Number.isFinite(trustScore)
+  ) {
+    throw new TypeError("Peer contains invalid required fields");
+  }
+  if (
+    value.uploadBandwidthBps !== undefined &&
+    (typeof value.uploadBandwidthBps !== "number" ||
+      !Number.isFinite(value.uploadBandwidthBps))
+  ) {
+    throw new TypeError("Peer upload bandwidth must be a finite number");
+  }
+  const metadata = parseMetadata(value.metadata);
+  return {
+    id,
+    address,
+    segments: [...segments],
+    joinedAt,
+    lastSeenAt,
+    latencyMs,
+    successRate,
+    trustScore,
+    ...(typeof value.uploadBandwidthBps === "number"
+      ? { uploadBandwidthBps: value.uploadBandwidthBps }
+      : {}),
+    ...(metadata ? { metadata } : {}),
+  };
+};
+
+const parsePeerUpdate = (data: RawData): PeerUpdateMessage | undefined => {
+  const value: unknown = JSON.parse(data.toString());
+  if (
+    !isObject(value) ||
+    typeof value.type !== "string" ||
+    typeof value.broadcastId !== "string"
+  ) {
+    throw new TypeError("Tracker message is missing required fields");
+  }
+  const broadcastId = value.broadcastId;
+  switch (value.type) {
+    case "peer_list":
+      if (!Array.isArray(value.peers)) {
+        throw new TypeError("Tracker peer list must be an array");
+      }
+      return {
+        type: "peer_list",
+        broadcastId,
+        peers: value.peers.map(parsePeer),
+      };
+    case "peer_joined":
+      return { type: "peer_joined", broadcastId, peer: parsePeer(value.peer) };
+    case "peer_left":
+      if (typeof value.peerId !== "string") {
+        throw new TypeError("Tracker peer ID must be a string");
+      }
+      return { type: "peer_left", broadcastId, peerId: value.peerId };
+    case "segment_available":
+      if (typeof value.peerId !== "string" || !isStringArray(value.segments)) {
+        throw new TypeError("Tracker segment update is invalid");
+      }
+      return {
+        type: "segment_available",
+        broadcastId,
+        peerId: value.peerId,
+        segments: value.segments,
+      };
+    default:
+      return undefined;
+  }
+};
+
 export interface TrackerClientOptions {
   trackerUrl: string;
   broadcastId: string;
@@ -56,11 +178,11 @@ export class TrackerClient implements PeerDirectory {
   }
 
   async join(request: PeerJoinRequest): Promise<Peer> {
-    return this.requestJson<Peer>(this.peersUrl(), {
+    return parsePeer(await this.requestJson(this.peersUrl(), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(request),
-    });
+    }));
   }
 
   async leave(): Promise<void> {
@@ -80,7 +202,7 @@ export class TrackerClient implements PeerDirectory {
     if (this.started) return;
     this.started = true;
     this.reportTimer = setInterval(
-      () => this.reportStatus(),
+      () => this.reportStatusSafely(),
       this.reportIntervalMs,
     );
     this.reportTimer.unref();
@@ -161,7 +283,7 @@ export class TrackerClient implements PeerDirectory {
         broadcastId: this.options.broadcastId,
         peerId: this.options.peerId,
       });
-      this.reportStatus();
+      this.reportStatusSafely();
       this.firstConnectionResolver?.();
       this.firstConnectionResolver = undefined;
     });
@@ -209,9 +331,18 @@ export class TrackerClient implements PeerDirectory {
     this.reportSegments();
   }
 
+  private reportStatusSafely(): void {
+    try {
+      this.reportStatus();
+    } catch (error) {
+      if (this.started) console.error("failed to report peer status", error);
+    }
+  }
+
   private handleMessage(data: RawData): void {
     try {
-      const message = JSON.parse(data.toString()) as WsServerMessage;
+      const message = parsePeerUpdate(data);
+      if (!message) return;
       if (message.broadcastId !== this.options.broadcastId) return;
       if (message.type === "peer_list") {
         this.peers.clear();
@@ -239,7 +370,11 @@ export class TrackerClient implements PeerDirectory {
 
   private send(message: WsClientMessage): void {
     if (this.socket?.readyState === WebSocket.OPEN) {
-      this.socket.send(JSON.stringify(message));
+      try {
+        this.socket.send(JSON.stringify(message));
+      } catch (error) {
+        if (this.started) console.error("failed to send tracker message", error);
+      }
     }
   }
 
@@ -256,15 +391,15 @@ export class TrackerClient implements PeerDirectory {
     );
   }
 
-  private async requestJson<T = unknown>(
+  private async requestJson(
     endpoint: URL,
     init?: RequestInit,
-  ): Promise<T> {
+  ): Promise<unknown> {
     const response = await this.fetchImpl(endpoint, init);
     if (!response.ok) {
       throw new Error(`Tracker returned HTTP ${response.status}`);
     }
-    return (await response.json()) as T;
+    return response.json();
   }
 
   private copyPeer(peer: Peer): Peer {

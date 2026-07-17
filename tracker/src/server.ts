@@ -9,9 +9,9 @@ import type {
   PeerFailureReport,
   PeerHeartbeat,
   PeerJoinRequest,
-  PeerStatsReport,
   SegmentPossessionReport,
 } from "@openstreamgrid/common";
+import { parsePeerTrafficStats } from "@openstreamgrid/common";
 import { SQLiteStore } from "./sqlite-store.js";
 import {
   StoreError,
@@ -250,12 +250,14 @@ const optionalMetadata = (
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new RequestError("'metadata' must be an object of strings");
   }
-  for (const item of Object.values(value)) {
+  const metadata: Record<string, string> = {};
+  for (const [key, item] of Object.entries(value)) {
     if (typeof item !== "string") {
       throw new RequestError("'metadata' must be an object of strings");
     }
+    metadata[key] = item;
   }
-  return value as Record<string, string>;
+  return metadata;
 };
 
 const stringArray = (body: JsonObject, key: string): string[] => {
@@ -264,6 +266,14 @@ const stringArray = (body: JsonObject, key: string): string[] => {
     throw new RequestError(`'${key}' must be an array of strings`);
   }
   return value;
+};
+
+const decodedPathComponent = (value: string): string => {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    throw new RequestError("URL path contains invalid percent encoding");
+  }
 };
 
 export const createTrackerHandler = (
@@ -316,7 +326,7 @@ export const createTrackerHandler = (
 
       const statsMatch = path.match(/^\/api\/v1\/broadcasts\/([^/]+)\/stats$/);
       if (statsMatch?.[1] && method === "GET") {
-        sendJson(response, 200, store.getBroadcastStats(decodeURIComponent(statsMatch[1])));
+        sendJson(response, 200, store.getBroadcastStats(decodedPathComponent(statsMatch[1])));
         return;
       }
 
@@ -324,8 +334,8 @@ export const createTrackerHandler = (
         /^\/api\/v1\/broadcasts\/([^/]+)\/peers\/([^/]+)\/(segments|heartbeat|stats|reports)$/,
       );
       if (peerActionMatch?.[1] && peerActionMatch[2] && peerActionMatch[3]) {
-        const broadcastId = decodeURIComponent(peerActionMatch[1]);
-        const peerId = decodeURIComponent(peerActionMatch[2]);
+        const broadcastId = decodedPathComponent(peerActionMatch[1]);
+        const peerId = decodedPathComponent(peerActionMatch[2]);
         const action = peerActionMatch[3];
         const body = await readJson(request);
         if (action === "segments" && method === "POST") {
@@ -360,11 +370,15 @@ export const createTrackerHandler = (
           return;
         }
         if (action === "stats" && method === "POST") {
-          const report = body as unknown as PeerStatsReport;
-          if (!report.stats || typeof report.stats !== "object") {
-            throw new RequestError("'stats' must be an object");
+          let stats;
+          try {
+            stats = parsePeerTrafficStats(body.stats);
+          } catch (error) {
+            throw new RequestError(
+              error instanceof Error ? error.message : "'stats' is invalid",
+            );
           }
-          store.reportStats(broadcastId, peerId, report.stats);
+          store.reportStats(broadcastId, peerId, stats);
           sendEmpty(response, 204);
           events.statsUpdated?.(broadcastId, peerId);
           return;
@@ -393,7 +407,7 @@ export const createTrackerHandler = (
         /^\/api\/v1\/broadcasts\/([^/]+)\/peers(?:\/([^/]+))?$/,
       );
       if (peerMatch?.[1]) {
-        const broadcastId = decodeURIComponent(peerMatch[1]);
+        const broadcastId = decodedPathComponent(peerMatch[1]);
         const encodedPeerId = peerMatch[2];
         if (!encodedPeerId && method === "POST") {
           const body = await readJson(request);
@@ -418,7 +432,7 @@ export const createTrackerHandler = (
           return;
         }
         if (encodedPeerId && method === "DELETE") {
-          const peerId = decodeURIComponent(encodedPeerId);
+          const peerId = decodedPathComponent(encodedPeerId);
           store.leavePeer(broadcastId, peerId);
           sendEmpty(response, 204);
           events.peerLeft?.(broadcastId, peerId);
@@ -428,7 +442,7 @@ export const createTrackerHandler = (
 
       const broadcastMatch = path.match(/^\/api\/v1\/broadcasts\/([^/]+)$/);
       if (broadcastMatch?.[1]) {
-        const broadcastId = decodeURIComponent(broadcastMatch[1]);
+        const broadcastId = decodedPathComponent(broadcastMatch[1]);
         if (method === "GET") {
           sendJson(response, 200, {
             broadcast: store.getBroadcast(broadcastId),
@@ -519,7 +533,13 @@ export class TrackerServer {
       });
     });
     this.cleanupTimer = setInterval(
-      () => this.removeStalePeers(),
+      () => {
+        try {
+          this.removeStalePeers();
+        } catch (error) {
+          console.error("failed to remove stale peers", error);
+        }
+      },
       Math.max(1_000, Math.floor(this.stalePeerMs / 2)),
     );
     this.cleanupTimer.unref();
@@ -580,8 +600,14 @@ const run = async (): Promise<void> => {
     await server.stop();
     process.exit(0);
   };
-  process.once("SIGTERM", () => void shutdown("SIGTERM"));
-  process.once("SIGINT", () => void shutdown("SIGINT"));
+  const requestShutdown = (signal: string): void => {
+    void shutdown(signal).catch((error: unknown) => {
+      console.error("tracker shutdown failed", error);
+      process.exitCode = 1;
+    });
+  };
+  process.once("SIGTERM", () => requestShutdown("SIGTERM"));
+  process.once("SIGINT", () => requestShutdown("SIGINT"));
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
