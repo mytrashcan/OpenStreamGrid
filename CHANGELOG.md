@@ -2,6 +2,31 @@
 
 All notable changes to OpenStreamGrid are documented in this file.
 
+## [0.3.0] - 2026-07-17
+
+### Phase 5 — Production Hardening
+
+#### Added
+- STUN/TURN NAT traversal for WebRTC DataChannel (config via STUN_SERVER, TURN_SERVER, TURN_USERNAME, TURN_CREDENTIAL env vars)
+- API key authentication for tracker REST endpoints (TRACKER_API_KEY env, X-API-Key header)
+- HTTPS/WSS support (TLS_CERT_PATH + TLS_KEY_PATH env vars)
+- Token-bucket rate limiting (RATE_LIMIT_RPS, RATE_LIMIT_BURST) with 429 responses
+- Peer connection limit per broadcast (MAX_PEERS_PER_BROADCAST)
+- Prometheus /metrics endpoint with counters, gauges, and histograms
+- Multi-broadcast channel support (MULTI_STREAM_COUNT, MultiHlsStreamer)
+- Dashboard broadcast selector for multi-channel viewing
+- Buffer pool for segment data (reduced GC pressure)
+- HTTP client with connection keep-alive and pooling
+- SQLite WAL optimization (synchronous=NORMAL, cache_size=-65536)
+- Docker publish GitHub Actions workflow
+- SDK npm publish dry-run workflow
+- API_REFERENCE.md, CONTRIBUTING.md, SECURITY.md documentation
+
+#### Changed
+- Updated README.md with full API reference, env vars table, architecture diagram
+- Increased default cache size, added TTL-based eviction
+- Enhanced test suite from 26 to 95 tests
+
 ## [0.2.0] - 2026-07-17
 
 OpenStreamGrid 0.2.0 completes the four prototype phases for a universal hybrid

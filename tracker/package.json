@@ -1,6 +1,6 @@
 {
   "name": "@openstreamgrid/tracker",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "main": "dist/server.js",
@@ -12,7 +12,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@openstreamgrid/common": "0.2.0",
+    "@openstreamgrid/common": "0.3.0",
     "better-sqlite3": "^12.11.1",
     "ws": "^8.21.1"
   },
