@@ -1,0 +1,35 @@
+name: Feature request
+description: Suggest an improvement for OpenStreamGrid
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a way to improve OpenStreamGrid.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem description
+      description: What problem or limitation would this feature address?
+      placeholder: Describe the use case and why the current behavior is insufficient.
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior or API you would like to see.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe any alternative solutions or workarounds you considered.
+    validations:
+      required: true
