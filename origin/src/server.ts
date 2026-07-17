@@ -199,6 +199,7 @@ const sendJson = (
     "content-type": "application/json; charset=utf-8",
     "content-length": Buffer.byteLength(body),
     "cache-control": "no-store",
+    "access-control-allow-origin": "*",
   });
   response.end(body);
 };
@@ -378,6 +379,7 @@ export const createOriginHandler = (
       response.writeHead(200, {
         "content-type": contentTypes[extension] ?? "application/octet-stream",
         "content-length": fileStats.size,
+        "access-control-allow-origin": "*",
         "cache-control":
           extension === ".m3u8"
             ? "no-store"

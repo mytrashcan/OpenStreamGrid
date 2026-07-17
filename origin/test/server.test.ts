@@ -192,14 +192,19 @@ class FakeMultiStreamer implements MultiStreamController {
 class TestResponse extends Writable {
   statusCode = 0;
   body = Buffer.alloc(0);
+  headers: Record<string, string | number | readonly string[]> = {};
   private sent = false;
 
   get headersSent(): boolean {
     return this.sent;
   }
 
-  writeHead(statusCode: number): this {
+  writeHead(
+    statusCode: number,
+    headers: Record<string, string | number | readonly string[]> = {},
+  ): this {
     this.statusCode = statusCode;
+    this.headers = headers;
     this.sent = true;
     return this;
   }
@@ -254,6 +259,7 @@ test("serves HLS assets, creates hashes, and exposes readiness", async (context)
   });
   response = await invoke(handler, "/hls/segment_000001.ts");
   assert.equal(response.statusCode, 200);
+  assert.equal(response.headers["access-control-allow-origin"], "*");
   assert.equal(response.body.toString(), "segment-data");
   response = await invoke(handler, "/hls/segment_000001.ts.sha256");
   assert.match(

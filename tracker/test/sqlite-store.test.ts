@@ -114,6 +114,10 @@ test("implements broadcast, peer, segment, health, stats, and deletion CRUD", (c
       integrityFailures: -1,
     }),
   );
+  assert.deepEqual(
+    store.listPeerStats("live").find(({ peer }) => peer.id === "peer-a")?.stats,
+    trafficStats({ bytesDownloadedP2P: 200, integrityFailures: 0 }),
+  );
   assert.deepEqual(store.getBroadcastStats("live"), {
     broadcastId: "live",
     peers: 2,
