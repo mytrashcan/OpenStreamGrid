@@ -81,6 +81,12 @@ export interface StreamerOptions {
   hashIntervalMs?: number;
 }
 
+/** Runtime configuration for a group of independent HLS streams. */
+export interface MultiStreamerOptions extends Omit<StreamerOptions, "outputDirectory"> {
+  outputDirectory: string;
+  streamIds: readonly string[];
+}
+
 /** Lifecycle and hash-generation contract used by the origin server. */
 export interface StreamController {
   readonly playlistPath: string;
@@ -89,6 +95,12 @@ export interface StreamController {
   start(): Promise<void>;
   stop(): Promise<void>;
   ensureHash(segmentName: string): Promise<string>;
+}
+
+/** Lifecycle contract for an origin serving multiple HLS broadcasts. */
+export interface MultiStreamController extends StreamController {
+  readonly streamIds: readonly string[];
+  getStream(streamId: string): StreamController | undefined;
 }
 
 const isMissing = (error: unknown): boolean =>
@@ -459,5 +471,98 @@ export class HlsStreamer implements StreamController {
         }
       }),
     );
+  }
+}
+
+/** Runs one isolated FFmpeg-backed HLS streamer per broadcast ID. */
+export class MultiHlsStreamer implements MultiStreamController {
+  readonly streamIds: readonly string[];
+  readonly playlistPath: string;
+  readonly qualities: string[];
+  private readonly streamers = new Map<string, HlsStreamer>();
+
+  constructor(options: MultiStreamerOptions) {
+    if (options.outputDirectory.trim() === "") {
+      throw new Error("Output directory must not be empty");
+    }
+    if (options.streamIds.length === 0) {
+      throw new Error("At least one stream ID is required");
+    }
+    const uniqueIds = new Set<string>();
+    for (const streamId of options.streamIds) {
+      if (!/^[-A-Za-z0-9_.]+$/.test(streamId)) {
+        throw new Error(`Invalid stream ID: ${streamId}`);
+      }
+      if (uniqueIds.has(streamId)) {
+        throw new Error(`Duplicate stream ID: ${streamId}`);
+      }
+      uniqueIds.add(streamId);
+      this.streamers.set(
+        streamId,
+        new HlsStreamer({
+          outputDirectory: path.join(options.outputDirectory, streamId),
+          ...(options.ffmpegPath ? { ffmpegPath: options.ffmpegPath } : {}),
+          ...(options.masterPlaylistName
+            ? { masterPlaylistName: options.masterPlaylistName }
+            : {}),
+          ...(options.segmentDurationSeconds !== undefined
+            ? { segmentDurationSeconds: options.segmentDurationSeconds }
+            : {}),
+          ...(options.playlistSize !== undefined
+            ? { playlistSize: options.playlistSize }
+            : {}),
+          ...(options.hashIntervalMs !== undefined
+            ? { hashIntervalMs: options.hashIntervalMs }
+            : {}),
+        }),
+      );
+    }
+    this.streamIds = Object.freeze([...options.streamIds]);
+    const firstStream = this.streamers.get(this.streamIds[0]!);
+    if (!firstStream) throw new Error("At least one stream ID is required");
+    this.playlistPath = firstStream.playlistPath;
+    this.qualities = firstStream.qualities;
+  }
+
+  getStream(streamId: string): StreamController | undefined {
+    return this.streamers.get(streamId);
+  }
+
+  isRunning(): boolean {
+    return [...this.streamers.values()].every((streamer) => streamer.isRunning());
+  }
+
+  async start(): Promise<void> {
+    const started: HlsStreamer[] = [];
+    try {
+      for (const streamer of this.streamers.values()) {
+        await streamer.start();
+        started.push(streamer);
+      }
+    } catch (error) {
+      await Promise.allSettled(started.map((streamer) => streamer.stop()));
+      throw error;
+    }
+  }
+
+  async stop(): Promise<void> {
+    const results = await Promise.allSettled(
+      [...this.streamers.values()].map((streamer) => streamer.stop()),
+    );
+    const failures = results
+      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+      .map((result) => result.reason);
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "Failed to stop all HLS streams");
+    }
+  }
+
+  async ensureHash(segmentName: string): Promise<string> {
+    const separator = segmentName.indexOf("/");
+    if (separator <= 0) throw new Error("Segment name must include a stream ID");
+    const streamId = segmentName.slice(0, separator);
+    const streamer = this.streamers.get(streamId);
+    if (!streamer) throw new Error(`Unknown stream ID: ${streamId}`);
+    return streamer.ensureHash(segmentName.slice(separator + 1));
   }
 }

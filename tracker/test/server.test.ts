@@ -690,7 +690,14 @@ test("streams global, broadcast, REST, and WebSocket stats over SSE", async () =
     const dashboard = await fetch(`${baseUrl}/dashboard`);
     assert.equal(dashboard.status, 200);
     assert.match(dashboard.headers.get("content-type") ?? "", /^text\/html/);
-    assert.match(await dashboard.text(), /new EventSource\("\/api\/v1\/stats\/events"\)/);
+    const dashboardHtml = await dashboard.text();
+    assert.match(dashboardHtml, /new EventSource\("\/api\/v1\/stats\/events"\)/);
+    assert.match(dashboardHtml, /id="broadcast-selector"/);
+    assert.match(dashboardHtml, /All broadcasts/);
+    assert.match(
+      dashboardHtml,
+      /broadcastSelector\.addEventListener\("change"/,
+    );
 
     await fetch(`${baseUrl}/api/v1/broadcasts/live/peers`, {
       method: "POST",

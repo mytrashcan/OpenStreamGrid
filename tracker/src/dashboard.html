@@ -94,6 +94,36 @@
         font-weight: 700;
       }
 
+      .header-actions {
+        display: flex;
+        flex: 0 0 auto;
+        align-items: flex-end;
+        gap: 12px;
+      }
+
+      .broadcast-selector {
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .broadcast-selector select {
+        min-width: 180px;
+        padding: 9px 34px 9px 12px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--surface);
+        color: var(--text);
+        font: inherit;
+        font-size: 0.82rem;
+        letter-spacing: normal;
+        text-transform: none;
+      }
+
       .connection-dot {
         width: 8px;
         height: 8px;
@@ -329,6 +359,16 @@
           flex-direction: column;
         }
 
+        .header-actions {
+          width: 100%;
+          align-items: stretch;
+          flex-direction: column;
+        }
+
+        .broadcast-selector select {
+          width: 100%;
+        }
+
         .metrics {
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
@@ -378,9 +418,17 @@
             Live delivery health across the hybrid peer-to-peer and origin grid.
           </p>
         </div>
-        <div id="connection" class="connection" data-state="connecting" role="status">
-          <span class="connection-dot" aria-hidden="true"></span>
-          <span id="connection-label">Connecting</span>
+        <div class="header-actions">
+          <label class="broadcast-selector" for="broadcast-selector">
+            Broadcast
+            <select id="broadcast-selector" aria-label="Select broadcast">
+              <option value="">All broadcasts</option>
+            </select>
+          </label>
+          <div id="connection" class="connection" data-state="connecting" role="status">
+            <span class="connection-dot" aria-hidden="true"></span>
+            <span id="connection-label">Connecting</span>
+          </div>
         </div>
       </header>
 
@@ -494,7 +542,10 @@
           lastUpdated: document.getElementById("last-updated"),
           connection: document.getElementById("connection"),
           connectionLabel: document.getElementById("connection-label"),
+          broadcastSelector: document.getElementById("broadcast-selector"),
         };
+
+        let latestSnapshot;
 
         const numberFormat = new Intl.NumberFormat();
         const percentFormat = new Intl.NumberFormat(undefined, {
@@ -570,11 +621,43 @@
           elements.broadcastRows.appendChild(fragment);
         };
 
+        const syncBroadcastSelector = (broadcasts) => {
+          const selectedId = elements.broadcastSelector.value;
+          const ids = broadcasts
+            .map((entry) => String(entry.broadcast?.id ?? ""))
+            .filter((id) => id !== "")
+            .sort((left, right) => left.localeCompare(right));
+          const fragment = document.createDocumentFragment();
+          const allOption = document.createElement("option");
+          allOption.value = "";
+          allOption.textContent = "All broadcasts";
+          fragment.appendChild(allOption);
+          for (const id of ids) {
+            const option = document.createElement("option");
+            option.value = id;
+            option.textContent = id;
+            fragment.appendChild(option);
+          }
+          elements.broadcastSelector.replaceChildren(fragment);
+          elements.broadcastSelector.value = ids.includes(selectedId) ? selectedId : "";
+        };
+
+        const selectedStats = (snapshot) => {
+          const selectedId = elements.broadcastSelector.value;
+          if (selectedId === "") return snapshot.global;
+          const selected = snapshot.broadcasts.find(
+            (entry) => String(entry.broadcast?.id ?? "") === selectedId,
+          );
+          return selected ? { ...selected.stats, broadcasts: 1 } : snapshot.global;
+        };
+
         const render = (snapshot) => {
-          const global = snapshot?.global;
-          if (!global || !Array.isArray(snapshot.broadcasts)) {
+          if (!snapshot?.global || !Array.isArray(snapshot.broadcasts)) {
             throw new Error("Invalid tracker stats snapshot");
           }
+          latestSnapshot = snapshot;
+          syncBroadcastSelector(snapshot.broadcasts);
+          const global = selectedStats(snapshot);
 
           const p2pBytes = finiteNumber(global.bytesDownloadedP2P);
           const originBytes = finiteNumber(global.bytesDownloadedOrigin);
@@ -626,6 +709,10 @@
             setConnection("offline", "Invalid data");
           }
         };
+
+        elements.broadcastSelector.addEventListener("change", () => {
+          if (latestSnapshot) render(latestSnapshot);
+        });
 
         const source = new EventSource("/api/v1/stats/events");
         source.addEventListener("stats", handleEvent);
