@@ -1,12 +1,55 @@
 # OpenStreamGrid
 
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+[![Node.js 22+](https://img.shields.io/badge/Node.js-22%2B-green.svg)](package.json)
+[![Docker](https://img.shields.io/badge/Docker-ready-blue.svg)](docker-compose.yml)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-green.svg)](CONTRIBUTING.md)
+
 Universal hybrid P2P-CDN middleware for standards-based live streaming.
 
+[English](README.md) | [한국어](README.ko.md)
+
 OpenStreamGrid adds peer-assisted segment delivery to an existing HLS, LL-HLS,
-or CMAF service. It is not a complete streaming platform: the origin continues
-to encode and publish media, while OpenStreamGrid discovers peers, verifies
-segments, limits resource use, reports delivery metrics, and immediately falls
-back to the origin when P2P cannot meet the playback deadline.
+or CMAF service. Your origin continues to encode and publish media while
+OpenStreamGrid discovers peers, verifies segments, limits resource use, reports
+delivery metrics, and immediately falls back to the origin when P2P cannot meet
+the playback deadline.
+
+> OpenStreamGrid is delivery middleware, not a complete streaming platform. It
+> integrates with your existing origin, CDN, and player stack.
+
+## Quick Start
+
+With [Docker Compose v2](https://docs.docker.com/compose/) installed, start the
+tracker, test origin, and two peers with one command:
+
+```bash
+docker compose up --build
+```
+
+| Service | Local URL |
+| --- | --- |
+| Monitoring dashboard | <http://localhost:7070/dashboard> |
+| Tracker health | <http://localhost:7070/health> |
+| Master HLS playlist | <http://localhost:8080/hls/stream.m3u8> |
+| Peer A / Peer B | <http://localhost:9091> / <http://localhost:9092> |
+
+The Compose stack generates a live test pattern with FFmpeg. Once healthy, the
+peers begin exchanging verified segments and fall back to the origin whenever a
+peer is unavailable or too slow. Stop the stack with `docker compose down`.
+
+## Use Cases
+
+- **Live streaming platforms** — reduce origin and CDN segment traffic while
+  preserving reliable playback during peer churn.
+- **Enterprise webinars and town halls** — distribute simultaneous internal
+  viewing load across participating clients.
+- **E-learning and virtual classrooms** — share live lecture segments among
+  learners without replacing the existing HLS workflow.
+
+The current prototype is best suited to evaluation and controlled deployments.
+Review [Security](SECURITY.md) and the [release notes](RELEASE_NOTES.md) before
+planning a production rollout.
 
 ## Architecture
 
@@ -41,71 +84,45 @@ playlist URLs through the same API.
 
 - Hybrid HTTP/WebRTC segment delivery with immediate origin fallback.
 - API-key authentication for tracker REST, WebSocket, dashboard, and SSE access.
-- Native tracker HTTPS with certificate/key configuration; HTTPS tracker and
-  origin URLs are supported by clients.
+- Native tracker HTTPS and HTTPS-compatible tracker/origin clients.
 - Configurable STUN and TURN servers for WebRTC NAT traversal.
-- Multi-channel broadcast isolation and multi-rendition HLS generation.
-- Token-bucket tracker request limiting, per-broadcast peer caps, peer upload
-  bandwidth limiting, and concurrent-upload limits.
-- SHA-256 verification, peer trust scoring, and exclusion after integrity failures.
-- Real-time monitoring dashboard, Server-Sent Events, global/per-broadcast
-  traffic totals, and SQLite history.
-- Reusable segment `Buffer` pooling, a 512 MB default TTL-aware LRU cache,
-  explicit HTTP keep-alive connection pooling, and SQLite WAL tuning.
+- Multi-channel isolation and multi-rendition HLS generation.
+- Quality-based peer ranking, parallel downloads, and request coalescing.
+- SHA-256 verification, peer trust scoring, and integrity-failure exclusion.
+- TTL-aware LRU caching, upload bandwidth limiting, and connection limits.
+- Real-time dashboard, Prometheus metrics, SSE updates, and SQLite history.
 - Docker Compose, load-test scenarios, Kubernetes/Helm manifests, and CI.
 
-## Quick start
+## Tracker API
 
-Requirements: Docker with Compose v2. For local development, use Node.js 22+
-and FFmpeg.
-
-```bash
-git clone https://github.com/mytrashcan/OpenStreamGrid.git
-cd OpenStreamGrid
-docker compose up --build
-```
-
-| Service | Local URL |
-| --- | --- |
-| Tracker health | `http://localhost:7070/health` |
-| Dashboard | `http://localhost:7070/dashboard` |
-| Master HLS playlist | `http://localhost:8080/hls/stream.m3u8` |
-| Peer A / Peer B | `http://localhost:9091` / `http://localhost:9092` |
-
-Run the deterministic integration test with `bash test/docker-test.sh`. Run the
-load benchmark with `bash scripts/benchmark.sh`; its JSON result is written to
-`benchmark-results.json` unless `BENCHMARK_OUTPUT` overrides the destination.
-
-## API summary
-
-All tracker resources are under `/api/v1`. When `TRACKER_API_KEY` is set, send
+Tracker resources are under `/api/v1`. When `TRACKER_API_KEY` is set, send
 `X-API-Key: <key>` on protected HTTP requests and during the WebSocket upgrade.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/health` | Tracker readiness |
-| `GET` | `/dashboard` | Monitoring UI |
-| `GET` | `/metrics` | Prometheus metrics |
-| `GET` | `/ws` | WebSocket signaling upgrade |
-| `GET` | `/api/v1/stats` | Global traffic totals |
-| `GET` | `/api/v1/stats/events` | Live monitoring SSE stream |
+| `GET` | `/health` | Check tracker readiness |
+| `GET` | `/dashboard` | Open the monitoring UI |
+| `GET` | `/metrics` | Read Prometheus metrics |
+| `GET` | `/ws` | Upgrade to WebSocket signaling |
+| `GET` | `/api/v1/stats` | Read global traffic totals |
+| `GET` | `/api/v1/stats/events` | Subscribe to monitoring SSE |
 | `POST` | `/api/v1/broadcasts` | Register or update a broadcast |
 | `GET` | `/api/v1/broadcasts` | List broadcasts |
-| `GET` | `/api/v1/broadcasts/:id` | Broadcast details and peers |
+| `GET` | `/api/v1/broadcasts/:id` | Read broadcast details and peers |
 | `DELETE` | `/api/v1/broadcasts/:id` | Unregister a broadcast |
-| `GET` | `/api/v1/broadcasts/:id/stats` | Broadcast traffic totals |
+| `GET` | `/api/v1/broadcasts/:id/stats` | Read broadcast traffic totals |
 | `POST` | `/api/v1/broadcasts/:id/peers` | Join a broadcast |
 | `GET` | `/api/v1/broadcasts/:id/peers` | List peers; filter with `?segment=` |
 | `DELETE` | `/api/v1/broadcasts/:id/peers/:peerId` | Leave a broadcast |
 | `POST` | `/api/v1/broadcasts/:id/peers/:peerId/segments` | Report cached segments |
 | `PUT` | `/api/v1/broadcasts/:id/peers/:peerId/heartbeat` | Refresh peer health |
 | `POST` | `/api/v1/broadcasts/:id/peers/:peerId/stats` | Report traffic totals |
-| `POST` | `/api/v1/broadcasts/:id/peers/:peerId/reports` | Report peer failure |
+| `POST` | `/api/v1/broadcasts/:id/peers/:peerId/reports` | Report a peer failure |
 
-See [API_REFERENCE.md](API_REFERENCE.md) for request/response schemas, signaling
-messages, status codes, and origin/peer endpoints.
+See [API_REFERENCE.md](API_REFERENCE.md) for schemas, signaling messages, status
+codes, and origin/peer endpoints.
 
-## Environment variables
+## Configuration
 
 ### Tracker
 
@@ -114,17 +131,14 @@ messages, status codes, and origin/peer endpoints.
 | `PORT` | `7070` | HTTP/HTTPS listen port |
 | `HOST` | `0.0.0.0` | Listen address |
 | `STALE_PEER_MS` | `30000` | Peer inactivity timeout |
-| `STORE_TYPE` | `sqlite` | `sqlite` or `memory` |
+| `STORE_TYPE` | `sqlite` | Persistence backend: `sqlite` or `memory` |
 | `DB_PATH` | `./data/tracker.db` | SQLite database path |
-| `TRACKER_API_KEY` | unset | Enables API-key authentication when set |
+| `TRACKER_API_KEY` | unset | Enable API-key authentication |
 | `TLS_CERT_PATH` | unset | PEM certificate path; requires `TLS_KEY_PATH` |
 | `TLS_KEY_PATH` | unset | PEM private-key path; requires `TLS_CERT_PATH` |
 | `RATE_LIMIT_RPS` | `100` | Sustained requests per second per client |
 | `RATE_LIMIT_BURST` | `200` | Token-bucket burst capacity per client |
-| `MAX_PEERS_PER_BROADCAST` | `500` | Maximum active peers in one broadcast |
-
-SQLite starts in WAL mode with `synchronous=NORMAL`, a 64 MiB page cache
-(`cache_size=-65536`), and a 5-second busy timeout.
+| `MAX_PEERS_PER_BROADCAST` | `500` | Active-peer limit per broadcast |
 
 ### Origin
 
@@ -133,17 +147,17 @@ SQLite starts in WAL mode with `synchronous=NORMAL`, a 64 MiB page cache
 | `PORT` | `8080` | Origin listen port |
 | `HOST` | `0.0.0.0` | Listen address |
 | `TRACKER_URL` | `http://tracker:7070` | Tracker base URL |
-| `TRACKER_API_KEY` | unset | Tracker API key used during registration |
+| `TRACKER_API_KEY` | unset | API key used for tracker registration |
 | `BROADCAST_ID` | `live` | Base broadcast/channel ID |
-| `MULTI_STREAM_COUNT` | `1` | Number of generated test channels |
+| `MULTI_STREAM_COUNT` | `1` | Generated test-channel count |
 | `PUBLIC_ORIGIN_URL` | `http://origin:<PORT>` | URL advertised to clients |
 | `HLS_DIRECTORY` | `/tmp/openstreamgrid-hls` | Generated HLS directory |
 | `SEGMENT_DURATION_SECONDS` | `2` | HLS target duration |
-| `PLAYLIST_SIZE` | `8` | Segments retained in each media playlist |
+| `PLAYLIST_SIZE` | `8` | Segments retained per media playlist |
 | `HASH_INTERVAL_MS` | `250` | Sidecar hash discovery interval |
-| `FFMPEG_PATH` | `ffmpeg` on `PATH` | Optional FFmpeg executable override |
+| `FFMPEG_PATH` | `ffmpeg` on `PATH` | FFmpeg executable override |
 
-### Node peer
+### Node Peer
 
 | Variable | Default | Description |
 | --- | --- | --- |
@@ -154,27 +168,27 @@ SQLite starts in WAL mode with `synchronous=NORMAL`, a 64 MiB page cache
 | `PEER_ADDRESS` | required | Advertised `http://host:port` address |
 | `PEER_ID` | hostname | Stable peer identifier |
 | `UPLOAD_HOST` | `0.0.0.0` | Upload server bind address |
-| `CACHE_SIZE` | `512MB` | Maximum segment-cache bytes |
-| `CACHE_TTL_MS` | `300000` | Absolute entry lifetime in milliseconds |
+| `CACHE_SIZE` | `512MB` | Maximum segment-cache size |
+| `CACHE_TTL_MS` | `300000` | Absolute cache-entry lifetime in milliseconds |
 | `MAX_UPLOAD_SPEED` | `1Mbps` | Token-bucket upload bit rate |
 | `MAX_CONNECTIONS` | `3` | Concurrent peer uploads |
 | `MAX_PARALLEL_DOWNLOADS` | `3` | Concurrent segment downloads |
 | `PLAYLIST_POLL_MS` | `500` | HLS playlist poll interval |
 | `P2P_TIMEOUT_MS` | `2000` | Peer request deadline |
-| `WEBRTC_ENABLED` | `true` | Try WebRTC before HTTP transport |
+| `WEBRTC_ENABLED` | `true` | Try WebRTC before HTTP |
 | `STUN_SERVER` | public Google STUN | `stun:` or `stuns:` ICE server URL |
 | `TURN_SERVER` | unset | `turn:` or `turns:` relay URL |
 | `TURN_USERNAME` | unset | TURN username |
 | `TURN_CREDENTIAL` | unset | TURN credential |
 
-Equivalent CLI flags exist for tracker URL/API key, broadcast, origin, peer
-address/ID, cache size/TTL, upload limits, parallelism, and WebRTC enablement.
+Equivalent CLI flags are available for the primary peer options. Benchmark
+configuration is available through the following environment variables.
 
 ### Benchmark
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `PEER_COUNT` | `10` | Virtual peers |
+| `PEER_COUNT` | `10` | Number of virtual peers |
 | `DURATION_SECONDS` | `60` | Measurement duration |
 | `RAMP_UP_SECONDS` | `5` | Peer startup ramp |
 | `CHURN_RATE` | `0.15` | Per-cycle churn probability |
@@ -184,27 +198,18 @@ address/ID, cache size/TTL, upload limits, parallelism, and WebRTC enablement.
 | `TRACKER_URL` | `http://127.0.0.1:7070` | Host health-check URL |
 | `ORIGIN_URL` | `http://127.0.0.1:8080` | Host health-check URL |
 
-## Performance baseline
+## Performance Baseline
 
-Baseline captured on 2026-07-17 with the default benchmark scenario: 10 virtual
-peers, 60 seconds, 5-second ramp-up, low rendition, P2P enabled, and 15% churn.
-
-| Metric | Result |
-| --- | ---: |
-| P2P efficiency ratio | 46.07% |
-| CDN traffic reduction | 47.44% |
-| Segment latency p50 / p95 / p99 | 10.02 / 1682.71 / 1776.94 ms |
-| P2P / origin download | 104.72 / 116.03 MB |
-| Average upload per peer | 13.44 MB |
-| Churn events / peer sessions | 7 / 16 |
-| Integrity, churn, and segment errors | 0 |
-
-These local Docker results are a reproducible regression baseline, not a
-production capacity claim. Network topology, media bitrate, CPU allocation,
-TURN use, and churn materially affect the result. The raw measurement is stored
-in [benchmark-results.json](benchmark-results.json).
+The reproducible local Docker baseline for the default 10-peer, 60-second
+scenario achieved 46.07% P2P efficiency and 47.44% CDN traffic reduction. These
+figures are regression data, not a production capacity claim. See the raw
+[benchmark result](benchmark-results.json) and [release notes](RELEASE_NOTES.md)
+for the full scenario and latency measurements. Run it locally with
+`bash scripts/benchmark.sh`.
 
 ## Development
+
+For local development, install Node.js 22+, npm, Docker Compose v2, and FFmpeg.
 
 ```bash
 npm ci
@@ -220,10 +225,39 @@ monitoring; `origin/` owns test HLS generation and serving; `peer/` is the Node
 peer; `sdk/` is the browser/Hls.js package; `common/` contains shared contracts;
 `test/` and `scripts/` contain integration and load tooling.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) before submitting changes and
-[SECURITY.md](SECURITY.md) for vulnerability reporting and deployment guidance.
+> [!TIP]
+> **Want to contribute?** Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup,
+> testing expectations, coding guidelines, and pull request requirements.
+
+## Community
+
+[![Discord: coming soon](https://img.shields.io/badge/Discord-coming%20soon-5865F2?logo=discord&logoColor=white)](#community)
+[![GitHub stars](https://img.shields.io/github/stars/mytrashcan/OpenStreamGrid?style=social)](https://github.com/mytrashcan/OpenStreamGrid/stargazers)
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+
+- Ask usage questions and propose ideas in [GitHub Discussions](https://github.com/mytrashcan/OpenStreamGrid/discussions).
+- Report reproducible defects through [GitHub Issues](https://github.com/mytrashcan/OpenStreamGrid/issues).
+- Report security vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+
+The Discord community is not open yet. This badge will be linked to the official
+server once one is available.
+
+## Star History
+
+> Star history chart coming soon. If OpenStreamGrid is useful to you, consider
+> [starring the repository](https://github.com/mytrashcan/OpenStreamGrid).
+
+## Documentation
+
+- [Korean README](README.ko.md)
+- [API reference](API_REFERENCE.md)
+- [Contributing guide](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+- [Release notes](RELEASE_NOTES.md)
+- [Changelog](CHANGELOG.md)
+- [Kubernetes deployment guide](deploy/k8s/README.md)
+- [Browser SDK example](sdk/examples/basic.html)
 
 ## License
 
-OpenStreamGrid is licensed under the GNU General Public License v3.0. See
-[LICENSE](LICENSE).
+OpenStreamGrid is licensed under the [GNU General Public License v3.0](LICENSE).
