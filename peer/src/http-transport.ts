@@ -1,6 +1,5 @@
 import type { TransportAdapter, TransportOptions, TransportStats } from "./transport.js";
-import type { FetchFunction } from "./verifier.js";
-import type { SegmentIntegrityVerifier } from "./verifier.js";
+import type { FetchFunction, SegmentIntegrityVerifier } from "./verifier.js";
 
 const DEFAULT_P2P_TIMEOUT_MS = 2_000;
 
@@ -13,6 +12,7 @@ interface HttpTransportOptions {
   p2pTimeoutMs?: number;
 }
 
+/** HTTP implementation of peer-to-peer segment transport. */
 export class HttpTransport implements TransportAdapter {
   readonly name = "http";
   private readonly fetchImpl: FetchFunction;
@@ -81,9 +81,7 @@ export class HttpTransport implements TransportAdapter {
       }
       const data = Buffer.from(await response.arrayBuffer());
 
-      // Optional integrity verification
       if (this.verifier && !(await this.verifier.verify(segmentName, data))) {
-        this.recordFailure();
         throw new Error("Segment integrity verification failed");
       }
 

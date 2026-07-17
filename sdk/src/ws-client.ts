@@ -4,6 +4,7 @@
  * Implements exponential-backoff reconnection and periodic status reporting.
  */
 
+import { createLogger } from "@openstreamgrid/common";
 import type {
   PeerInfo,
   PeerTrafficStats,
@@ -14,6 +15,9 @@ import type {
 const DEFAULT_RECONNECT_INITIAL_MS = 1_000;
 const DEFAULT_RECONNECT_MAX_MS = 30_000;
 const DEFAULT_REPORT_INTERVAL_MS = 5_000;
+const RECONNECT_BACKOFF_MULTIPLIER = 2;
+const WEBSOCKET_NORMAL_CLOSURE_CODE = 1_000;
+const logger = createLogger("sdk");
 
 type JsonObject = Record<string, unknown>;
 
@@ -144,10 +148,11 @@ const callSafely = (label: string, callback: () => void): void => {
   try {
     callback();
   } catch (error) {
-    console.error(`[OpenStreamGrid] ${label} callback failed`, error);
+    logger.error("callback_failed", error, { callback: label });
   }
 };
 
+/** Browser tracker client callbacks and reconnection settings. */
 export interface WsClientOptions {
   trackerUrl: string;
   broadcastId: string;
@@ -243,7 +248,7 @@ export class WsTrackerClient {
         this.ws.readyState === WebSocket.OPEN ||
         this.ws.readyState === WebSocket.CONNECTING
       ) {
-        this.ws.close(1000, "Peer shutting down");
+        this.ws.close(WEBSOCKET_NORMAL_CLOSURE_CODE, "Peer shutting down");
       }
       this.ws = null;
     }
@@ -284,8 +289,8 @@ export class WsTrackerClient {
 
     try {
       ws = new WebSocket(url);
-    } catch (err) {
-      console.error("[OpenStreamGrid] Failed to create WebSocket", err);
+    } catch (error) {
+      logger.error("websocket_creation_failed", error);
       this.scheduleReconnect();
       return;
     }
@@ -316,7 +321,7 @@ export class WsTrackerClient {
 
     ws.onerror = (event: Event) => {
       if (this.ws === ws && this.started) {
-        console.error("[OpenStreamGrid] WebSocket error");
+        logger.error("websocket_error", new Error("Browser WebSocket error"));
         callSafely("onError", () => this.options.onError?.(event));
       }
     };
@@ -334,7 +339,7 @@ export class WsTrackerClient {
     if (!this.started || this.reconnectTimer) return;
     const delayMs = this.nextReconnectMs;
     this.nextReconnectMs = Math.min(
-      this.nextReconnectMs * 2,
+      this.nextReconnectMs * RECONNECT_BACKOFF_MULTIPLIER,
       this.reconnectMaxMs,
     );
     this.reconnectTimer = setTimeout(() => {
@@ -344,14 +349,12 @@ export class WsTrackerClient {
   }
 
   private reportStatus(): void {
-    // Heartbeat
     this.send({
       type: "heartbeat",
       broadcastId: this.options.broadcastId,
       peerId: this.options.peerId,
     });
 
-    // Stats
     const stats = this.options.getStats?.();
     if (stats) {
       this.send({
@@ -362,7 +365,6 @@ export class WsTrackerClient {
       });
     }
 
-    // Segment possession
     this.reportSegments();
   }
 
@@ -371,7 +373,7 @@ export class WsTrackerClient {
       this.reportStatus();
     } catch (error) {
       if (this.started) {
-        console.error("[OpenStreamGrid] Failed to report peer status", error);
+        logger.error("status_report_failed", error);
       }
     }
   }
@@ -419,8 +421,8 @@ export class WsTrackerClient {
           break;
         }
       }
-    } catch (err) {
-      console.error("[OpenStreamGrid] Invalid WebSocket message", err);
+    } catch (error) {
+      logger.error("invalid_tracker_message", error);
     }
   }
 
@@ -429,7 +431,7 @@ export class WsTrackerClient {
       try {
         this.ws.send(JSON.stringify(msg));
       } catch (error) {
-        console.error("[OpenStreamGrid] Failed to send WebSocket message", error);
+        logger.error("tracker_message_send_failed", error);
       }
     }
   }

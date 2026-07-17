@@ -10,26 +10,31 @@ import {
 } from "./webrtc-transport.js";
 import type { FetchFunction, SegmentIntegrityVerifier } from "./verifier.js";
 
+/** Transport names managed by the peer fallback coordinator. */
 export type ManagedTransportName = "webrtc" | "http";
 
 const MAX_TRACKED_PEERS = 2_000;
 
+/** Attempt and failure counters for one transport. */
 export interface TransportAttemptStats {
   successes: number;
   failures: number;
 }
 
+/** Aggregate transport usage snapshot. */
 export interface TransportManagerStats {
   lastTransport: ManagedTransportName | null;
   webrtc: TransportAttemptStats;
   http: TransportAttemptStats;
 }
 
+/** Peer identifiers and addresses available to each transport. */
 export interface TransportPeer {
   id: string;
   address: string;
 }
 
+/** Transport dependencies and WebRTC fallback configuration. */
 export interface TransportManagerOptions
   extends Pick<
     TransportOptions,

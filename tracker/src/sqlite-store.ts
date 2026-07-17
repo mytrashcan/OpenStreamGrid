@@ -1,60 +1,29 @@
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import type {
-  Broadcast,
-  BroadcastRegistration,
-  BroadcastStats,
-  GlobalStats,
-  Peer,
-  PeerFailureReport,
-  PeerHeartbeat,
-  PeerJoinRequest,
-  PeerTrafficStats,
-  TrafficTotals,
+import {
+  type Broadcast,
+  type BroadcastRegistration,
+  type BroadcastStats,
+  type GlobalStats,
+  type Peer,
+  type PeerFailureReport,
+  type PeerHeartbeat,
+  type PeerJoinRequest,
+  type PeerTrafficStats,
+  type TrafficTotals,
 } from "@openstreamgrid/common";
 import Database from "better-sqlite3";
 import { runSQLiteMigrations } from "./sqlite-migration.js";
 import { StoreError, type TrackerStoreBackend } from "./store.js";
+import {
+  clampUnitInterval,
+  penalizePeerQuality,
+  sanitizePeerTrafficStats,
+} from "./store-utils.js";
 
 const DEFAULT_DB_PATH = "./data/tracker.db";
-
-const trafficKeys: ReadonlyArray<keyof PeerTrafficStats> = [
-  "bytesDownloadedP2P",
-  "bytesDownloadedOrigin",
-  "bytesUploadedP2P",
-  "p2pRequests",
-  "p2pSuccesses",
-  "p2pFailures",
-  "originRequests",
-  "integrityFailures",
-  "fallbacks",
-  "segmentsCached",
-];
-
-const emptyTrafficStats = (): PeerTrafficStats => ({
-  bytesDownloadedP2P: 0,
-  bytesDownloadedOrigin: 0,
-  bytesUploadedP2P: 0,
-  p2pRequests: 0,
-  p2pSuccesses: 0,
-  p2pFailures: 0,
-  originRequests: 0,
-  integrityFailures: 0,
-  fallbacks: 0,
-  segmentsCached: 0,
-});
-
-const clamp = (value: number, minimum: number, maximum: number): number =>
-  Math.min(maximum, Math.max(minimum, value));
-
-const sanitizeStats = (stats: PeerTrafficStats): PeerTrafficStats => {
-  const sanitized = emptyTrafficStats();
-  for (const key of trafficKeys) {
-    const value = stats[key];
-    sanitized[key] = Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
-  }
-  return sanitized;
-};
+const DATABASE_BUSY_TIMEOUT_MS = 5_000;
+const NOT_FOUND_STATUS_CODE = 404;
 
 interface BroadcastRow {
   id: string;
@@ -117,6 +86,7 @@ interface StatsHistoryRow {
   p2p_success_rate: number;
 }
 
+/** Persisted traffic-rollup entry returned by the SQLite store. */
 export interface StatsHistoryEntry {
   timestamp: string;
   broadcastId: string;
@@ -377,6 +347,7 @@ const prepareStatements = (database: Database.Database) => ({
 
 type Statements = ReturnType<typeof prepareStatements>;
 
+/** SQLite-backed implementation of tracker state and statistics. */
 export class SQLiteStore implements TrackerStoreBackend {
   private readonly database: Database.Database;
   private readonly statements: Statements;
@@ -391,7 +362,7 @@ export class SQLiteStore implements TrackerStoreBackend {
     }
     this.database = new Database(databasePath);
     this.database.pragma("journal_mode = WAL");
-    this.database.pragma("busy_timeout = 5000");
+    this.database.pragma(`busy_timeout = ${DATABASE_BUSY_TIMEOUT_MS}`);
     runSQLiteMigrations(this.database);
     this.statements = prepareStatements(this.database);
   }
@@ -550,7 +521,7 @@ export class SQLiteStore implements TrackerStoreBackend {
       successRate:
         heartbeat.successRate === undefined
           ? peer.successRate
-          : clamp(heartbeat.successRate, 0, 1),
+          : clampUnitInterval(heartbeat.successRate),
       lastSeenAt: this.timestamp(),
     });
     return this.requirePeer(broadcastId, peerId);
@@ -566,7 +537,7 @@ export class SQLiteStore implements TrackerStoreBackend {
       this.statements.replacePeerStats.run({
         broadcastId,
         peerId,
-        ...sanitizeStats(stats),
+        ...sanitizePeerTrafficStats(stats),
       });
       this.statements.updatePeerLastSeen.run({
         broadcastId,
@@ -583,12 +554,11 @@ export class SQLiteStore implements TrackerStoreBackend {
   ): Peer {
     const reported = this.requirePeer(broadcastId, peerId);
     this.requirePeer(broadcastId, report.reporterId);
-    const penalty = report.reason === "integrity" ? 0.35 : 0.1;
+    const quality = penalizePeerQuality(reported, report.reason);
     this.statements.updatePeerTrust.run({
       broadcastId,
       peerId,
-      trustScore: clamp(reported.trustScore - penalty, 0, 1),
-      successRate: clamp(reported.successRate - penalty / 2, 0, 1),
+      ...quality,
     });
     return this.requirePeer(broadcastId, peerId);
   }
@@ -632,7 +602,7 @@ export class SQLiteStore implements TrackerStoreBackend {
           p2pSuccessRate:
             totals.p2pRequests === 0
               ? 0
-              : clamp(totals.p2pSuccesses / totals.p2pRequests, 0, 1),
+              : clampUnitInterval(totals.p2pSuccesses / totals.p2pRequests),
         };
         this.statements.insertStatsHistory.run(entry);
         return entry;
@@ -670,7 +640,7 @@ export class SQLiteStore implements TrackerStoreBackend {
   private requireBroadcast(id: string): Broadcast {
     const broadcast = this.findBroadcast(id);
     if (!broadcast) {
-      throw new StoreError(`Broadcast '${id}' was not found`, 404);
+      throw new StoreError(`Broadcast '${id}' was not found`, NOT_FOUND_STATUS_CODE);
     }
     return broadcast;
   }
@@ -685,7 +655,7 @@ export class SQLiteStore implements TrackerStoreBackend {
     this.requireBroadcast(broadcastId);
     const row = this.findPeer(broadcastId, peerId);
     if (!row) {
-      throw new StoreError(`Peer '${peerId}' was not found`, 404);
+      throw new StoreError(`Peer '${peerId}' was not found`, NOT_FOUND_STATUS_CODE);
     }
     return this.mapPeer(row);
   }

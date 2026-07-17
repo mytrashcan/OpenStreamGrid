@@ -1,4 +1,8 @@
-import type { Peer, PeerFailureReport } from "@openstreamgrid/common";
+import {
+  createLogger,
+  type Peer,
+  type PeerFailureReport,
+} from "@openstreamgrid/common";
 import type { SegmentCache } from "./cache.js";
 import type { TrafficStats } from "./stats.js";
 import type {
@@ -18,10 +22,12 @@ const LATENCY_WEIGHT = 0.3;
 const SUCCESS_RATE_WEIGHT = 0.3;
 const UPLOAD_BANDWIDTH_WEIGHT = 0.2;
 const TRUST_SCORE_WEIGHT = 0.2;
+const logger = createLogger("peer");
 
 const clamp = (value: number, minimum: number, maximum: number): number =>
   Math.min(maximum, Math.max(minimum, value));
 
+/** Quality measurements used to rank a potential segment source. */
 export interface PeerQualityMetrics {
   latencyMs: number;
   successRate: number;
@@ -29,11 +35,13 @@ export interface PeerQualityMetrics {
   trustScore: number;
 }
 
+/** Updates a metric using the selector's exponential moving average. */
 export const exponentialMovingAverage = (
   previous: number,
   observed: number,
 ): number => METRIC_EMA_ALPHA * observed + (1 - METRIC_EMA_ALPHA) * previous;
 
+/** Produces a normalized weighted quality score for a peer. */
 export const calculatePeerScore = (
   metrics: PeerQualityMetrics,
   maximumUploadBandwidthBps: number,
@@ -53,6 +61,7 @@ export const calculatePeerScore = (
   );
 };
 
+/** Peer discovery and failure-reporting operations required by the fetcher. */
 export interface PeerDirectory {
   listPeers(segmentName: string): Promise<Peer[]>;
   reportFailure(peerId: string, reason: PeerFailureReport["reason"]): Promise<void>;
@@ -72,6 +81,7 @@ interface FetcherOptions {
   transportManager?: TransportManager;
 }
 
+/** Segment bytes and the delivery path that supplied them. */
 export interface SegmentFetchResult {
   data: Buffer;
   source: "cache" | "p2p" | "origin";
@@ -86,6 +96,7 @@ class PeerFetchError extends Error {
   }
 }
 
+/** Fetches verified segments from cache, peers, or origin in priority order. */
 export class HybridSegmentFetcher {
   private readonly fetchImpl: FetchFunction;
   private readonly p2pTimeoutMs: number;
@@ -151,7 +162,7 @@ export class HybridSegmentFetcher {
         );
       } catch (error) {
         this.options.stats.recordFallback();
-        console.error("peer discovery failed; using origin", error);
+        logger.error("peer_discovery_failed", error, { segmentName });
       }
       const peer = peers[0];
       if (peer) {
@@ -179,7 +190,9 @@ export class HybridSegmentFetcher {
           void this.options.directory
             .reportFailure(peer.id, failure.reason)
             .catch((reportError: unknown) => {
-              console.error("failed to report peer failure", reportError);
+              logger.error("peer_failure_report_failed", reportError, {
+                peerId: peer.id,
+              });
             });
         }
       }
@@ -301,7 +314,9 @@ export class HybridSegmentFetcher {
         void this.options.directory
           .reportFailure(peer.id, failure.reason)
           .catch((reportError: unknown) => {
-            console.error("failed to report peer failure", reportError);
+            logger.error("peer_failure_report_failed", reportError, {
+              peerId: peer.id,
+            });
           });
       }
     }

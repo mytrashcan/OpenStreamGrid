@@ -1,20 +1,11 @@
-import type { PeerTrafficStats } from "@openstreamgrid/common";
+import {
+  createEmptyPeerTrafficStats,
+  type PeerTrafficStats,
+} from "@openstreamgrid/common";
 
-const emptyStats = (): PeerTrafficStats => ({
-  bytesDownloadedP2P: 0,
-  bytesDownloadedOrigin: 0,
-  bytesUploadedP2P: 0,
-  p2pRequests: 0,
-  p2pSuccesses: 0,
-  p2pFailures: 0,
-  originRequests: 0,
-  integrityFailures: 0,
-  fallbacks: 0,
-  segmentsCached: 0,
-});
-
+/** Mutable peer traffic counters with immutable snapshot access. */
 export class TrafficStats {
-  private readonly values = emptyStats();
+  private readonly values = createEmptyPeerTrafficStats();
 
   snapshot(): PeerTrafficStats {
     return { ...this.values };

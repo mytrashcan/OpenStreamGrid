@@ -1,8 +1,10 @@
+/** Immutable data and insertion metadata for one cached segment. */
 export interface CacheEntry {
   readonly data: Buffer;
   readonly storedAt: number;
 }
 
+/** Byte-limited least-recently-used cache for peer segment data. */
 export class SegmentCache {
   private readonly entries = new Map<string, CacheEntry>();
   private totalBytes = 0;

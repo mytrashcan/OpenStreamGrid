@@ -10,6 +10,7 @@ export interface CachedSegment {
   hash?: string;
 }
 
+/** Tracker peer metadata consumed by the browser SDK. */
 export interface PeerInfo {
   id: string;
   address: string;
@@ -24,12 +25,14 @@ export interface PeerInfo {
   lastSeenAt?: string;
 }
 
+/** Result of verifying browser segment bytes against an expected digest. */
 export interface SegmentVerificationResult {
   valid: boolean;
   actualHash: string;
   expectedHash?: string;
 }
 
+/** Configuration for attaching P2P delivery to an Hls.js player. */
 export interface HlsjsPluginConfig {
   /** WebSocket URL of the tracker (e.g., ws://tracker:7070/ws). */
   trackerUrl: string;
@@ -51,6 +54,7 @@ export interface HlsjsPluginConfig {
   onReady?: () => void;
 }
 
+/** Diagnostic event emitted by the browser SDK. */
 export interface SdkEvent {
   type:
     | "peer_fetched"
@@ -73,6 +77,7 @@ export interface SdkEvent {
 }
 
 /** Message types for tracker WebSocket communication. */
+/** Messages emitted by the browser SDK to the tracker. */
 export type WsClientMessage =
   | { type: "subscribe"; broadcastId: string; peerId: string }
   | {
@@ -97,6 +102,7 @@ export type WsClientMessage =
       stats: PeerTrafficStats;
     };
 
+/** Messages accepted by the browser SDK from the tracker. */
 export type WsServerMessage =
   | { type: "peer_joined"; broadcastId: string; peer: PeerInfo }
   | { type: "peer_left"; broadcastId: string; peerId: string }
@@ -109,6 +115,7 @@ export type WsServerMessage =
   | { type: "stats_update"; broadcastId: string; peerId: string; stats: unknown }
   | { type: "peer_list"; broadcastId: string; peers: PeerInfo[] };
 
+/** Cumulative browser peer traffic and integrity counters. */
 export interface PeerTrafficStats {
   bytesDownloadedP2P: number;
   bytesDownloadedOrigin: number;
