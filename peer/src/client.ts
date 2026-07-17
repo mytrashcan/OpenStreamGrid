@@ -29,6 +29,7 @@ interface PeerConfiguration {
   maxConnections: number;
   maxParallelDownloads: number;
   playlistPollMs: number;
+  webRtcEnabled: boolean;
 }
 
 const delay = async (milliseconds: number, signal: AbortSignal): Promise<void> => {
@@ -99,6 +100,7 @@ class PeerApplication {
       signalUrl: signalUrl.href,
       peerId: configuration.peerId,
       broadcastId: configuration.broadcastId,
+      webRtcEnabled: configuration.webRtcEnabled,
       verifier,
       webRtc: {
         segmentProvider: (segmentName) => this.cache.get(segmentName),
@@ -216,6 +218,9 @@ class PeerApplication {
           segment: segmentName,
           source: this.fetcher.getLastSource(segmentName),
           bytes: data.byteLength,
+          ...(this.fetcher.getLastSource(segmentName) === "p2p"
+            ? { transport: this.transportManager.getStats().lastTransport }
+            : {}),
         }),
       );
     }
@@ -250,6 +255,13 @@ const parsePositiveInteger = (value: string, label: string): number => {
     throw new Error(`${label} must be a positive integer`);
   }
   return parsed;
+};
+
+const parseBoolean = (value: string, label: string): boolean => {
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes"].includes(normalized)) return true;
+  if (["0", "false", "no"].includes(normalized)) return false;
+  throw new Error(`${label} must be true or false`);
 };
 
 const parseDataSize = (value: string): number => {
@@ -321,6 +333,7 @@ export const parseArguments = (
     "max-upload-speed",
     "max-connections",
     "parallel-downloads",
+    "webrtc-enabled",
   ]);
   for (const key of values.keys()) {
     if (!supported.has(key)) throw new Error(`Unknown CLI argument '--${key}'`);
@@ -371,6 +384,10 @@ export const parseArguments = (
     playlistPollMs: parsePositiveInteger(
       environment.PLAYLIST_POLL_MS ?? String(DEFAULT_PLAYLIST_POLL_MS),
       "Playlist poll interval",
+    ),
+    webRtcEnabled: parseBoolean(
+      values.get("webrtc-enabled") ?? environment.WEBRTC_ENABLED ?? "true",
+      "WebRTC enabled",
     ),
   };
 };

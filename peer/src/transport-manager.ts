@@ -36,6 +36,7 @@ export interface TransportManagerOptions
   fetchImpl?: FetchFunction;
   verifier?: SegmentIntegrityVerifier;
   p2pTimeoutMs?: number;
+  webRtcEnabled?: boolean;
   webRtc?: WebRtcTransportOptions;
   /** Dependency injection hooks used by transport-level unit tests. */
   webRtcTransport?: TransportAdapter;
@@ -47,6 +48,7 @@ export class TransportManager {
   private readonly webRtcTransport: TransportAdapter;
   private readonly httpTransport: TransportAdapter;
   private readonly transportOptions: TransportOptions;
+  private readonly webRtcEnabled: boolean;
   private readonly peerIdsByAddress = new Map<string, string>();
   private readonly usage: TransportManagerStats = {
     lastTransport: null,
@@ -56,6 +58,7 @@ export class TransportManager {
   private started = false;
 
   constructor(options: TransportManagerOptions = {}) {
+    this.webRtcEnabled = options.webRtcEnabled ?? true;
     this.webRtcTransport =
       options.webRtcTransport ??
       new WebRtcTransport({
@@ -86,10 +89,12 @@ export class TransportManager {
     this.started = true;
     try {
       await this.httpTransport.start(this.transportOptions);
-      try {
-        await this.webRtcTransport.start(this.transportOptions);
-      } catch {
-        // Signaling can be retried lazily by requestSegment; HTTP stays usable.
+      if (this.webRtcEnabled) {
+        try {
+          await this.webRtcTransport.start(this.transportOptions);
+        } catch {
+          // Signaling can be retried lazily by requestSegment; HTTP stays usable.
+        }
       }
     } catch (error) {
       this.started = false;
@@ -116,15 +121,19 @@ export class TransportManager {
     signal?: AbortSignal,
   ): Promise<Buffer> {
     const webRtcPeerId = this.peerIdsByAddress.get(peerAddress) ?? peerAddress;
-    try {
-      const data = await this.webRtcTransport.requestSegment(
-        webRtcPeerId,
-        segmentName,
-        signal,
-      );
-      this.recordSuccess("webrtc");
-      return data;
-    } catch {
+    if (this.webRtcEnabled) {
+      try {
+        const data = await this.webRtcTransport.requestSegment(
+          webRtcPeerId,
+          segmentName,
+          signal,
+        );
+        this.recordSuccess("webrtc");
+        return data;
+      } catch {
+        this.recordFailure("webrtc");
+      }
+    } else {
       this.recordFailure("webrtc");
     }
 
