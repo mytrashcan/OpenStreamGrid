@@ -42,6 +42,7 @@ export interface TrackerStoreBackend {
   joinPeer(broadcastId: string, request: PeerJoinRequest): Peer;
   leavePeer(broadcastId: string, peerId: string): void;
   listPeers(broadcastId: string, segment?: string): Peer[];
+  listPeerStats(broadcastId: string): PeerStatsSnapshot[];
   reportSegments(
     broadcastId: string,
     peerId: string,
@@ -67,6 +68,12 @@ export interface TrackerStoreBackend {
   getBroadcastStats(broadcastId: string): BroadcastStats;
   getGlobalStats(): GlobalStats;
   close(): void;
+}
+
+/** Active peer metadata paired with the peer's cumulative traffic counters. */
+export interface PeerStatsSnapshot {
+  peer: Peer;
+  stats: PeerTrafficStats;
 }
 
 interface PeerState {
@@ -180,6 +187,12 @@ export class TrackerStore implements TrackerStoreBackend {
     return peers
       .filter(({ peer }) => segment === undefined || peer.segments.includes(segment))
       .map(({ peer }) => this.copyPeer(peer));
+  }
+
+  listPeerStats(broadcastId: string): PeerStatsSnapshot[] {
+    return [...this.requireBroadcast(broadcastId).peers.values()].map(
+      ({ peer, stats }) => ({ peer: this.copyPeer(peer), stats: { ...stats } }),
+    );
   }
 
   reportSegments(

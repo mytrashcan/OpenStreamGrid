@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import {
+  createEmptyPeerTrafficStats,
   type Broadcast,
   type BroadcastRegistration,
   type BroadcastStats,
@@ -14,7 +15,11 @@ import {
 } from "@openstreamgrid/common";
 import Database from "better-sqlite3";
 import { runSQLiteMigrations } from "./sqlite-migration.js";
-import { StoreError, type TrackerStoreBackend } from "./store.js";
+import {
+  StoreError,
+  type PeerStatsSnapshot,
+  type TrackerStoreBackend,
+} from "./store.js";
 import {
   clampUnitInterval,
   penalizePeerQuality,
@@ -71,6 +76,10 @@ interface TrafficRow {
   integrity_failures: number;
   fallbacks: number;
   segments_cached: number;
+}
+
+interface PeerTrafficRow extends Omit<TrafficRow, "peers"> {
+  peer_id: string;
 }
 
 interface GlobalTrafficRow extends TrafficRow {
@@ -160,6 +169,14 @@ const prepareStatements = (database: Database.Database) => ({
       ON s.broadcast_id = p.broadcast_id AND s.peer_id = p.peer_id
     WHERE p.broadcast_id = @broadcastId AND s.segment_name = @segment
     ORDER BY p.joined_at, p.peer_id
+  `),
+  listPeerStats: database.prepare(`
+    SELECT peer_id, bytes_downloaded_p2p, bytes_downloaded_origin,
+           bytes_uploaded_p2p, p2p_requests, p2p_successes, p2p_failures,
+           origin_requests, integrity_failures, fallbacks, segments_cached
+    FROM peer_stats
+    WHERE broadcast_id = @broadcastId
+    ORDER BY peer_id
   `),
   upsertPeer: database.prepare(`
     INSERT INTO peers(
@@ -485,6 +502,17 @@ export class SQLiteStore implements TrackerStoreBackend {
     return rows.map((row) => this.mapPeer(row, segmentsByPeer.get(row.peer_id) ?? []));
   }
 
+  listPeerStats(broadcastId: string): PeerStatsSnapshot[] {
+    const rows = this.statements.listPeerStats.all({ broadcastId }) as PeerTrafficRow[];
+    const statsByPeer = new Map(
+      rows.map((row) => [row.peer_id, this.mapPeerTrafficStats(row)]),
+    );
+    return this.listPeers(broadcastId).map((peer) => ({
+      peer,
+      stats: statsByPeer.get(peer.id) ?? createEmptyPeerTrafficStats(),
+    }));
+  }
+
   reportSegments(
     broadcastId: string,
     peerId: string,
@@ -731,6 +759,14 @@ export class SQLiteStore implements TrackerStoreBackend {
   private mapTrafficTotals(row: TrafficRow): TrafficTotals {
     return {
       peers: row.peers,
+      ...this.mapPeerTrafficStats(row),
+    };
+  }
+
+  private mapPeerTrafficStats(
+    row: Omit<TrafficRow, "peers">,
+  ): PeerTrafficStats {
+    return {
       bytesDownloadedP2P: row.bytes_downloaded_p2p,
       bytesDownloadedOrigin: row.bytes_downloaded_origin,
       bytesUploadedP2P: row.bytes_uploaded_p2p,

@@ -110,6 +110,7 @@ export interface TrackerStatsSnapshot {
   broadcasts: Array<{
     broadcast: Broadcast;
     stats: BroadcastStats;
+    peers: ReturnType<TrackerStoreBackend["listPeerStats"]>;
   }>;
 }
 
@@ -171,6 +172,7 @@ export class TrackerStatsSse implements TrackerEvents {
       broadcasts: this.store.listBroadcasts().map((broadcast) => ({
         broadcast,
         stats: this.store.getBroadcastStats(broadcast.id),
+        peers: this.store.listPeerStats(broadcast.id),
       })),
     };
   }

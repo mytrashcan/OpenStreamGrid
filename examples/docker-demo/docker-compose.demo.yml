@@ -1,0 +1,182 @@
+name: openstreamgrid-community-demo
+
+x-service-defaults: &service-defaults
+  init: true
+  restart: unless-stopped
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  networks:
+    - demo-grid
+
+x-peer-environment: &peer-environment
+  TRACKER_URL: http://tracker:7070
+  BROADCAST_ID: live
+  ORIGIN_URL: http://origin:8080/hls/low
+  CACHE_SIZE: 256MB
+  CACHE_TTL_MS: "300000"
+  MAX_UPLOAD_SPEED: 4Mbps
+  MAX_CONNECTIONS: "4"
+  MAX_PARALLEL_DOWNLOADS: "3"
+  P2P_TIMEOUT_MS: "1500"
+  # Plain HTTP keeps this local demo deterministic and avoids external STUN.
+  WEBRTC_ENABLED: "false"
+
+x-peer-base: &peer-base
+  <<: *service-defaults
+  build:
+    context: ../..
+    dockerfile: peer/Dockerfile
+  depends_on:
+    tracker:
+      condition: service_healthy
+    origin:
+      condition: service_healthy
+  healthcheck:
+    test:
+      - CMD
+      - /nodejs/bin/node
+      - -e
+      - fetch('http://127.0.0.1:9090/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+    interval: 2s
+    timeout: 2s
+    retries: 20
+    start_period: 3s
+  stop_grace_period: 5s
+
+services:
+  tracker:
+    <<: *service-defaults
+    build:
+      context: ../..
+      dockerfile: tracker/Dockerfile
+    environment:
+      PORT: "7070"
+      STORE_TYPE: memory
+      STALE_PEER_MS: "30000"
+    ports:
+      - "7070:7070"
+    healthcheck:
+      test:
+        - CMD
+        - /nodejs/bin/node
+        - -e
+        - fetch('http://127.0.0.1:7070/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 2s
+      timeout: 2s
+      retries: 20
+      start_period: 3s
+
+  origin:
+    <<: *service-defaults
+    build:
+      context: ../..
+      dockerfile: origin/Dockerfile
+    environment:
+      PORT: "8080"
+      TRACKER_URL: http://tracker:7070
+      BROADCAST_ID: live
+      PUBLIC_ORIGIN_URL: http://origin:8080
+      HLS_DIRECTORY: /tmp/openstreamgrid-hls
+    depends_on:
+      tracker:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    healthcheck:
+      test:
+        - CMD
+        - /nodejs/bin/node
+        - -e
+        - fetch('http://127.0.0.1:8080/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
+    stop_grace_period: 8s
+
+  peer-1:
+    <<: *peer-base
+    environment:
+      <<: *peer-environment
+      PEER_ID: peer-1
+      PEER_ADDRESS: http://peer-1:9090
+      PLAYLIST_POLL_MS: "250"
+    ports:
+      - "9091:9090"
+
+  peer-2:
+    <<: *peer-base
+    environment:
+      <<: *peer-environment
+      PEER_ID: peer-2
+      PEER_ADDRESS: http://peer-2:9090
+      PLAYLIST_POLL_MS: "550"
+    depends_on:
+      tracker:
+        condition: service_healthy
+      origin:
+        condition: service_healthy
+      peer-1:
+        condition: service_healthy
+    ports:
+      - "9092:9090"
+
+  peer-3:
+    <<: *peer-base
+    environment:
+      <<: *peer-environment
+      PEER_ID: peer-3
+      PEER_ADDRESS: http://peer-3:9090
+      PLAYLIST_POLL_MS: "700"
+    depends_on:
+      tracker:
+        condition: service_healthy
+      origin:
+        condition: service_healthy
+      peer-1:
+        condition: service_healthy
+    ports:
+      - "9093:9090"
+
+  peer-4:
+    <<: *peer-base
+    environment:
+      <<: *peer-environment
+      PEER_ID: peer-4
+      PEER_ADDRESS: http://peer-4:9090
+      PLAYLIST_POLL_MS: "850"
+    depends_on:
+      tracker:
+        condition: service_healthy
+      origin:
+        condition: service_healthy
+      peer-1:
+        condition: service_healthy
+    ports:
+      - "9094:9090"
+
+  peer-5:
+    <<: *peer-base
+    environment:
+      <<: *peer-environment
+      PEER_ID: peer-5
+      PEER_ADDRESS: http://peer-5:9090
+      PLAYLIST_POLL_MS: "1000"
+    depends_on:
+      tracker:
+        condition: service_healthy
+      origin:
+        condition: service_healthy
+      peer-1:
+        condition: service_healthy
+    ports:
+      - "9095:9090"
+
+networks:
+  demo-grid:
+    driver: bridge

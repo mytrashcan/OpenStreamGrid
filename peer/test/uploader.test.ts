@@ -101,6 +101,7 @@ test("serves GET and HEAD requests and records only transferred bytes", async (c
   const response = await fetch(`${baseUrl}/segments/segment%2Ets`);
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("cache-control"), "private, max-age=60");
+  assert.equal(response.headers.get("access-control-allow-origin"), "*");
   assert.equal(await response.text(), "segment-data");
   assert.equal(stats.snapshot().bytesUploadedP2P, 12);
 });
