@@ -99,7 +99,9 @@ export class TrackerStore implements TrackerStoreBackend {
       existing.broadcast = {
         ...existing.broadcast,
         playlistUrl: registration.playlistUrl,
-        ...(registration.metadata ? { metadata: registration.metadata } : {}),
+        ...(registration.metadata
+          ? { metadata: { ...registration.metadata } }
+          : {}),
         updatedAt: timestamp,
       };
       return { broadcast: this.copyBroadcast(existing.broadcast), created: false };
@@ -108,7 +110,9 @@ export class TrackerStore implements TrackerStoreBackend {
     const broadcast: Broadcast = {
       id: registration.id,
       playlistUrl: registration.playlistUrl,
-      ...(registration.metadata ? { metadata: registration.metadata } : {}),
+      ...(registration.metadata
+        ? { metadata: { ...registration.metadata } }
+        : {}),
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -146,7 +150,7 @@ export class TrackerStore implements TrackerStoreBackend {
       ...(request.uploadBandwidthBps !== undefined
         ? { uploadBandwidthBps: request.uploadBandwidthBps }
         : {}),
-      ...(request.metadata ? { metadata: request.metadata } : {}),
+      ...(request.metadata ? { metadata: { ...request.metadata } } : {}),
       segments: existing?.peer.segments ?? [],
       joinedAt: existing?.peer.joinedAt ?? timestamp,
       lastSeenAt: timestamp,

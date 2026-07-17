@@ -211,6 +211,14 @@ test("downloads urgent segments first from distinct peers up to the parallel lim
   const requests: string[] = [];
   let activeRequests = 0;
   let maximumActiveRequests = 0;
+  let releaseFirstWave: (() => void) | undefined;
+  const firstWaveReleased = new Promise<void>((resolve) => {
+    releaseFirstWave = resolve;
+  });
+  let firstWaveStarted: (() => void) | undefined;
+  const firstWaveReady = new Promise<void>((resolve) => {
+    firstWaveStarted = resolve;
+  });
   const fetcher = new HybridSegmentFetcher({
     selfPeerId: "self",
     originBaseUrl: new URL("http://origin:8080/hls/"),
@@ -224,23 +232,29 @@ test("downloads urgent segments first from distinct peers up to the parallel lim
       requests.push(`${url.hostname}${url.pathname}`);
       activeRequests += 1;
       maximumActiveRequests = Math.max(maximumActiveRequests, activeRequests);
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      if (requests.length <= 2) {
+        if (requests.length === 2) firstWaveStarted?.();
+        await firstWaveReleased;
+      }
       activeRequests -= 1;
       return new Response(url.pathname);
     },
   });
 
-  const result = await fetcher.fetchSegments(
+  const pending = fetcher.fetchSegments(
     ["segment_1.ts", "segment_2.ts", "segment_3.ts"],
     peers,
   );
+  await firstWaveReady;
+  assert.equal(maximumActiveRequests, 2);
+  releaseFirstWave?.();
+  const result = await pending;
 
   assert.deepEqual([...result.keys()], [
     "segment_3.ts",
     "segment_2.ts",
     "segment_1.ts",
   ]);
-  assert.equal(maximumActiveRequests, 2);
   assert.deepEqual(
     new Set(requests.slice(0, 2).map((request) => request.split("/")[0])),
     new Set(["peer-a", "peer-b"]),
@@ -328,4 +342,135 @@ test("coalesces concurrent requests for the same segment", async () => {
   assert.equal(firstResult.data.toString(), "shared-segment");
   assert.equal(secondResult.data.toString(), "shared-segment");
   assert.equal(requests, 1);
+});
+
+test("returns cached data and handles empty parallel input", async () => {
+  const cache = new SegmentCache(1_000);
+  cache.set("cached.ts", Buffer.from("cached-data"));
+  let requests = 0;
+  const fetcher = new HybridSegmentFetcher({
+    selfPeerId: "self",
+    originBaseUrl: new URL("http://origin:8080/hls/"),
+    cache,
+    directory: new FakeDirectory(),
+    verifier,
+    stats: new TrafficStats(),
+    fetchImpl: async () => {
+      requests += 1;
+      return new Response("unexpected");
+    },
+  });
+
+  const result = await fetcher.fetchSegment("cached.ts", 10);
+  assert.equal(result.source, "cache");
+  assert.equal(result.data.toString(), "cached-data");
+  assert.equal(fetcher.getLastSource("cached.ts"), "cache");
+  assert.deepEqual(await fetcher.fetchSegments([], []), new Map());
+  assert.equal(requests, 0);
+});
+
+test("validates the parallel download limit", () => {
+  const create = (maxParallel: number): HybridSegmentFetcher =>
+    new HybridSegmentFetcher({
+      selfPeerId: "self",
+      originBaseUrl: new URL("http://origin:8080/hls/"),
+      cache: new SegmentCache(100),
+      directory: new FakeDirectory(),
+      verifier,
+      stats: new TrafficStats(),
+      maxParallel,
+    });
+
+  assert.throws(() => create(0), /Maximum parallel downloads/);
+  assert.throws(() => create(1.5), /Maximum parallel downloads/);
+});
+
+test("reports peer timeouts and falls back to a verified origin segment", async () => {
+  const directory = new FakeDirectory();
+  const stats = new TrafficStats();
+  const fetcher = new HybridSegmentFetcher({
+    selfPeerId: "self",
+    originBaseUrl: new URL("http://origin:8080/hls/"),
+    cache: new SegmentCache(1_000),
+    directory,
+    verifier,
+    stats,
+    p2pTimeoutMs: 1,
+    fetchImpl: async (input, init) => {
+      if (String(input).startsWith("http://origin")) {
+        return new Response("origin-after-timeout");
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => reject(init.signal?.reason),
+          { once: true },
+        );
+      });
+    },
+  });
+
+  const result = await fetcher.fetchSegment("segment.ts", 3);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(result.source, "origin");
+  assert.equal(result.data.toString(), "origin-after-timeout");
+  assert.equal(fetcher.getLastSource("segment.ts"), "origin");
+  assert.deepEqual(directory.failures, [{ peerId: "peer-a", reason: "timeout" }]);
+  assert.deepEqual(stats.snapshot(), {
+    bytesDownloadedP2P: 0,
+    bytesDownloadedOrigin: 20,
+    bytesUploadedP2P: 0,
+    p2pRequests: 1,
+    p2pSuccesses: 0,
+    p2pFailures: 1,
+    originRequests: 1,
+    integrityFailures: 0,
+    fallbacks: 1,
+    segmentsCached: 1,
+  });
+});
+
+test("rejects origin HTTP and integrity failures with useful errors", async () => {
+  const create = (
+    fetchImpl: FetchFunction,
+    segmentVerifier: SegmentIntegrityVerifier = verifier,
+  ): HybridSegmentFetcher =>
+    new HybridSegmentFetcher({
+      selfPeerId: "self",
+      originBaseUrl: new URL("http://origin:8080/hls/"),
+      cache: new SegmentCache(1_000),
+      directory: { async listPeers() { return []; }, async reportFailure() {} },
+      verifier: segmentVerifier,
+      stats: new TrafficStats(),
+      fetchImpl,
+    });
+
+  await assert.rejects(
+    create(async () => new Response("missing", { status: 404 })).fetchSegment(
+      "missing.ts",
+      0,
+    ),
+    /Origin returned HTTP 404 for 'missing.ts'/,
+  );
+  await assert.rejects(
+    create(
+      async () => new Response("corrupt"),
+      { async verify() { return false; } },
+    ).fetchSegment("corrupt.ts", 0),
+    /failed integrity verification/,
+  );
+
+  let aggregate: unknown;
+  try {
+    await create(async () => new Response("failed", { status: 503 })).fetchSegments(
+      ["one.ts", "two.ts"],
+      [],
+    );
+    assert.fail("Expected parallel fetch failures");
+  } catch (error) {
+    aggregate = error;
+  }
+  assert.ok(aggregate instanceof AggregateError);
+  assert.equal(aggregate.errors.length, 2);
+  assert.match(aggregate.message, /segments could not be fetched/);
 });

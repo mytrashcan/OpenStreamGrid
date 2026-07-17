@@ -301,3 +301,65 @@ test("rolls current and retired peer totals into stats history", (context) => {
   ]);
   assert.equal(store.getStatsHistory().length, 2);
 });
+
+test("handles empty history, duplicate joins, and idempotent close", (context) => {
+  const store = new SQLiteStore(temporaryDatabasePath(context));
+  assert.deepEqual(store.getStatsHistory(), []);
+  store.registerBroadcast({ id: "live", playlistUrl: "http://origin/live.m3u8" });
+  store.joinPeer("live", {
+    id: "peer-a",
+    address: "http://peer-a:9090",
+    metadata: { region: "local" },
+  });
+  store.reportSegments("live", "peer-a", ["one.ts", "two.ts"]);
+  store.reportStats("live", "peer-a", trafficStats());
+
+  const rejoined = store.joinPeer("live", {
+    id: "peer-a",
+    address: "http://peer-a:9191",
+  });
+  assert.equal(rejoined.address, "http://peer-a:9191");
+  assert.deepEqual(rejoined.segments, ["one.ts", "two.ts"]);
+  assert.deepEqual(store.getBroadcastStats("live"), {
+    broadcastId: "live",
+    peers: 1,
+    ...trafficStats(),
+  });
+  assert.deepEqual(store.reportSegments("live", "peer-a", [], true).segments, []);
+  store.close();
+  store.close();
+});
+
+test("rejects corrupted broadcast and peer metadata", (context) => {
+  const databasePath = temporaryDatabasePath(context);
+  const store = new SQLiteStore(databasePath);
+  store.registerBroadcast({ id: "live", playlistUrl: "http://origin/live.m3u8" });
+  store.joinPeer("live", { id: "peer-a", address: "http://peer-a" });
+  store.close();
+
+  const database = new Database(databasePath);
+  database.prepare("UPDATE peers SET metadata = ? WHERE peer_id = ?").run(
+    JSON.stringify({ region: null }),
+    "peer-a",
+  );
+  database.close();
+
+  const corrupted = new SQLiteStore(databasePath);
+  assert.throws(
+    () => corrupted.listPeers("live"),
+    /Tracker database contains invalid metadata/,
+  );
+  corrupted.close();
+
+  const broadcastDatabase = new Database(databasePath);
+  broadcastDatabase
+    .prepare("UPDATE broadcasts SET metadata = ? WHERE id = ?")
+    .run("[]", "live");
+  broadcastDatabase.close();
+  const corruptedBroadcast = new SQLiteStore(databasePath);
+  assert.throws(
+    () => corruptedBroadcast.getBroadcast("live"),
+    /Tracker database contains invalid metadata/,
+  );
+  corruptedBroadcast.close();
+});
