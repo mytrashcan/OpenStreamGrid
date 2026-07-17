@@ -149,3 +149,30 @@ test("backs off when sockets close before a valid peer list", async (context) =>
     });
   }
 });
+
+test("authenticates tracker REST requests with the configured API key", async () => {
+  const requests: RequestInit[] = [];
+  const client = new TrackerClient({
+    trackerUrl: "https://tracker.example",
+    apiKey: "test-secret",
+    broadcastId: "live",
+    peerId: "peer-a",
+    heartbeat: () => ({}),
+    stats,
+    segments: () => [],
+    fetchImpl: async (_input, init = {}) => {
+      requests.push(init);
+      if (init.method === "DELETE") return new Response(null, { status: 204 });
+      return Response.json(remotePeer);
+    },
+  });
+
+  await client.join({ id: "peer-a", address: "http://peer-a:9090" });
+  await client.reportFailure("peer-b", "timeout");
+  await client.leave();
+
+  assert.equal(requests.length, 3);
+  for (const request of requests) {
+    assert.equal(new Headers(request.headers).get("X-API-Key"), "test-secret");
+  }
+});

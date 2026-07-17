@@ -1,5 +1,12 @@
+import { timingSafeEqual } from "node:crypto";
+import { readFileSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import {
+  createServer as createHttpServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import { pathToFileURL } from "node:url";
 import {
   createLogger,
@@ -38,6 +45,17 @@ export interface TrackerConfiguration {
   port: number;
   host: string;
   stalePeerMs: number;
+  apiKey?: string;
+  tlsCertPath?: string;
+  tlsKeyPath?: string;
+}
+
+export interface TrackerSecurityOptions {
+  apiKey?: string;
+  tls?: {
+    cert: Buffer;
+    key: Buffer;
+  };
 }
 
 const parseInteger = (
@@ -65,6 +83,19 @@ export const parseTrackerConfiguration = (
 ): TrackerConfiguration => {
   const host = environment.HOST ?? DEFAULT_HOST;
   if (host.trim() === "") throw new Error("HOST must not be empty");
+  const apiKey = environment.TRACKER_API_KEY;
+  if (apiKey !== undefined && apiKey.trim() === "") {
+    throw new Error("TRACKER_API_KEY must not be empty");
+  }
+  const tlsCertPath = environment.TLS_CERT_PATH?.trim();
+  const tlsKeyPath = environment.TLS_KEY_PATH?.trim();
+  if (Boolean(tlsCertPath) !== Boolean(tlsKeyPath)) {
+    throw new Error("TLS_CERT_PATH and TLS_KEY_PATH must be configured together");
+  }
+  if (tlsCertPath && tlsKeyPath) {
+    validateTlsFile(tlsCertPath, "TLS_CERT_PATH");
+    validateTlsFile(tlsKeyPath, "TLS_KEY_PATH");
+  }
   return {
     port: parseInteger(
       environment.PORT ?? String(DEFAULT_PORT),
@@ -78,7 +109,18 @@ export const parseTrackerConfiguration = (
       "STALE_PEER_MS",
       1,
     ),
+    ...(apiKey ? { apiKey } : {}),
+    ...(tlsCertPath && tlsKeyPath ? { tlsCertPath, tlsKeyPath } : {}),
   };
+};
+
+const validateTlsFile = (filePath: string, label: string): void => {
+  try {
+    if (statSync(filePath).isFile()) return;
+  } catch {
+    // The common error below avoids exposing platform-specific filesystem errors.
+  }
+  throw new Error(`${label} must point to an existing file`);
 };
 
 /** Point-in-time dashboard statistics sent over SSE. */
@@ -361,17 +403,42 @@ const decodedPathComponent = (value: string): string => {
   }
 };
 
+const apiKeysMatch = (provided: string | undefined, expected: string): boolean => {
+  if (provided === undefined) return false;
+  const providedBytes = Buffer.from(provided);
+  const expectedBytes = Buffer.from(expected);
+  return (
+    providedBytes.byteLength === expectedBytes.byteLength &&
+    timingSafeEqual(providedBytes, expectedBytes)
+  );
+};
+
 /** Creates the REST and dashboard request handler for a tracker store. */
 export const createTrackerHandler = (
   store: TrackerStoreBackend,
   events: TrackerEvents = {},
   statsEvents?: TrackerStatsSse,
+  apiKey?: string,
 ) =>
   async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     try {
       const method = request.method ?? "GET";
       const url = new URL(request.url ?? "/", "http://tracker.local");
       const path = url.pathname;
+
+      if (
+        apiKey &&
+        (method === "POST" || method === "PUT" || method === "DELETE") &&
+        !apiKeysMatch(
+          typeof request.headers["x-api-key"] === "string"
+            ? request.headers["x-api-key"]
+            : undefined,
+          apiKey,
+        )
+      ) {
+        sendJson(response, 401, { error: "Unauthorized" });
+        return;
+      }
 
       if (method === "GET" && path === "/health") {
         sendJson(response, 200, { status: "ok", service: "tracker" });
@@ -611,6 +678,7 @@ export class TrackerServer {
   constructor(
     storeFactory: TrackerStoreFactory = createConfiguredStore,
     private readonly stalePeerMs = DEFAULT_STALE_PEER_MS,
+    security: TrackerSecurityOptions = {},
   ) {
     const store = storeFactory();
     this.store = store;
@@ -629,9 +697,15 @@ export class TrackerServer {
         webSockets?.peerListChanged(broadcastId),
       broadcastListChanged: () => webSockets?.broadcastListChanged(),
     };
-    this.server = createServer(
-      createTrackerHandler(store, events, this.statsEvents),
+    const handler = createTrackerHandler(
+      store,
+      events,
+      this.statsEvents,
+      security.apiKey,
     );
+    this.server = security.tls
+      ? createHttpsServer(security.tls, handler)
+      : createHttpServer(handler);
     webSockets = new TrackerWebSocketHub(this.server, store, this.statsEvents);
     this.webSockets = webSockets;
   }
@@ -722,9 +796,24 @@ const run = async (): Promise<void> => {
   const server = new TrackerServer(
     createConfiguredStore,
     configuration.stalePeerMs,
+    {
+      ...(configuration.apiKey ? { apiKey: configuration.apiKey } : {}),
+      ...(configuration.tlsCertPath && configuration.tlsKeyPath
+        ? {
+            tls: {
+              cert: readFileSync(configuration.tlsCertPath),
+              key: readFileSync(configuration.tlsKeyPath),
+            },
+          }
+        : {}),
+    },
   );
   const actualPort = await server.start(configuration.port, configuration.host);
-  logger.info("started", { port: actualPort, host: configuration.host });
+  logger.info("started", {
+    port: actualPort,
+    host: configuration.host,
+    protocol: configuration.tlsCertPath ? "https" : "http",
+  });
 
   const shutdown = async (signal: string): Promise<void> => {
     logger.info("stopping", { signal });

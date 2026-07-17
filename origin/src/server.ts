@@ -37,6 +37,7 @@ interface OriginServerOptions {
 
 interface RegistrationOptions {
   trackerUrl: string;
+  apiKey?: string;
   registration: BroadcastRegistration;
   signal?: AbortSignal;
   retryMs?: number;
@@ -51,6 +52,7 @@ export interface OriginConfiguration {
   host: string;
   hlsDirectory: string;
   trackerUrl: string;
+  trackerApiKey?: string;
   broadcastId: string;
   publicOriginUrl: string;
   segmentDurationSeconds: number;
@@ -116,6 +118,10 @@ export const parseOriginConfiguration = (
     "PUBLIC_ORIGIN_URL",
   );
   const ffmpegPath = environment.FFMPEG_PATH?.trim();
+  const trackerApiKey = environment.TRACKER_API_KEY;
+  if (trackerApiKey !== undefined && trackerApiKey.trim() === "") {
+    throw new Error("TRACKER_API_KEY must not be empty");
+  }
   return {
     port,
     host: nonEmpty(environment.HOST, DEFAULT_HOST, "HOST"),
@@ -128,6 +134,7 @@ export const parseOriginConfiguration = (
       environment.TRACKER_URL ?? DEFAULT_TRACKER_URL,
       "TRACKER_URL",
     ),
+    ...(trackerApiKey ? { trackerApiKey } : {}),
     broadcastId: nonEmpty(
       environment.BROADCAST_ID,
       DEFAULT_BROADCAST_ID,
@@ -378,6 +385,7 @@ const delay = async (milliseconds: number, signal?: AbortSignal): Promise<void> 
 /** Registers a broadcast with retry-until-success or abort semantics. */
 export const registerBroadcast = async ({
   trackerUrl,
+  apiKey,
   registration,
   signal,
   retryMs = REGISTER_RETRY_MS,
@@ -388,7 +396,10 @@ export const registerBroadcast = async ({
     try {
       const response = await fetchImpl(endpoint, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          ...(apiKey ? { "X-API-Key": apiKey } : {}),
+        },
         body: JSON.stringify(registration),
         ...(signal ? { signal } : {}),
       });
@@ -446,6 +457,9 @@ const run = async (): Promise<void> => {
   const actualPort = await server.start(configuration.port, configuration.host);
   await registerBroadcast({
     trackerUrl: configuration.trackerUrl,
+    ...(configuration.trackerApiKey
+      ? { apiKey: configuration.trackerApiKey }
+      : {}),
     registration: {
       id: configuration.broadcastId,
       playlistUrl: new URL(

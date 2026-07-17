@@ -22,6 +22,25 @@ test("parses the parallel download limit with a default of three", () => {
   );
 });
 
+test("parses tracker API key configuration from environment and CLI", () => {
+  assert.equal(
+    parseArguments([], { ...environment, TRACKER_API_KEY: "env-secret" })
+      .trackerApiKey,
+    "env-secret",
+  );
+  assert.equal(
+    parseArguments(
+      ["--tracker-api-key", "cli-secret"],
+      { ...environment, TRACKER_API_KEY: "env-secret" },
+    ).trackerApiKey,
+    "cli-secret",
+  );
+  assert.throws(
+    () => parseArguments([], { ...environment, TRACKER_API_KEY: " " }),
+    /Tracker API key must not be empty/,
+  );
+});
+
 test("supports disabling WebRTC for deterministic HTTP fallback", () => {
   assert.equal(parseArguments([], environment).webRtcEnabled, true);
   assert.equal(

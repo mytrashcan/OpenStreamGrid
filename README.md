@@ -191,7 +191,10 @@ OpenStreamGrid/
 
 ### Tracker REST API
 
-All endpoints are served from the tracker on port `7070`.
+All endpoints are served from the tracker on port `7070`. When
+`TRACKER_API_KEY` is configured, every `POST`, `PUT`, and `DELETE` request must
+include `X-API-Key: <configured-value>`. `GET` endpoints, including health,
+remain public.
 
 #### Health
 
@@ -414,11 +417,19 @@ hls.attachMedia(videoElement);
 
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
-| `PORT` | `7070` | HTTP server port |
-| `HOST` | `0.0.0.0` | HTTP server bind host |
+| `PORT` | `7070` | HTTP or HTTPS server port |
+| `HOST` | `0.0.0.0` | HTTP or HTTPS server bind host |
 | `STALE_PEER_MS` | `30000` | Milliseconds before a peer is considered stale |
 | `STORE_TYPE` | `sqlite` | Tracker store backend (`sqlite` or `memory`) |
 | `DB_PATH` | `./data/tracker.db` | SQLite database path when `STORE_TYPE=sqlite` |
+| `TRACKER_API_KEY` | — | Require this value in `X-API-Key` for all mutating REST requests |
+| `TLS_CERT_PATH` | — | TLS certificate file; enables HTTPS/WSS when used with `TLS_KEY_PATH` |
+| `TLS_KEY_PATH` | — | TLS private key file; enables HTTPS/WSS when used with `TLS_CERT_PATH` |
+
+`TLS_CERT_PATH` and `TLS_KEY_PATH` must both reference existing files. If
+neither is configured, the tracker continues to serve HTTP and WS. The
+`/health` endpoint and read-only REST endpoints remain public when API-key
+authentication is enabled.
 
 ### Origin
 
@@ -427,6 +438,7 @@ hls.attachMedia(videoElement);
 | `PORT` | `8080` | HTTP server port |
 | `HOST` | `0.0.0.0` | HTTP server bind host |
 | `TRACKER_URL` | `http://tracker:7070` | Tracker endpoint |
+| `TRACKER_API_KEY` | — | API key sent when registering with the tracker |
 | `BROADCAST_ID` | `live` | Broadcast identifier |
 | `PUBLIC_ORIGIN_URL` | `http://origin:8080` | Public origin URL for playlist |
 | `HLS_DIRECTORY` | `/tmp/openstreamgrid-hls` | HLS output directory |
@@ -440,6 +452,7 @@ hls.attachMedia(videoElement);
 | Environment Variable / CLI Flag | Default | Description |
 |-------------------------------|---------|-------------|
 | `TRACKER_URL` / `--tracker-url` | `http://tracker:7070` | Tracker endpoint |
+| `TRACKER_API_KEY` / `--tracker-api-key` | — | API key sent to tracker REST and WebSocket endpoints |
 | `BROADCAST_ID` / `--broadcast-id` | `live` | Broadcast to join |
 | `ORIGIN_URL` / `--origin-url` | — | Origin HLS URL (required) |
 | `PEER_ADDRESS` / `--peer-address` | — | Peer's own HTTP address (required) |

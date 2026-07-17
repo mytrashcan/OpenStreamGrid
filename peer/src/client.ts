@@ -2,6 +2,7 @@
 import { hostname } from "node:os";
 import { pathToFileURL } from "node:url";
 import { createLogger } from "@openstreamgrid/common";
+import WebSocket from "ws";
 import { SegmentCache } from "./cache.js";
 import { HybridSegmentFetcher } from "./fetcher.js";
 import { TrafficStats } from "./stats.js";
@@ -29,6 +30,7 @@ const logger = createLogger("peer");
 
 interface PeerConfiguration {
   trackerUrl: string;
+  trackerApiKey?: string;
   broadcastId: string;
   originBaseUrl: URL;
   playlistUrl: URL;
@@ -88,6 +90,9 @@ class PeerApplication {
     this.cache = new SegmentCache(configuration.cacheSizeBytes);
     this.tracker = new TrackerClient({
       trackerUrl: configuration.trackerUrl,
+      ...(configuration.trackerApiKey
+        ? { apiKey: configuration.trackerApiKey }
+        : {}),
       broadcastId: configuration.broadcastId,
       peerId: configuration.peerId,
       heartbeat: () => ({
@@ -115,6 +120,14 @@ class PeerApplication {
       iceServers: configuration.iceServers,
       p2pTimeoutMs: configuration.p2pTimeoutMs,
       webRtc: {
+        ...(configuration.trackerApiKey
+          ? {
+              webSocketFactory: (url) =>
+                new WebSocket(url, {
+                  headers: { "X-API-Key": configuration.trackerApiKey },
+                }),
+            }
+          : {}),
         segmentProvider: (segmentName) => this.cache.get(segmentName),
         onUpload: (bytes) => this.stats.recordUpload(bytes),
         maxUploadConnections: configuration.maxConnections,
@@ -288,6 +301,15 @@ const optionalValue = (value: string | undefined): string | undefined => {
   return normalized ? normalized : undefined;
 };
 
+const optionalNonEmptyValue = (
+  value: string | undefined,
+  label: string,
+): string | undefined => {
+  if (value === undefined) return undefined;
+  if (value.trim() === "") throw new Error(`${label} must not be empty`);
+  return value;
+};
+
 const iceServerUrl = (
   value: string,
   label: string,
@@ -427,6 +449,7 @@ export const parseArguments = (
   }
   const supported = new Set([
     "tracker-url",
+    "tracker-api-key",
     "broadcast-id",
     "origin-url",
     "peer-address",
@@ -463,9 +486,14 @@ export const parseArguments = (
       DEFAULT_TRACKER_URL,
     "Tracker URL",
   );
+  const trackerApiKey = optionalNonEmptyValue(
+    values.get("tracker-api-key") ?? environment.TRACKER_API_KEY,
+    "Tracker API key",
+  );
 
   return {
     trackerUrl: trackerUrl.href,
+    ...(trackerApiKey ? { trackerApiKey } : {}),
     broadcastId: nonEmptyValue(
       values.get("broadcast-id") ??
         environment.BROADCAST_ID ??
