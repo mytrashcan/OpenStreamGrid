@@ -29,11 +29,11 @@ jobs:
       - name: Install browser SDK dependencies
         run: npm ci --prefix sdk
 
-      - name: Type check
-        run: npm run typecheck
-
       - name: Build all workspaces
         run: npm run build
+
+      - name: Type check
+        run: npm run typecheck
 
       - name: Run tests
         run: npm run test
