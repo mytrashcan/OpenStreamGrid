@@ -6,6 +6,5 @@ coverage/
 origin/data/
 tracker/data/
 *.log
-benchmark-results.json
 .env
 video/

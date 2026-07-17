@@ -5,6 +5,7 @@ import { createLogger } from "@openstreamgrid/common";
 import WebSocket from "ws";
 import { SegmentCache } from "./cache.js";
 import { HybridSegmentFetcher } from "./fetcher.js";
+import { keepAliveFetch } from "./http-client.js";
 import { TrafficStats } from "./stats.js";
 import { TrackerClient } from "./tracker.js";
 import { TransportManager } from "./transport-manager.js";
@@ -14,7 +15,8 @@ import { DEFAULT_STUN_SERVER } from "./webrtc-transport.js";
 
 const DEFAULT_TRACKER_URL = "http://tracker:7070";
 const DEFAULT_BROADCAST_ID = "live";
-const DEFAULT_CACHE_SIZE = 200 * 1_000_000;
+const DEFAULT_CACHE_SIZE = 512 * 1_000_000;
+const DEFAULT_CACHE_TTL_MS = 5 * 60_000;
 const DEFAULT_UPLOAD_SPEED_BPS = 1_000_000;
 const DEFAULT_MAX_CONNECTIONS = 3;
 const DEFAULT_MAX_PARALLEL_DOWNLOADS = 3;
@@ -38,6 +40,7 @@ interface PeerConfiguration {
   uploadHost: string;
   peerId: string;
   cacheSizeBytes: number;
+  cacheTtlMs: number;
   maxUploadSpeedBps: number;
   maxConnections: number;
   maxParallelDownloads: number;
@@ -87,7 +90,10 @@ class PeerApplication {
   private readonly inFlightSegments = new Set<string>();
 
   constructor(private readonly configuration: PeerConfiguration) {
-    this.cache = new SegmentCache(configuration.cacheSizeBytes);
+    this.cache = new SegmentCache(
+      configuration.cacheSizeBytes,
+      configuration.cacheTtlMs,
+    );
     this.tracker = new TrackerClient({
       trackerUrl: configuration.trackerUrl,
       ...(configuration.trackerApiKey
@@ -128,7 +134,10 @@ class PeerApplication {
                 }),
             }
           : {}),
-        segmentProvider: (segmentName) => this.cache.get(segmentName),
+        segmentProvider: (segmentName) => {
+          const data = this.cache.get(segmentName);
+          return data ? Buffer.from(data) : undefined;
+        },
         onUpload: (bytes) => this.stats.recordUpload(bytes),
         maxUploadConnections: configuration.maxConnections,
       },
@@ -171,7 +180,7 @@ class PeerApplication {
     const processed = new Set<string>();
     while (!signal.aborted) {
       try {
-        const response = await fetch(this.configuration.playlistUrl, { signal });
+        const response = await keepAliveFetch(this.configuration.playlistUrl, { signal });
         if (!response.ok) {
           throw new Error(`Playlist returned HTTP ${response.status}`);
         }
@@ -455,6 +464,7 @@ export const parseArguments = (
     "peer-address",
     "peer-id",
     "cache-size",
+    "cache-ttl-ms",
     "max-upload-speed",
     "max-connections",
     "parallel-downloads",
@@ -515,6 +525,12 @@ export const parseArguments = (
       values.get("cache-size") ??
         environment.CACHE_SIZE ??
         String(DEFAULT_CACHE_SIZE),
+    ),
+    cacheTtlMs: parsePositiveInteger(
+      values.get("cache-ttl-ms") ??
+        environment.CACHE_TTL_MS ??
+        String(DEFAULT_CACHE_TTL_MS),
+      "Cache TTL",
     ),
     maxUploadSpeedBps: parseBitRate(
       values.get("max-upload-speed") ??

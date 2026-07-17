@@ -17,7 +17,8 @@ x-peer-environment: &peer-environment
   # The Node peer consumes one media rendition; the master playlist remains
   # available at /hls/stream.m3u8 for HLS players and the browser SDK.
   ORIGIN_URL: http://origin:8080/hls/low
-  CACHE_SIZE: 200MB
+  CACHE_SIZE: 512MB
+  CACHE_TTL_MS: "300000"
   MAX_UPLOAD_SPEED: 4Mbps
   MAX_CONNECTIONS: "3"
 

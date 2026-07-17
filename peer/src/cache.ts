@@ -1,61 +1,138 @@
+import { BufferPool } from "./buffer-pool.js";
+
 /** Immutable data and insertion metadata for one cached segment. */
 export interface CacheEntry {
   readonly data: Buffer;
   readonly storedAt: number;
+  leases: number;
+  evicted: boolean;
 }
 
-/** Byte-limited least-recently-used cache for peer segment data. */
+/** Pins cached bytes until an asynchronous consumer has finished with them. */
+export interface CacheLease {
+  readonly data: Buffer;
+  release(): void;
+}
+
+/** Byte- and TTL-limited least-recently-used cache for peer segment data. */
 export class SegmentCache {
   private readonly entries = new Map<string, CacheEntry>();
   private totalBytes = 0;
 
-  constructor(readonly maxBytes: number) {
+  constructor(
+    readonly maxBytes: number,
+    readonly ttlMs = Number.POSITIVE_INFINITY,
+    private readonly bufferPool = new BufferPool(),
+    private readonly now: () => number = Date.now,
+  ) {
     if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
       throw new Error("Cache size must be a positive integer");
     }
+    if (!(ttlMs > 0)) throw new Error("Cache TTL must be positive");
   }
 
   get size(): number {
+    this.evictExpired();
     return this.entries.size;
   }
 
   get bytes(): number {
+    this.evictExpired();
     return this.totalBytes;
   }
 
   get(segmentName: string): Buffer | undefined {
-    const entry = this.entries.get(segmentName);
+    return this.touch(segmentName)?.data;
+  }
+
+  lease(segmentName: string): CacheLease | undefined {
+    const entry = this.touch(segmentName);
     if (!entry) return undefined;
-    this.entries.delete(segmentName);
-    this.entries.set(segmentName, entry);
-    return entry.data;
+    entry.leases += 1;
+    let released = false;
+    return {
+      data: entry.data,
+      release: () => {
+        if (released) return;
+        released = true;
+        entry.leases -= 1;
+        if (entry.evicted && entry.leases === 0) {
+          this.bufferPool.release(entry.data);
+        }
+      },
+    };
   }
 
   has(segmentName: string): boolean {
-    return this.entries.has(segmentName);
+    const entry = this.entries.get(segmentName);
+    if (!entry) return false;
+    if (this.isExpired(entry)) {
+      this.remove(segmentName, entry);
+      return false;
+    }
+    return true;
   }
 
   set(segmentName: string, data: Buffer): boolean {
     if (data.byteLength === 0 || data.byteLength > this.maxBytes) return false;
 
     const existing = this.entries.get(segmentName);
-    if (existing) {
-      this.totalBytes -= existing.data.byteLength;
-      this.entries.delete(segmentName);
-    }
-    this.entries.set(segmentName, { data, storedAt: Date.now() });
-    this.totalBytes += data.byteLength;
+    if (existing) this.remove(segmentName, existing);
+    const pooledData = this.bufferPool.copy(data);
+    this.entries.set(segmentName, {
+      data: pooledData,
+      storedAt: this.now(),
+      leases: 0,
+      evicted: false,
+    });
+    this.totalBytes += pooledData.byteLength;
     while (this.totalBytes > this.maxBytes) {
       const oldestKey = this.entries.keys().next().value;
       if (oldestKey === undefined) break;
       const oldest = this.entries.get(oldestKey);
-      this.entries.delete(oldestKey);
-      if (oldest) this.totalBytes -= oldest.data.byteLength;
+      if (oldest) this.remove(oldestKey, oldest);
     }
     return true;
   }
 
   keys(): string[] {
+    this.evictExpired();
     return [...this.entries.keys()];
+  }
+
+  clear(): void {
+    for (const [segmentName, entry] of this.entries) {
+      this.remove(segmentName, entry);
+    }
+  }
+
+  private isExpired(entry: CacheEntry): boolean {
+    return this.now() - entry.storedAt >= this.ttlMs;
+  }
+
+  private touch(segmentName: string): CacheEntry | undefined {
+    const entry = this.entries.get(segmentName);
+    if (!entry) return undefined;
+    if (this.isExpired(entry)) {
+      this.remove(segmentName, entry);
+      return undefined;
+    }
+    this.entries.delete(segmentName);
+    this.entries.set(segmentName, entry);
+    return entry;
+  }
+
+  private evictExpired(): void {
+    if (!Number.isFinite(this.ttlMs)) return;
+    for (const [segmentName, entry] of this.entries) {
+      if (this.isExpired(entry)) this.remove(segmentName, entry);
+    }
+  }
+
+  private remove(segmentName: string, entry: CacheEntry): void {
+    if (!this.entries.delete(segmentName)) return;
+    this.totalBytes -= entry.data.byteLength;
+    entry.evicted = true;
+    if (entry.leases === 0) this.bufferPool.release(entry.data);
   }
 }

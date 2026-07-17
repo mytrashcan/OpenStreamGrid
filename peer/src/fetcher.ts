@@ -10,6 +10,7 @@ import type {
   SegmentIntegrityVerifier,
 } from "./verifier.js";
 import type { TransportManager } from "./transport-manager.js";
+import { keepAliveFetch } from "./http-client.js";
 
 const DEFAULT_P2P_TIMEOUT_MS = 2_000;
 const DEFAULT_URGENT_THRESHOLD_SEGMENTS = 2;
@@ -113,7 +114,7 @@ export class HybridSegmentFetcher {
   >();
 
   constructor(private readonly options: FetcherOptions) {
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.fetchImpl = options.fetchImpl ?? keepAliveFetch;
     this.p2pTimeoutMs = options.p2pTimeoutMs ?? DEFAULT_P2P_TIMEOUT_MS;
     this.urgentThresholdSegments =
       options.urgentThresholdSegments ?? DEFAULT_URGENT_THRESHOLD_SEGMENTS;

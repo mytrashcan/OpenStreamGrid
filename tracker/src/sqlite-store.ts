@@ -96,6 +96,13 @@ export interface StatsHistoryEntry {
   p2pSuccessRate: number;
 }
 
+/** Effective connection-level SQLite performance settings. */
+export interface SQLitePragmaSettings {
+  journalMode: string;
+  synchronous: number;
+  cacheSize: number;
+}
+
 const prepareStatements = (database: Database.Database) => ({
   getBroadcast: database.prepare(`
     SELECT id, playlist_url, metadata, created_at, updated_at
@@ -362,6 +369,8 @@ export class SQLiteStore implements TrackerStoreBackend {
     }
     this.database = new Database(databasePath);
     this.database.pragma("journal_mode = WAL");
+    this.database.pragma("synchronous = NORMAL");
+    this.database.pragma("cache_size = -65536");
     this.database.pragma(`busy_timeout = ${DATABASE_BUSY_TIMEOUT_MS}`);
     runSQLiteMigrations(this.database);
     this.statements = prepareStatements(this.database);
@@ -628,6 +637,18 @@ export class SQLiteStore implements TrackerStoreBackend {
 
   close(): void {
     if (this.database.open) this.database.close();
+  }
+
+  getPragmaSettings(): SQLitePragmaSettings {
+    return {
+      journalMode: String(
+        this.database.pragma("journal_mode", { simple: true }),
+      ),
+      synchronous: Number(
+        this.database.pragma("synchronous", { simple: true }),
+      ),
+      cacheSize: Number(this.database.pragma("cache_size", { simple: true })),
+    };
   }
 
   private findBroadcast(id: string): Broadcast | undefined {

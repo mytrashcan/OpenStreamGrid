@@ -163,8 +163,8 @@ export class UploadServer {
         this.sendJson(response, 400, { error: "Invalid segment name" });
         return;
       }
-      const data = this.options.cache.get(segmentName);
-      if (!data) {
+      const lease = this.options.cache.lease(segmentName);
+      if (!lease) {
         this.sendJson(response, 404, { error: "Segment not found" });
         return;
       }
@@ -173,16 +173,17 @@ export class UploadServer {
       try {
         response.writeHead(200, {
           "content-type": "video/mp2t",
-          "content-length": data.byteLength,
+          "content-length": lease.data.byteLength,
           "cache-control": "private, max-age=60",
         });
         if (method === "HEAD") {
           response.end();
           return;
         }
-        await this.writeLimited(response, data);
+        await this.writeLimited(response, lease.data);
         response.end();
       } finally {
+        lease.release();
         this.activeConnections -= 1;
       }
     } catch (error) {
