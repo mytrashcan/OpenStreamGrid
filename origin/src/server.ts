@@ -13,11 +13,19 @@ import {
   type BroadcastRegistration,
   type HealthStatus,
 } from "@openstreamgrid/common";
-import { HlsStreamer, type StreamController } from "./streamer.js";
+import {
+  DEFAULT_HASH_INTERVAL_MS,
+  DEFAULT_PLAYLIST_SIZE,
+  DEFAULT_SEGMENT_DURATION_SECONDS,
+  HlsStreamer,
+  type StreamController,
+} from "./streamer.js";
 
 const DEFAULT_PORT = 8080;
+const DEFAULT_HOST = "0.0.0.0";
 const DEFAULT_TRACKER_URL = "http://tracker:7070";
 const DEFAULT_BROADCAST_ID = "live";
+const DEFAULT_HLS_DIRECTORY = "/tmp/openstreamgrid-hls";
 const REGISTER_RETRY_MS = 1_000;
 const IMMUTABLE_CACHE_MAX_AGE_SECONDS = 3_600;
 const logger = createLogger("origin");
@@ -37,6 +45,111 @@ interface RegistrationOptions {
     init?: RequestInit,
   ) => Promise<Response>;
 }
+
+export interface OriginConfiguration {
+  port: number;
+  host: string;
+  hlsDirectory: string;
+  trackerUrl: string;
+  broadcastId: string;
+  publicOriginUrl: string;
+  segmentDurationSeconds: number;
+  playlistSize: number;
+  hashIntervalMs: number;
+  ffmpegPath?: string;
+}
+
+const parsePort = (value: string): number => {
+  const port = Number(value);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
+    throw new Error("PORT must be an integer between 1 and 65535");
+  }
+  return port;
+};
+
+const parsePositiveNumber = (value: string, label: string): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive number`);
+  }
+  return parsed;
+};
+
+const parsePositiveInteger = (value: string, label: string): number => {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return parsed;
+};
+
+const nonEmpty = (
+  value: string | undefined,
+  fallback: string,
+  label: string,
+): string => {
+  const resolved = value ?? fallback;
+  if (resolved.trim() === "") throw new Error(`${label} must not be empty`);
+  return resolved.trim();
+};
+
+const httpUrl = (value: string, label: string): string => {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${label} must be a valid absolute URL`);
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`${label} must use HTTP or HTTPS`);
+  }
+  return url.href;
+};
+
+/** Parses and validates origin process configuration before startup. */
+export const parseOriginConfiguration = (
+  environment: NodeJS.ProcessEnv = process.env,
+): OriginConfiguration => {
+  const port = parsePort(environment.PORT ?? String(DEFAULT_PORT));
+  const publicOriginUrl = httpUrl(
+    environment.PUBLIC_ORIGIN_URL ?? `http://origin:${port}`,
+    "PUBLIC_ORIGIN_URL",
+  );
+  const ffmpegPath = environment.FFMPEG_PATH?.trim();
+  return {
+    port,
+    host: nonEmpty(environment.HOST, DEFAULT_HOST, "HOST"),
+    hlsDirectory: nonEmpty(
+      environment.HLS_DIRECTORY,
+      DEFAULT_HLS_DIRECTORY,
+      "HLS_DIRECTORY",
+    ),
+    trackerUrl: httpUrl(
+      environment.TRACKER_URL ?? DEFAULT_TRACKER_URL,
+      "TRACKER_URL",
+    ),
+    broadcastId: nonEmpty(
+      environment.BROADCAST_ID,
+      DEFAULT_BROADCAST_ID,
+      "BROADCAST_ID",
+    ),
+    publicOriginUrl,
+    segmentDurationSeconds: parsePositiveNumber(
+      environment.SEGMENT_DURATION_SECONDS ??
+        String(DEFAULT_SEGMENT_DURATION_SECONDS),
+      "SEGMENT_DURATION_SECONDS",
+    ),
+    playlistSize: parsePositiveInteger(
+      environment.PLAYLIST_SIZE ?? String(DEFAULT_PLAYLIST_SIZE),
+      "PLAYLIST_SIZE",
+    ),
+    hashIntervalMs: parsePositiveInteger(
+      environment.HASH_INTERVAL_MS ?? String(DEFAULT_HASH_INTERVAL_MS),
+      "HASH_INTERVAL_MS",
+    ),
+    ...(ffmpegPath ? { ffmpegPath } : {}),
+  };
+};
 
 const contentTypes: Record<string, string> = {
   ".m3u8": "application/vnd.apple.mpegurl",
@@ -275,16 +388,20 @@ export const registerBroadcast = async ({
 };
 
 const run = async (): Promise<void> => {
-  const port = Number.parseInt(process.env.PORT ?? String(DEFAULT_PORT), 10);
-  const hlsDirectory = process.env.HLS_DIRECTORY ?? "/tmp/openstreamgrid-hls";
-  const trackerUrl = process.env.TRACKER_URL ?? DEFAULT_TRACKER_URL;
-  const broadcastId = process.env.BROADCAST_ID ?? DEFAULT_BROADCAST_ID;
-  const publicOriginUrl = process.env.PUBLIC_ORIGIN_URL ?? `http://origin:${port}`;
+  const configuration = parseOriginConfiguration();
   const streamer = new HlsStreamer({
-    outputDirectory: hlsDirectory,
-    ...(process.env.FFMPEG_PATH ? { ffmpegPath: process.env.FFMPEG_PATH } : {}),
+    outputDirectory: configuration.hlsDirectory,
+    segmentDurationSeconds: configuration.segmentDurationSeconds,
+    playlistSize: configuration.playlistSize,
+    hashIntervalMs: configuration.hashIntervalMs,
+    ...(configuration.ffmpegPath
+      ? { ffmpegPath: configuration.ffmpegPath }
+      : {}),
   });
-  const server = new OriginServer({ hlsDirectory, streamer });
+  const server = new OriginServer({
+    hlsDirectory: configuration.hlsDirectory,
+    streamer,
+  });
   const shutdownController = new AbortController();
   let shuttingDown = false;
 
@@ -304,12 +421,15 @@ const run = async (): Promise<void> => {
   process.once("SIGTERM", () => requestShutdown("SIGTERM"));
   process.once("SIGINT", () => requestShutdown("SIGINT"));
 
-  const actualPort = await server.start(port);
+  const actualPort = await server.start(configuration.port, configuration.host);
   await registerBroadcast({
-    trackerUrl,
+    trackerUrl: configuration.trackerUrl,
     registration: {
-      id: broadcastId,
-      playlistUrl: new URL("/hls/stream.m3u8", publicOriginUrl).href,
+      id: configuration.broadcastId,
+      playlistUrl: new URL(
+        "/hls/stream.m3u8",
+        configuration.publicOriginUrl,
+      ).href,
       metadata: {
         protocol: "hls",
         source: "test-pattern",
@@ -319,7 +439,11 @@ const run = async (): Promise<void> => {
     },
     signal: shutdownController.signal,
   });
-  logger.info("started", { port: actualPort, broadcastId });
+  logger.info("started", {
+    port: actualPort,
+    host: configuration.host,
+    broadcastId: configuration.broadcastId,
+  });
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

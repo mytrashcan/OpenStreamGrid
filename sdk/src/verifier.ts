@@ -64,9 +64,18 @@ export class OriginHashVerifier {
   private readonly pendingHashes = new Map<string, Promise<string>>();
 
   constructor(originBaseUrl: string) {
-    this.originBaseUrl = new URL(
-      originBaseUrl.endsWith("/") ? originBaseUrl : `${originBaseUrl}/`,
-    );
+    let url: URL;
+    try {
+      url = new URL(
+        originBaseUrl.endsWith("/") ? originBaseUrl : `${originBaseUrl}/`,
+      );
+    } catch {
+      throw new Error("originBaseUrl must be a valid absolute URL");
+    }
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new Error("originBaseUrl must use HTTP or HTTPS");
+    }
+    this.originBaseUrl = url;
   }
 
   async verify(segmentName: string, data: Uint8Array): Promise<SegmentVerificationResult> {

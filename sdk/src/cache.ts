@@ -12,8 +12,8 @@ export class SegmentCache {
   private totalBytes = 0;
 
   constructor(readonly maxBytes: number) {
-    if (!Number.isFinite(maxBytes) || maxBytes <= 0) {
-      throw new Error("maxBytes must be a positive number");
+    if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+      throw new Error("maxBytes must be a positive integer");
     }
   }
 

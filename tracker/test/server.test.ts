@@ -5,7 +5,9 @@ import test from "node:test";
 import type { WsServerMessage } from "@openstreamgrid/common";
 import WebSocket, { type RawData } from "ws";
 import {
+  createConfiguredStore,
   createTrackerHandler,
+  parseTrackerConfiguration,
   TrackerServer,
   type TrackerStatsSnapshot,
 } from "../src/server.js";
@@ -20,6 +22,42 @@ interface SseEvent {
   event: string;
   data: TrackerStatsSnapshot;
 }
+
+test("validates tracker environment configuration", () => {
+  assert.deepEqual(parseTrackerConfiguration({}), {
+    port: 7070,
+    host: "0.0.0.0",
+    stalePeerMs: 30_000,
+  });
+  assert.deepEqual(
+    parseTrackerConfiguration({
+      PORT: "8081",
+      HOST: "127.0.0.1",
+      STALE_PEER_MS: "5000",
+    }),
+    { port: 8081, host: "127.0.0.1", stalePeerMs: 5_000 },
+  );
+  assert.throws(
+    () => parseTrackerConfiguration({ PORT: "0" }),
+    /PORT must be an integer between 1 and 65535/,
+  );
+  assert.throws(
+    () => parseTrackerConfiguration({ PORT: "7070junk" }),
+    /PORT must be an integer/,
+  );
+  assert.throws(
+    () => parseTrackerConfiguration({ STALE_PEER_MS: "NaN" }),
+    /STALE_PEER_MS must be an integer/,
+  );
+  assert.throws(
+    () => parseTrackerConfiguration({ HOST: " " }),
+    /HOST must not be empty/,
+  );
+  assert.throws(
+    () => createConfiguredStore({ STORE_TYPE: "sqlite", DB_PATH: " " }),
+    /DB_PATH must not be empty/,
+  );
+});
 
 const invoke = async (
   handler: ReturnType<typeof createTrackerHandler>,

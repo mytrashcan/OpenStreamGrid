@@ -40,7 +40,7 @@ export interface HlsjsPluginConfig {
   broadcastId: string;
   /** Unique peer ID for this client. Generated if omitted. */
   peerId?: string;
-  /** Base URL of the origin server for fallback. Auto-detected from Hls.js if omitted. */
+  /** Base URL used to fetch segment hashes. Required unless verification is disabled. */
   originBaseUrl?: string;
   /** Max cache size in bytes (default: 100 MB). */
   maxCacheBytes?: number;

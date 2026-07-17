@@ -217,6 +217,7 @@ const createP2PLoader = (
  * const plugin = new OpenStreamGridHlsPlugin({
  *   trackerUrl: "ws://tracker:7070/ws",
  *   broadcastId: "test-broadcast",
+ *   originBaseUrl: "http://origin:8080/hls",
  * });
  * plugin.attach(hls);
  * ```
@@ -232,8 +233,14 @@ export class OpenStreamGridHlsPlugin {
   private readonly inFlightSegments = new Map<string, InFlightSegment>();
 
   constructor(config: HlsjsPluginConfig) {
-    this.peerId = config.peerId ?? generatePeerId();
+    if (config.peerId !== undefined && config.peerId.trim() === "") {
+      throw new Error("peerId must not be empty");
+    }
+    this.peerId = config.peerId?.trim() ?? generatePeerId();
     this.peerTimeoutMs = config.peerTimeoutMs ?? DEFAULT_PEER_TIMEOUT_MS;
+    if (!Number.isSafeInteger(this.peerTimeoutMs) || this.peerTimeoutMs <= 0) {
+      throw new Error("peerTimeoutMs must be a positive integer");
+    }
     this.onEvent = config.onEvent;
 
     this.cache = new SegmentCache(
@@ -253,11 +260,14 @@ export class OpenStreamGridHlsPlugin {
       segmentsCached: 0,
     };
 
+    if (config.verifySegments !== false && !config.originBaseUrl?.trim()) {
+      throw new Error(
+        "originBaseUrl is required when segment verification is enabled",
+      );
+    }
     this.verifier =
-      config.verifySegments !== false
-        ? new OriginHashVerifier(
-            config.originBaseUrl ?? "http://origin:8080",
-          )
+      config.verifySegments !== false && config.originBaseUrl
+        ? new OriginHashVerifier(config.originBaseUrl)
         : undefined;
 
     this.wsClient = new WsTrackerClient({

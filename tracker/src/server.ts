@@ -22,6 +22,7 @@ import {
 import { TrackerWebSocketHub, type TrackerEvents } from "./websocket.js";
 
 const DEFAULT_PORT = 7070;
+const DEFAULT_HOST = "0.0.0.0";
 const DEFAULT_STALE_PEER_MS = 30_000;
 const STATS_EVENT_INTERVAL_MS = 3_000;
 const STATS_EVENT_RETRY_MS = 3_000;
@@ -32,6 +33,53 @@ const logger = createLogger("tracker");
 let dashboardHtml: Promise<string> | undefined;
 
 type JsonObject = Record<string, unknown>;
+
+export interface TrackerConfiguration {
+  port: number;
+  host: string;
+  stalePeerMs: number;
+}
+
+const parseInteger = (
+  value: string,
+  label: string,
+  minimum: number,
+  maximum = Number.MAX_SAFE_INTEGER,
+): number => {
+  const parsed = Number(value);
+  if (
+    !Number.isSafeInteger(parsed) ||
+    parsed < minimum ||
+    parsed > maximum
+  ) {
+    throw new Error(
+      `${label} must be an integer between ${minimum} and ${maximum}`,
+    );
+  }
+  return parsed;
+};
+
+/** Parses and validates tracker process configuration before startup. */
+export const parseTrackerConfiguration = (
+  environment: NodeJS.ProcessEnv = process.env,
+): TrackerConfiguration => {
+  const host = environment.HOST ?? DEFAULT_HOST;
+  if (host.trim() === "") throw new Error("HOST must not be empty");
+  return {
+    port: parseInteger(
+      environment.PORT ?? String(DEFAULT_PORT),
+      "PORT",
+      1,
+      65_535,
+    ),
+    host: host.trim(),
+    stalePeerMs: parseInteger(
+      environment.STALE_PEER_MS ?? String(DEFAULT_STALE_PEER_MS),
+      "STALE_PEER_MS",
+      1,
+    ),
+  };
+};
 
 /** Point-in-time dashboard statistics sent over SSE. */
 export interface TrackerStatsSnapshot {
@@ -499,9 +547,14 @@ export type TrackerStoreFactory = () => TrackerStoreBackend;
 export const createConfiguredStore = (
   environment: NodeJS.ProcessEnv = process.env,
 ): TrackerStoreBackend => {
-  const storeType = (environment.STORE_TYPE ?? "sqlite").toLowerCase();
+  const storeType = (environment.STORE_TYPE ?? "sqlite").trim().toLowerCase();
   if (storeType === "memory") return new TrackerStore();
-  if (storeType === "sqlite") return new SQLiteStore(environment.DB_PATH);
+  if (storeType === "sqlite") {
+    if (environment.DB_PATH !== undefined && environment.DB_PATH.trim() === "") {
+      throw new Error("DB_PATH must not be empty when STORE_TYPE is 'sqlite'");
+    }
+    return new SQLiteStore(environment.DB_PATH);
+  }
   throw new Error(
     `Unsupported STORE_TYPE '${environment.STORE_TYPE}'. Expected 'sqlite' or 'memory'`,
   );
@@ -627,14 +680,13 @@ export class TrackerServer {
 }
 
 const run = async (): Promise<void> => {
-  const port = Number.parseInt(process.env.PORT ?? String(DEFAULT_PORT), 10);
-  const stalePeerMs = Number.parseInt(
-    process.env.STALE_PEER_MS ?? String(DEFAULT_STALE_PEER_MS),
-    10,
+  const configuration = parseTrackerConfiguration();
+  const server = new TrackerServer(
+    createConfiguredStore,
+    configuration.stalePeerMs,
   );
-  const server = new TrackerServer(createConfiguredStore, stalePeerMs);
-  await server.start(port);
-  logger.info("started", { port });
+  const actualPort = await server.start(configuration.port, configuration.host);
+  logger.info("started", { port: actualPort, host: configuration.host });
 
   const shutdown = async (signal: string): Promise<void> => {
     logger.info("stopping", { signal });
