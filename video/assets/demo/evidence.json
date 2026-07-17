@@ -1,0 +1,14 @@
+{
+  "capturedAt": "2026-07-17T01:33:41.998Z",
+  "environment": "isolated local Docker Compose network",
+  "connectedPeers": 2,
+  "advertisedSegments": 6,
+  "p2pBytes": 1642368,
+  "originBytes": 36080584,
+  "p2pTrafficRatioPercent": 4.35,
+  "p2pSuccesses": 2,
+  "originFallbacks": 4,
+  "httpTransportObserved": true,
+  "sqliteRestartPersistenceObserved": true,
+  "scope": "single prototype run; not a production benchmark"
+}

@@ -1,0 +1,25 @@
+{
+  "name": "openstreamgrid-devpost-video",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "audio": "node scripts/generate-audio.mjs",
+    "render": "remotion render src/index.tsx OpenStreamGridDevpost output/openstreamgrid-devpost-1080p.mp4 --codec h264 --audio-codec aac --crf 18 --overwrite",
+    "validate": "bash scripts/validate-video.sh",
+    "build": "bash scripts/render-video.sh"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.490",
+    "ffmpeg-static": "5.3.0",
+    "ffprobe-static": "3.1.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "remotion": "4.0.490"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "typescript": "6.0.3"
+  }
+}

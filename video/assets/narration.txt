@@ -1,0 +1,17 @@
+In centralized live streaming, every viewer pulls the same HLS segments from delivery infrastructure.
+
+OpenStreamGrid is an open, platform-independent hybrid P2P-CDN testbed for HLS live streaming.
+
+The origin publishes three renditions. A tracker coordinates broadcasts, peers, segments, and live statistics.
+
+Peers cache and verify segments, announce availability, and serve them over WebRTC or HTTP.
+
+If a peer is missing, late, or untrusted, the client immediately falls back to the origin.
+
+In the real Docker demo, two peers joined, advertised cached segments, and completed peer-to-peer transfers.
+
+After disconnecting peers, the same run recorded four origin fallbacks and preserved traffic data through a tracker restart.
+
+This local prototype is reproducible, but not a production benchmark. It demonstrates hybrid routing, integrity, and resilience.
+
+OpenStreamGrid explores a more distributed and resilient approach to live-stream delivery.
