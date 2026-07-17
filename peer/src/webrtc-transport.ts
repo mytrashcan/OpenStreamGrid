@@ -24,8 +24,9 @@ const DATA_CHANNEL_LABEL = "segment-request";
 const MAX_DATA_CHANNEL_CHUNK_BYTES = 16 * 1024;
 const MAX_BUFFERED_BYTES = 1024 * 1024;
 const WEBSOCKET_NORMAL_CLOSURE_CODE = 1_000;
+export const DEFAULT_STUN_SERVER = "stun:stun.l.google.com:19302";
 const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
-  { urls: "stun:stun.l.google.com:19302" },
+  { urls: DEFAULT_STUN_SERVER },
 ];
 const logger = createLogger("peer");
 
@@ -122,7 +123,12 @@ export class WebRtcTransport implements TransportAdapter {
     if (!Number.isSafeInteger(this.timeoutMs) || this.timeoutMs <= 0) {
       throw new Error("WebRTC request timeout must be a positive integer");
     }
-    this.iceServers = [...(options.iceServers ?? DEFAULT_ICE_SERVERS)];
+    this.iceServers = (options.iceServers ?? DEFAULT_ICE_SERVERS).map(
+      (server) => ({
+        ...server,
+        urls: Array.isArray(server.urls) ? [...server.urls] : server.urls,
+      }),
+    );
     this.segmentProvider = options.segmentProvider;
     this.verifier = options.verifier;
     this.onUpload = options.onUpload;

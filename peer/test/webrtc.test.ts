@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
+import wrtc from "@roamhq/wrtc";
 import WebSocket, { WebSocketServer } from "ws";
 import type {
   TransportAdapter,
@@ -102,7 +103,22 @@ test("transfers and reassembles a segment over a real DataChannel", async () => 
   });
   const segment = Buffer.alloc(40 * 1024 + 7, 0x5a);
   let uploadedBytes = 0;
-  const requester = new WebRtcTransport({ iceServers: [], timeoutMs: 5_000 });
+  const configuredIceServers: RTCIceServer[] = [
+    {
+      urls: "turns:turn.example.com:5349?transport=tcp",
+      username: "peer-user",
+      credential: "peer-secret",
+    },
+  ];
+  let requesterConfiguration: RTCConfiguration | undefined;
+  const requester = new WebRtcTransport({
+    iceServers: configuredIceServers,
+    timeoutMs: 5_000,
+    peerConnectionFactory: (configuration) => {
+      requesterConfiguration = configuration;
+      return new wrtc.RTCPeerConnection({ iceServers: [] });
+    },
+  });
   const responder = new WebRtcTransport({
     iceServers: [],
     timeoutMs: 5_000,
@@ -132,6 +148,7 @@ test("transfers and reassembles a segment over a real DataChannel", async () => 
     const received = await requester.requestSegment("peer-b", "segment.ts");
 
     assert.deepEqual(received, segment);
+    assert.deepEqual(requesterConfiguration?.iceServers, configuredIceServers);
     assert.equal(uploadedBytes, segment.byteLength);
     assert.equal(requester.getStats().segmentsFetched, 1);
     assert.deepEqual(requester.peers, ["peer-b"]);
