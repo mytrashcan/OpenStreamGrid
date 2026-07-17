@@ -61,6 +61,7 @@ services:
       PORT: "8080"
       TRACKER_URL: http://tracker:7070
       BROADCAST_ID: live
+      MULTI_STREAM_COUNT: "1"
       PUBLIC_ORIGIN_URL: http://origin:8080
       HLS_DIRECTORY: /tmp/openstreamgrid-hls
     depends_on:

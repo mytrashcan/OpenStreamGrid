@@ -17,7 +17,8 @@ import {
   DEFAULT_HASH_INTERVAL_MS,
   DEFAULT_PLAYLIST_SIZE,
   DEFAULT_SEGMENT_DURATION_SECONDS,
-  HlsStreamer,
+  MultiHlsStreamer,
+  type MultiStreamController,
   type StreamController,
 } from "./streamer.js";
 
@@ -25,6 +26,8 @@ const DEFAULT_PORT = 8080;
 const DEFAULT_HOST = "0.0.0.0";
 const DEFAULT_TRACKER_URL = "http://tracker:7070";
 const DEFAULT_BROADCAST_ID = "live";
+const DEFAULT_MULTI_STREAM_COUNT = 1;
+const MAX_MULTI_STREAM_COUNT = 5;
 const DEFAULT_HLS_DIRECTORY = "/tmp/openstreamgrid-hls";
 const REGISTER_RETRY_MS = 1_000;
 const IMMUTABLE_CACHE_MAX_AGE_SECONDS = 3_600;
@@ -47,6 +50,10 @@ interface RegistrationOptions {
   ) => Promise<Response>;
 }
 
+interface MultiRegistrationOptions extends Omit<RegistrationOptions, "registration"> {
+  registrations: readonly BroadcastRegistration[];
+}
+
 export interface OriginConfiguration {
   port: number;
   host: string;
@@ -54,6 +61,8 @@ export interface OriginConfiguration {
   trackerUrl: string;
   trackerApiKey?: string;
   broadcastId: string;
+  multiStreamCount: number;
+  streamIds: readonly string[];
   publicOriginUrl: string;
   segmentDurationSeconds: number;
   playlistSize: number;
@@ -122,6 +131,24 @@ export const parseOriginConfiguration = (
   if (trackerApiKey !== undefined && trackerApiKey.trim() === "") {
     throw new Error("TRACKER_API_KEY must not be empty");
   }
+  const broadcastId = nonEmpty(
+    environment.BROADCAST_ID,
+    DEFAULT_BROADCAST_ID,
+    "BROADCAST_ID",
+  );
+  if (!/^[-A-Za-z0-9_.]+$/.test(broadcastId)) {
+    throw new Error("BROADCAST_ID must be a safe stream ID");
+  }
+  const multiStreamCount = parsePositiveInteger(
+    environment.MULTI_STREAM_COUNT ?? String(DEFAULT_MULTI_STREAM_COUNT),
+    "MULTI_STREAM_COUNT",
+  );
+  if (multiStreamCount > MAX_MULTI_STREAM_COUNT) {
+    throw new Error(`MULTI_STREAM_COUNT must not exceed ${MAX_MULTI_STREAM_COUNT}`);
+  }
+  const streamIds = multiStreamCount === 1
+    ? [broadcastId]
+    : Array.from({ length: multiStreamCount }, (_, index) => `stream-${index + 1}`);
   return {
     port,
     host: nonEmpty(environment.HOST, DEFAULT_HOST, "HOST"),
@@ -135,11 +162,9 @@ export const parseOriginConfiguration = (
       "TRACKER_URL",
     ),
     ...(trackerApiKey ? { trackerApiKey } : {}),
-    broadcastId: nonEmpty(
-      environment.BROADCAST_ID,
-      DEFAULT_BROADCAST_ID,
-      "BROADCAST_ID",
-    ),
+    broadcastId,
+    multiStreamCount,
+    streamIds,
     publicOriginUrl,
     segmentDurationSeconds: parsePositiveNumber(
       environment.SEGMENT_DURATION_SECONDS ??
@@ -198,6 +223,47 @@ const resolveHlsAssetPath = (hlsDirectory: string, fileName: string): string => 
   return assetPath;
 };
 
+const isMultiStreamController = (
+  streamer: StreamController,
+): streamer is MultiStreamController =>
+  "streamIds" in streamer && "getStream" in streamer;
+
+interface ResolvedStreamAsset {
+  assetDirectory: string;
+  assetName: string;
+  streamer: StreamController;
+}
+
+const resolveStreamAsset = (
+  hlsDirectory: string,
+  fileName: string,
+  streamer: StreamController,
+): ResolvedStreamAsset | undefined => {
+  if (!isMultiStreamController(streamer)) {
+    return { assetDirectory: hlsDirectory, assetName: fileName, streamer };
+  }
+  const separator = fileName.indexOf("/");
+  const requestedStreamId = separator > 0 ? fileName.slice(0, separator) : "";
+  const requestedStreamer = streamer.getStream(requestedStreamId);
+  if (requestedStreamer && separator > 0) {
+    return {
+      assetDirectory: path.join(hlsDirectory, requestedStreamId),
+      assetName: fileName.slice(separator + 1),
+      streamer: requestedStreamer,
+    };
+  }
+  if (streamer.streamIds.length !== 1) return undefined;
+  const streamId = streamer.streamIds[0]!;
+  const soleStreamer = streamer.getStream(streamId);
+  return soleStreamer
+    ? {
+        assetDirectory: path.join(hlsDirectory, streamId),
+        assetName: fileName,
+        streamer: soleStreamer,
+      }
+    : undefined;
+};
+
 /** Creates the HTTP handler that serves health and generated HLS assets. */
 export const createOriginHandler = (
   hlsDirectory: string,
@@ -208,12 +274,39 @@ export const createOriginHandler = (
       const method = request.method ?? "GET";
       const url = new URL(request.url ?? "/", "http://origin.local");
       if (method === "GET" && url.pathname === "/health") {
-        const playlistAvailable = await fileExists(streamer.playlistPath);
+        const streams = isMultiStreamController(streamer)
+          ? await Promise.all(
+              streamer.streamIds.map(async (streamId) => {
+                const controller = streamer.getStream(streamId);
+                return {
+                  streamId,
+                  running: controller?.isRunning() ?? false,
+                  playlistAvailable: controller
+                    ? await fileExists(controller.playlistPath)
+                    : false,
+                };
+              }),
+            )
+          : undefined;
+        const playlistAvailable = streams
+          ? streams.every((stream) => stream.playlistAvailable)
+          : await fileExists(streamer.playlistPath);
         const running = streamer.isRunning();
         const health: HealthStatus = {
           status: running && playlistAvailable ? "ok" : "starting",
           service: "origin",
-          details: { ffmpegRunning: running, playlistAvailable },
+          details: {
+            ffmpegRunning: running,
+            playlistAvailable,
+            ...(streams
+              ? {
+                  streamCount: streams.length,
+                  readyStreams: streams.filter(
+                    (stream) => stream.running && stream.playlistAvailable,
+                  ).length,
+                }
+              : {}),
+          },
         };
         sendJson(response, health.status === "ok" ? 200 : 503, health);
         return;
@@ -241,17 +334,25 @@ export const createOriginHandler = (
         return;
       }
 
+      const resolved = resolveStreamAsset(hlsDirectory, fileName, streamer);
+      if (!resolved) {
+        sendJson(response, 404, { error: "Stream not found" });
+        return;
+      }
       let filePath: string;
       try {
-        filePath = resolveHlsAssetPath(hlsDirectory, fileName);
+        filePath = resolveHlsAssetPath(
+          resolved.assetDirectory,
+          resolved.assetName,
+        );
       } catch {
         sendJson(response, 400, { error: "Invalid file path" });
         return;
       }
       if (extension === ".sha256" && !(await fileExists(filePath))) {
-        const segmentName = fileName.slice(0, -".sha256".length);
+        const segmentName = resolved.assetName.slice(0, -".sha256".length);
         try {
-          filePath = await streamer.ensureHash(segmentName);
+          filePath = await resolved.streamer.ensureHash(segmentName);
         } catch (error) {
           if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
             throw error;
@@ -420,10 +521,23 @@ export const registerBroadcast = async ({
   throw signal?.reason ?? new Error("Broadcast registration aborted");
 };
 
+/** Registers every origin stream as an independent tracker broadcast. */
+export const registerBroadcasts = async ({
+  registrations,
+  ...options
+}: MultiRegistrationOptions): Promise<void> => {
+  await Promise.all(
+    registrations.map((registration) =>
+      registerBroadcast({ ...options, registration }),
+    ),
+  );
+};
+
 const run = async (): Promise<void> => {
   const configuration = parseOriginConfiguration();
-  const streamer = new HlsStreamer({
+  const streamer = new MultiHlsStreamer({
     outputDirectory: configuration.hlsDirectory,
+    streamIds: configuration.streamIds,
     segmentDurationSeconds: configuration.segmentDurationSeconds,
     playlistSize: configuration.playlistSize,
     hashIntervalMs: configuration.hashIntervalMs,
@@ -455,15 +569,15 @@ const run = async (): Promise<void> => {
   process.once("SIGINT", () => requestShutdown("SIGINT"));
 
   const actualPort = await server.start(configuration.port, configuration.host);
-  await registerBroadcast({
+  await registerBroadcasts({
     trackerUrl: configuration.trackerUrl,
     ...(configuration.trackerApiKey
       ? { apiKey: configuration.trackerApiKey }
       : {}),
-    registration: {
-      id: configuration.broadcastId,
+    registrations: configuration.streamIds.map((streamId) => ({
+      id: streamId,
       playlistUrl: new URL(
-        "/hls/stream.m3u8",
+        `/hls/${encodeURIComponent(streamId)}/stream.m3u8`,
         configuration.publicOriginUrl,
       ).href,
       metadata: {
@@ -472,13 +586,13 @@ const run = async (): Promise<void> => {
         abr: "true",
         qualities: "low,med,high",
       },
-    },
+    })),
     signal: shutdownController.signal,
   });
   logger.info("started", {
     port: actualPort,
     host: configuration.host,
-    broadcastId: configuration.broadcastId,
+    broadcastIds: configuration.streamIds,
   });
 };
 

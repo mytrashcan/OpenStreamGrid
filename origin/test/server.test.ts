@@ -11,8 +11,14 @@ import {
   OriginServer,
   parseOriginConfiguration,
   registerBroadcast,
+  registerBroadcasts,
 } from "../src/server.js";
-import { HlsStreamer, type StreamController } from "../src/streamer.js";
+import {
+  HlsStreamer,
+  MultiHlsStreamer,
+  type MultiStreamController,
+  type StreamController,
+} from "../src/streamer.js";
 
 class FakeStreamer implements StreamController {
   readonly playlistPath: string;
@@ -55,6 +61,8 @@ test("validates origin environment configuration", () => {
     hlsDirectory: "/tmp/openstreamgrid-hls",
     trackerUrl: "http://tracker:7070/",
     broadcastId: "live",
+    multiStreamCount: 1,
+    streamIds: ["live"],
     publicOriginUrl: "http://origin:8080/",
     segmentDurationSeconds: 2,
     playlistSize: 8,
@@ -77,6 +85,10 @@ test("validates origin environment configuration", () => {
     /BROADCAST_ID must not be empty/,
   );
   assert.throws(
+    () => parseOriginConfiguration({ BROADCAST_ID: "live/channel" }),
+    /BROADCAST_ID must be a safe stream ID/,
+  );
+  assert.throws(
     () => parseOriginConfiguration({ HLS_DIRECTORY: "" }),
     /HLS_DIRECTORY must not be empty/,
   );
@@ -95,6 +107,15 @@ test("validates origin environment configuration", () => {
   assert.throws(
     () => parseOriginConfiguration({ TRACKER_API_KEY: " " }),
     /TRACKER_API_KEY must not be empty/,
+  );
+  assert.deepEqual(
+    parseOriginConfiguration({ MULTI_STREAM_COUNT: "3", BROADCAST_ID: "ignored" })
+      .streamIds,
+    ["stream-1", "stream-2", "stream-3"],
+  );
+  assert.throws(
+    () => parseOriginConfiguration({ MULTI_STREAM_COUNT: "6" }),
+    /MULTI_STREAM_COUNT must not exceed 5/,
   );
 });
 
@@ -115,7 +136,58 @@ test("validates HLS streamer configuration before startup", () => {
     () => new HlsStreamer({ outputDirectory: "/tmp/hls", playlistSize: 0 }),
     /Playlist size must be a positive integer/,
   );
+  const multiStreamer = new MultiHlsStreamer({
+    outputDirectory: "/tmp/hls",
+    streamIds: ["stream-1", "stream-2"],
+  });
+  assert.deepEqual(multiStreamer.streamIds, ["stream-1", "stream-2"]);
+  assert.equal(
+    multiStreamer.getStream("stream-2")?.playlistPath,
+    "/tmp/hls/stream-2/stream.m3u8",
+  );
+  assert.throws(
+    () => new MultiHlsStreamer({ outputDirectory: "/tmp/hls", streamIds: [] }),
+    /At least one stream ID is required/,
+  );
 });
+
+class FakeMultiStreamer implements MultiStreamController {
+  readonly streamIds: readonly string[];
+  readonly playlistPath: string;
+  readonly qualities: string[] = ["low", "med", "high"];
+  private readonly streamers = new Map<string, FakeStreamer>();
+
+  constructor(directory: string, streamIds: readonly string[]) {
+    this.streamIds = streamIds;
+    for (const streamId of streamIds) {
+      this.streamers.set(streamId, new FakeStreamer(path.join(directory, streamId)));
+    }
+    this.playlistPath = this.streamers.get(streamIds[0]!)!.playlistPath;
+  }
+
+  getStream(streamId: string): StreamController | undefined {
+    return this.streamers.get(streamId);
+  }
+
+  isRunning(): boolean {
+    return [...this.streamers.values()].every((streamer) => streamer.isRunning());
+  }
+
+  async start(): Promise<void> {
+    await Promise.all([...this.streamers.values()].map((streamer) => streamer.start()));
+  }
+
+  async stop(): Promise<void> {
+    await Promise.all([...this.streamers.values()].map((streamer) => streamer.stop()));
+  }
+
+  async ensureHash(segmentName: string): Promise<string> {
+    const [streamId, ...parts] = segmentName.split("/");
+    const streamer = this.streamers.get(streamId ?? "");
+    if (!streamer) throw new Error("Unknown stream");
+    return streamer.ensureHash(parts.join("/"));
+  }
+}
 
 class TestResponse extends Writable {
   statusCode = 0;
@@ -191,6 +263,28 @@ test("serves HLS assets, creates hashes, and exposes readiness", async (context)
   await streamer.stop();
 });
 
+test("serves isolated multi-stream routes and disables ambiguous flat aliases", async (context) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "openstreamgrid-multi-origin-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const streamer = new FakeMultiStreamer(directory, ["stream-1", "stream-2"]);
+  for (const streamId of streamer.streamIds) {
+    await mkdir(path.join(directory, streamId), { recursive: true });
+    await writeFile(path.join(directory, streamId, "stream.m3u8"), `# ${streamId}`);
+  }
+  await streamer.start();
+  const handler = createOriginHandler(directory, streamer);
+
+  const first = await invoke(handler, "/hls/stream-1/stream.m3u8");
+  assert.equal(first.statusCode, 200);
+  assert.equal(first.body.toString(), "# stream-1");
+  const second = await invoke(handler, "/hls/stream-2/stream.m3u8");
+  assert.equal(second.statusCode, 200);
+  assert.equal(second.body.toString(), "# stream-2");
+  const ambiguous = await invoke(handler, "/hls/stream.m3u8");
+  assert.equal(ambiguous.statusCode, 404);
+  await streamer.stop();
+});
+
 test("rejects encoded traversal outside the HLS directory", async (context) => {
   const parent = await mkdtemp(path.join(tmpdir(), "openstreamgrid-origin-parent-"));
   context.after(() => rm(parent, { recursive: true, force: true }));
@@ -232,6 +326,30 @@ test("registers a broadcast with the tracker", async () => {
     id: "live",
     playlistUrl: "http://origin:8080/hls/stream.m3u8",
   });
+});
+
+test("registers every configured stream as a broadcast", async () => {
+  const registrations: unknown[] = [];
+  await registerBroadcasts({
+    trackerUrl: "http://tracker:7070",
+    registrations: [
+      { id: "stream-1", playlistUrl: "http://origin:8080/hls/stream-1/stream.m3u8" },
+      { id: "stream-2", playlistUrl: "http://origin:8080/hls/stream-2/stream.m3u8" },
+    ],
+    fetchImpl: async (_input, init) => {
+      registrations.push(JSON.parse(String(init?.body)) as unknown);
+      return new Response(null, { status: 201 });
+    },
+  });
+  assert.deepEqual(
+    registrations.sort((left, right) =>
+      String((left as { id: string }).id).localeCompare((right as { id: string }).id),
+    ),
+    [
+      { id: "stream-1", playlistUrl: "http://origin:8080/hls/stream-1/stream.m3u8" },
+      { id: "stream-2", playlistUrl: "http://origin:8080/hls/stream-2/stream.m3u8" },
+    ],
+  );
 });
 
 test("coalesces concurrent origin server starts and stops", async () => {
