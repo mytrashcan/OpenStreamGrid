@@ -14,6 +14,8 @@ active throughout the lifecycle.
   isolated.
 - Uploads default to 1 Mbps and three concurrent connections, both configurable.
 - REST registration is retried after transient tracker failures.
+- Tracker REST endpoints support browser CORS preflight requests.
+- Active DataChannel transfers receive a size- and bandwidth-aware deadline.
 - Browser peers continue to consume existing HTTP Node peers.
 - The SDK suite includes a real two-peer DataChannel transfer test.
 

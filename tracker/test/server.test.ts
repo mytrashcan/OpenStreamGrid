@@ -104,6 +104,9 @@ const invoke = async (
       headersSent = true;
       return response;
     },
+    setHeader() {
+      return response;
+    },
     end(chunk?: string) {
       if (chunk) responseBody += chunk;
       return response;
@@ -125,6 +128,7 @@ const invokeRaw = async (
   url: string,
   body: unknown,
   remoteAddress: string,
+  requestHeaders: Record<string, string> = {},
 ): Promise<{
   status: number;
   body: string;
@@ -134,6 +138,7 @@ const invokeRaw = async (
   const request = Object.assign(Readable.from(payload), {
     method,
     url,
+    headers: requestHeaders,
     socket: { remoteAddress },
   }) as unknown as IncomingMessage;
   let status = 0;
@@ -149,8 +154,12 @@ const invokeRaw = async (
       headers: Record<string, string | number> = {},
     ) {
       status = statusCode;
-      responseHeaders = headers;
+      responseHeaders = { ...responseHeaders, ...headers };
       headersSent = true;
+      return response;
+    },
+    setHeader(name: string, value: string | number) {
+      responseHeaders[name.toLowerCase()] = value;
       return response;
     },
     end(chunk?: string) {
@@ -164,6 +173,45 @@ const invokeRaw = async (
   await handler(request, response);
   return { status, body: responseBody, headers: responseHeaders };
 };
+
+test("supports browser SDK CORS preflight and REST responses", async () => {
+  const handler = createTrackerHandler(new TrackerStore());
+  const origin = "http://127.0.0.1:5173";
+  const preflight = await invokeRaw(
+    handler,
+    "OPTIONS",
+    "/api/v1/broadcasts/live/peers",
+    undefined,
+    "192.0.2.10",
+    {
+      origin,
+      "access-control-request-method": "POST",
+      "access-control-request-headers": "content-type",
+    },
+  );
+
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers["access-control-allow-origin"], "*");
+  assert.equal(
+    preflight.headers["access-control-allow-methods"],
+    "GET, POST, PUT, DELETE, OPTIONS",
+  );
+  assert.equal(
+    preflight.headers["access-control-allow-headers"],
+    "Content-Type, X-API-Key",
+  );
+
+  const response = await invokeRaw(
+    handler,
+    "GET",
+    "/api/v1/broadcasts",
+    undefined,
+    "192.0.2.10",
+    { origin },
+  );
+  assert.equal(response.status, 200);
+  assert.equal(response.headers["access-control-allow-origin"], "*");
+});
 
 test("rate limits mutations per IP and enforces the broadcast peer cap", async () => {
   const handler = createTrackerHandler(new TrackerStore(), {}, undefined, {

@@ -642,6 +642,23 @@ export class OpenStreamGridHlsPlugin {
     timeoutMs: number,
     signal: AbortSignal,
   ): Promise<Uint8Array> {
+    const { peer, segmentId } = candidate;
+    const webRtcOnly =
+      peer.address.startsWith("webrtc:") ||
+      peer.metadata?.transport === "webrtc";
+    if (this.webRtcPeer && webRtcOnly) {
+      try {
+        return await this.webRtcPeer.requestSegment(
+          peer.id,
+          segmentId,
+          signal,
+          peer.uploadBandwidthBps,
+        );
+      } catch {
+        throw new Error("WebRTC peer unavailable");
+      }
+    }
+
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -650,21 +667,6 @@ export class OpenStreamGridHlsPlugin {
     if (signal.aborted) onAbort();
 
     try {
-      const { peer, segmentId } = candidate;
-      const webRtcOnly =
-        peer.address.startsWith("webrtc:") ||
-        peer.metadata?.transport === "webrtc";
-      if (this.webRtcPeer && webRtcOnly) {
-        try {
-          return await this.webRtcPeer.requestSegment(
-            peer.id,
-            segmentId,
-            controller.signal,
-          );
-        } catch {
-          throw new Error("WebRTC peer unavailable");
-        }
-      }
       const url = new URL(
         `/segments/${encodeURIComponent(this.segmentFileName(segmentId))}`,
         peer.address,

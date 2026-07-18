@@ -12,10 +12,12 @@ All notable changes to OpenStreamGrid are documented in this file.
 - Browser upload bitrate and concurrent-connection limits.
 - Path-qualified browser segment identifiers to keep ABR rendition caches isolated.
 - Real DataChannel integration tests between two browser peer implementations.
+- Tracker REST CORS and preflight support for cross-origin browser registration.
 
 #### Changed
 - The Hls.js plugin now turns each participating viewer into a peer by default; no executable or browser extension is required.
 - Browser peers prefer WebRTC-only peers and retain HTTP fallback for existing Node peers.
+- WebRTC transfers extend their deadline from segment size and advertised upload bandwidth after negotiation succeeds.
 - Package versions advanced to 0.4.0.
 
 ## [0.3.0] - 2026-07-17

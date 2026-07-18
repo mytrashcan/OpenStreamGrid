@@ -30,6 +30,13 @@ const DEFAULT_MAX_PEERS_PER_BROADCAST = 500;
 const STATS_EVENT_INTERVAL_MS = 3_000;
 const STATS_EVENT_RETRY_MS = 3_000;
 const MAX_BODY_BYTES = 1_000_000;
+const API_CORS_HEADERS = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+  "access-control-allow-headers": "Content-Type, X-API-Key",
+  "access-control-expose-headers": "Retry-After",
+  "access-control-max-age": "600",
+} as const;
 const DASHBOARD_HTML_URL = new URL("./dashboard.html", import.meta.url);
 const logger = createLogger("tracker");
 
@@ -665,6 +672,16 @@ export const createTrackerHandler = (
       const url = new URL(request.url ?? "/", "http://tracker.local");
       const path = url.pathname;
       isRestRequest = path.startsWith("/api/");
+
+      if (isRestRequest) {
+        for (const [name, value] of Object.entries(API_CORS_HEADERS)) {
+          response.setHeader(name, value);
+        }
+        if (method === "OPTIONS") {
+          sendEmpty(response, 204);
+          return;
+        }
+      }
 
       if (method === "GET" && path === "/health") {
         sendJson(response, 200, { status: "ok", service: "tracker" });
