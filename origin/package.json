@@ -1,6 +1,6 @@
 {
   "name": "@openstreamgrid/origin",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "main": "dist/server.js",
@@ -12,6 +12,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@openstreamgrid/common": "0.3.0"
+    "@openstreamgrid/common": "0.4.0"
   }
 }

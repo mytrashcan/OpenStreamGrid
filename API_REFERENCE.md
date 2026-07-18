@@ -150,6 +150,18 @@ Returns `201` for a new peer or `200` for an existing peer. A peer contains:
 
 Returns `409` when the configured per-broadcast peer capacity is exhausted.
 
+Zero-install browser peers use a signaling-only address and identify their
+transport in metadata:
+
+```json
+{
+  "id": "browser-6f98...",
+  "address": "webrtc://browser-6f98...",
+  "uploadBandwidthBps": 1000000,
+  "metadata": { "runtime": "browser", "transport": "webrtc" }
+}
+```
+
 #### `GET /api/v1/broadcasts/:id/peers`
 
 Returns `{ "peers": Peer[] }`. Add `?segment=low_00042.ts` to return only

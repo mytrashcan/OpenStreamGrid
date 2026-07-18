@@ -46,6 +46,18 @@ export interface HlsjsPluginConfig {
   maxCacheBytes?: number;
   /** P2P request timeout in ms (default: 3000). */
   peerTimeoutMs?: number;
+  /** Enable zero-install browser peer participation (default: true). */
+  peerParticipation?: boolean;
+  /** ICE servers used for browser WebRTC connections. */
+  iceServers?: RTCIceServer[];
+  /** Maximum simultaneous browser uploads (default: 3). */
+  maxUploadConnections?: number;
+  /** Browser upload bitrate limit in bits per second (default: 1 Mbps). */
+  maxUploadBitrate?: number;
+  /** Optional tracker API key used for peer registration requests. */
+  trackerApiKey?: string;
+  /** Test and embedded-runtime hook for constructing peer connections. */
+  peerConnectionFactory?: (configuration: RTCConfiguration) => RTCPeerConnection;
   /** Whether to enable SHA-256 segment verification (default: true). */
   verifySegments?: boolean;
   /** Callback for stats / debug events. */
@@ -100,7 +112,18 @@ export type WsClientMessage =
       broadcastId: string;
       peerId: string;
       stats: PeerTrafficStats;
-    };
+    }
+  | WebRtcSignalMessage;
+
+/** WebRTC offer or answer relayed by the tracker. */
+export interface WebRtcSignalMessage {
+  type: "webrtc_offer" | "webrtc_answer";
+  broadcastId: string;
+  peerId: string;
+  targetPeerId: string;
+  requestId: string;
+  sdp: string;
+}
 
 /** Messages accepted by the browser SDK from the tracker. */
 export type WsServerMessage =
@@ -113,7 +136,8 @@ export type WsServerMessage =
       segments: string[];
     }
   | { type: "stats_update"; broadcastId: string; peerId: string; stats: unknown }
-  | { type: "peer_list"; broadcastId: string; peers: PeerInfo[] };
+  | { type: "peer_list"; broadcastId: string; peers: PeerInfo[] }
+  | WebRtcSignalMessage;
 
 /** Cumulative browser peer traffic and integrity counters. */
 export interface PeerTrafficStats {

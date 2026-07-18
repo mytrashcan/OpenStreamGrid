@@ -15,6 +15,7 @@
 export { OpenStreamGridHlsPlugin } from "./hls-plugin.js";
 export { SegmentCache } from "./cache.js";
 export { WsTrackerClient } from "./ws-client.js";
+export { BrowserWebRtcPeer } from "./webrtc-peer.js";
 export {
   OriginHashVerifier,
   sha256Hex,
@@ -33,3 +34,4 @@ export type {
   WsClientMessage,
   WsServerMessage,
 } from "./types.js";
+export type { BrowserWebRtcPeerOptions } from "./webrtc-peer.js";
