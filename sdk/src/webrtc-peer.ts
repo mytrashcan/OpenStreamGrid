@@ -7,6 +7,7 @@ const MAX_BUFFERED_BYTES = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_UPLOAD_CONNECTIONS = 3;
 const DEFAULT_MAX_UPLOAD_BITRATE = 1_000_000;
+const MAX_TRANSFER_TIMEOUT_MS = 120_000;
 const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
 ];
@@ -50,6 +51,19 @@ const errorFrom = (value: unknown, fallback: string): Error =>
 
 const abortError = (signal: AbortSignal): Error =>
   errorFrom(signal.reason, "WebRTC request aborted");
+
+const transferTimeoutMs = (
+  byteLength: number,
+  bitrate: number,
+  negotiationTimeoutMs: number,
+): number =>
+  Math.min(
+    MAX_TRANSFER_TIMEOUT_MS,
+    Math.max(
+      negotiationTimeoutMs,
+      Math.ceil((byteLength * 8 * 1000) / bitrate) + negotiationTimeoutMs,
+    ),
+  );
 
 const binaryBytes = (value: unknown): Uint8Array | undefined => {
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
@@ -113,16 +127,27 @@ export class BrowserWebRtcPeer {
     targetPeerId: string,
     segmentId: string,
     signal: AbortSignal,
+    advertisedUploadBitrate = DEFAULT_MAX_UPLOAD_BITRATE,
   ): Promise<Uint8Array> {
     if (this.stopped) throw new Error("Browser WebRTC peer has stopped");
     if (!isSegmentId(segmentId)) throw new Error("Invalid WebRTC segment ID");
     if (signal.aborted) throw abortError(signal);
 
     const controller = new AbortController();
-    const timeout = setTimeout(
-      () => controller.abort(new Error("WebRTC segment request timed out")),
-      this.timeoutMs,
-    );
+    const uploadBitrate =
+      Number.isSafeInteger(advertisedUploadBitrate) &&
+      advertisedUploadBitrate > 0
+        ? advertisedUploadBitrate
+        : DEFAULT_MAX_UPLOAD_BITRATE;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const resetTimeout = (timeoutMs: number): void => {
+      if (timeout) clearTimeout(timeout);
+      timeout = setTimeout(
+        () => controller.abort(new Error("WebRTC segment request timed out")),
+        timeoutMs,
+      );
+    };
+    resetTimeout(this.timeoutMs);
     const onAbort = (): void => controller.abort(signal.reason);
     signal.addEventListener("abort", onAbort, { once: true });
     let connection: RTCPeerConnection | undefined;
@@ -158,14 +183,22 @@ export class BrowserWebRtcPeer {
         sdp: await answer,
       });
       await this.waitForChannelOpen(channel, controller.signal);
-      const response = this.receiveSegment(channel, segmentId, controller.signal);
+      const response = this.receiveSegment(
+        channel,
+        segmentId,
+        controller.signal,
+        (byteLength) =>
+          resetTimeout(
+            transferTimeoutMs(byteLength, uploadBitrate, this.timeoutMs),
+          ),
+      );
       channel.send(JSON.stringify({ type: "segment_request", segmentName: segmentId }));
       return await response;
     } catch (error) {
       if (controller.signal.aborted) throw abortError(controller.signal);
       throw errorFrom(error, "WebRTC segment request failed");
     } finally {
-      clearTimeout(timeout);
+      if (timeout) clearTimeout(timeout);
       signal.removeEventListener("abort", onAbort);
       if (connection) this.closeConnection(connection);
     }
@@ -255,15 +288,20 @@ export class BrowserWebRtcPeer {
       throw error;
     }
     const controller = new AbortController();
-    const timeout = setTimeout(
-      () => controller.abort(new Error("Incoming WebRTC request timed out")),
-      this.timeoutMs,
-    );
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const resetTimeout = (timeoutMs: number): void => {
+      if (timeout) clearTimeout(timeout);
+      timeout = setTimeout(
+        () => controller.abort(new Error("Incoming WebRTC request timed out")),
+        timeoutMs,
+      );
+    };
+    resetTimeout(this.timeoutMs);
     let finished = false;
     const finish = (): void => {
       if (finished) return;
       finished = true;
-      clearTimeout(timeout);
+      if (timeout) clearTimeout(timeout);
       this.activeUploadConnections -= 1;
       this.closeConnection(connection);
     };
@@ -277,7 +315,7 @@ export class BrowserWebRtcPeer {
         finish();
         return;
       }
-      void this.serveSegment(event.channel, controller.signal)
+      void this.serveSegment(event.channel, controller.signal, resetTimeout)
         .catch((error: unknown) => {
           if (!controller.signal.aborted) {
             logger.warn("browser_webrtc_upload_failed", {
@@ -311,6 +349,7 @@ export class BrowserWebRtcPeer {
   private async serveSegment(
     channel: RTCDataChannel,
     signal: AbortSignal,
+    resetTimeout: (timeoutMs: number) => void,
   ): Promise<void> {
     channel.binaryType = "arraybuffer";
     const segmentId = await this.waitForRequest(channel, signal);
@@ -326,6 +365,9 @@ export class BrowserWebRtcPeer {
       await receipt;
       return;
     }
+    resetTimeout(
+      transferTimeoutMs(data.byteLength, this.maxUploadBitrate, this.timeoutMs),
+    );
     const chunkCount = Math.ceil(data.byteLength / MAX_CHUNK_BYTES);
     this.sendControl(channel, {
       type: "segment_response",
@@ -429,6 +471,7 @@ export class BrowserWebRtcPeer {
     channel: RTCDataChannel,
     segmentId: string,
     signal: AbortSignal,
+    onMetadata: (byteLength: number) => void,
   ): Promise<Uint8Array> {
     return new Promise((resolve, reject) => {
       const chunks: Uint8Array[] = [];
@@ -477,6 +520,7 @@ export class BrowserWebRtcPeer {
             }
             expectedBytes = message.byteLength;
             expectedChunks = message.chunkCount;
+            onMetadata(expectedBytes);
             complete();
             return;
           }

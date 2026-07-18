@@ -24,13 +24,16 @@ Open `http://localhost:5173`. The app connects to the tracker at `http://localho
 Open the page in two browser windows to create two zero-install viewer peers.
 After both windows cache overlapping segments, the delivery counters show
 browser-to-browser WebRTC traffic without an extension or native executable.
+The local example uses host ICE candidates for fast loopback negotiation;
+replace `iceServers: []` with production STUN/TURN configuration before
+deploying across networks.
 
 ## Production integration notes
 
 - Instantiate one `OpenStreamGridHlsPlugin` per Hls.js player and call `detach()` during React effect cleanup.
 - Attach the plugin before `loadSource()` so it can install the hybrid segment loader.
 - Serve the page, tracker, origin, and peer endpoints over HTTPS in production. Browsers block mixed-content requests from HTTPS pages.
-- Configure CORS on origin and peer HTTP endpoints when they use a different origin from the app.
+- The tracker enables REST CORS for browser registration. Configure CORS on any separate origin or peer HTTP endpoints as needed.
 - Configure a production TURN service; public STUN alone does not cover restrictive NATs and firewalls.
 - Use short-lived TURN credentials rather than embedding permanent secrets in the page.
 - Pass deployment URLs through your app's environment configuration instead of hard-coding the local defaults used here.

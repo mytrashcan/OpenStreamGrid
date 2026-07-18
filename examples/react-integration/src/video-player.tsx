@@ -73,6 +73,8 @@ export function VideoPlayer({
       trackerUrl,
       broadcastId,
       originBaseUrl,
+      // Keep local negotiation inside the loopback network.
+      iceServers: [],
       onReady: () => {
         connected = true;
         publishSnapshot(plugin);

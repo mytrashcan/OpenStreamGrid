@@ -25,7 +25,7 @@ test("browser peers exchange cached segments over a real DataChannel", async () 
     sendSignal: relay(() => responder),
     segmentProvider: () => undefined,
     iceServers: [],
-    maxUploadBitrate: 100_000_000,
+    timeoutMs: 1_000,
     peerConnectionFactory,
   });
   responder = new BrowserWebRtcPeer({
@@ -38,7 +38,8 @@ test("browser peers exchange cached segments over a real DataChannel", async () 
       uploadedBytes += bytes;
     },
     iceServers: [],
-    maxUploadBitrate: 100_000_000,
+    timeoutMs: 1_000,
+    maxUploadBitrate: 256_000,
     peerConnectionFactory,
   });
 
@@ -47,6 +48,7 @@ test("browser peers exchange cached segments over a real DataChannel", async () 
       "browser-b",
       "hls/low/segment.ts",
       new AbortController().signal,
+      256_000,
     );
 
     assert.deepEqual(result, expected);
