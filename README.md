@@ -83,7 +83,7 @@ playlist URLs through the same API.
 ## Features
 
 - Hybrid HTTP/WebRTC segment delivery with immediate origin fallback.
-- API-key authentication for tracker REST, WebSocket, dashboard, and SSE access.
+- API-key authentication for tracker REST, WebSocket, dashboard, and SSE access (constant-time comparison with `timingSafeEqual`).
 - Native tracker HTTPS and HTTPS-compatible tracker/origin clients.
 - Configurable STUN and TURN servers for WebRTC NAT traversal.
 - Multi-channel isolation and multi-rendition HLS generation.
@@ -126,7 +126,7 @@ environments, but it is not part of the normal viewer path.
 ## Tracker API
 
 Tracker resources are under `/api/v1`. When `TRACKER_API_KEY` is set, send
-`X-API-Key: <key>` on protected HTTP requests and during the WebSocket upgrade.
+`X-API-Key: <key>` on protected HTTP requests and pass `?apiKey=<key>` during the WebSocket upgrade.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -163,7 +163,7 @@ codes, and origin/peer endpoints.
 | `STALE_PEER_MS` | `30000` | Peer inactivity timeout |
 | `STORE_TYPE` | `sqlite` | Persistence backend: `sqlite` or `memory` |
 | `DB_PATH` | `./data/tracker.db` | SQLite database path |
-| `TRACKER_API_KEY` | unset | Enable API-key authentication |
+| `TRACKER_API_KEY` | unset | Enable API-key authentication (v0.4.1+: enforced on REST POST/PUT/DELETE, stats, dashboard, and WebSocket upgrade) |
 | `TLS_CERT_PATH` | unset | PEM certificate path; requires `TLS_KEY_PATH` |
 | `TLS_KEY_PATH` | unset | PEM private-key path; requires `TLS_CERT_PATH` |
 | `RATE_LIMIT_RPS` | `100` | Sustained requests per second per client |
@@ -259,7 +259,7 @@ npm ci --prefix sdk
 npm run build
 npm run typecheck
 npm test
-npx eslint .
+npm run lint
 ```
 
 Repository layout: `tracker/` owns discovery, persistence, signaling, and
