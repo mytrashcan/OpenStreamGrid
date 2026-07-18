@@ -11,6 +11,7 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present && npm --prefix sdk run build",
+    "lint": "eslint .",
     "test": "npm run test --workspaces --if-present && npm --prefix sdk test",
     "test:docker-health": "bash test/docker-health-test.sh",
     "typecheck": "npm run typecheck --workspaces --if-present && npm --prefix sdk run typecheck"

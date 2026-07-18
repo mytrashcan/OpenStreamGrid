@@ -25,6 +25,32 @@ class FakeWebSocket {
   }
 }
 
+test("appends the configured API key to the WebSocket URL", async () => {
+  const socket = new FakeWebSocket();
+  let requestedUrl = "";
+  const client = new WsTrackerClient({
+    trackerUrl: "https://tracker.example/base?ignored=true",
+    apiKey: "test secret/with symbols",
+    broadcastId: "live",
+    peerId: "browser-viewer",
+    reportPeerState: false,
+    webSocketFactory: (url) => {
+      requestedUrl = url;
+      return socket as unknown as WebSocket;
+    },
+  });
+
+  const started = client.start();
+  socket.open();
+  await started;
+  client.stop();
+
+  assert.equal(
+    requestedUrl,
+    "wss://tracker.example/ws?apiKey=test+secret%2Fwith+symbols",
+  );
+});
+
 test("supports passive subscriptions without reporting unregistered peer state", async () => {
   const socket = new FakeWebSocket();
   const client = new WsTrackerClient({

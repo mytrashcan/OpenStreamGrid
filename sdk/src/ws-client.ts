@@ -174,6 +174,8 @@ const callSafely = (label: string, callback: () => void): void => {
 /** Browser tracker client callbacks and reconnection settings. */
 export interface WsClientOptions {
   trackerUrl: string;
+  /** Optional API key used to authenticate the WebSocket upgrade. */
+  apiKey?: string;
   broadcastId: string;
   peerId: string;
   /** Called periodically to get current segments possessed. */
@@ -521,6 +523,7 @@ export class WsTrackerClient {
   private buildWsUrl(): string {
     const url = new URL("/ws", this.options.trackerUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    if (this.options.apiKey) url.searchParams.set("apiKey", this.options.apiKey);
     return url.href;
   }
 }

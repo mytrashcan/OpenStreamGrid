@@ -9,6 +9,7 @@ import {
   type WsServerMessage,
 } from "@openstreamgrid/common";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
+import { apiKeysMatch } from "./api-key.js";
 import type { TrackerStoreBackend } from "./store.js";
 
 interface Subscription {
@@ -99,6 +100,7 @@ export class TrackerWebSocketHub implements TrackerEvents {
     private readonly server: Server,
     private readonly store: TrackerStoreBackend,
     private readonly downstreamEvents: TrackerEvents = {},
+    private readonly apiKey?: string,
   ) {
     this.server.on("upgrade", this.handleUpgrade);
     this.webSocketServer.on("connection", (socket) => {
@@ -184,6 +186,22 @@ export class TrackerWebSocketHub implements TrackerEvents {
     if (url.pathname !== "/ws") {
       socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
       return;
+    }
+    if (this.apiKey !== undefined) {
+      const queryApiKey = url.searchParams.get("apiKey");
+      const headerApiKey = request.headers["x-api-key"];
+      const providedApiKey =
+        queryApiKey ??
+        (typeof headerApiKey === "string" ? headerApiKey : undefined);
+      if (
+        providedApiKey === undefined ||
+        !apiKeysMatch(this.apiKey, providedApiKey)
+      ) {
+        socket.end(
+          "HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+        );
+        return;
+      }
     }
     this.webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
       this.webSocketServer.emit("connection", webSocket, request);
