@@ -37,11 +37,13 @@ test("validates tracker environment configuration", () => {
       PORT: "8081",
       HOST: "127.0.0.1",
       STALE_PEER_MS: "5000",
+      TRACKER_API_KEY: "test-secret",
     }),
     {
       port: 8081,
       host: "127.0.0.1",
       stalePeerMs: 5_000,
+      trackerApiKey: "test-secret",
       rateLimitRps: 100,
       rateLimitBurst: 200,
       maxPeersPerBroadcast: 500,
@@ -74,6 +76,10 @@ test("validates tracker environment configuration", () => {
   assert.throws(
     () => parseTrackerConfiguration({ MAX_PEERS_PER_BROADCAST: "0" }),
     /MAX_PEERS_PER_BROADCAST must be an integer/,
+  );
+  assert.throws(
+    () => parseTrackerConfiguration({ TRACKER_API_KEY: " " }),
+    /TRACKER_API_KEY must not be empty/,
   );
   assert.throws(
     () => createConfiguredStore({ STORE_TYPE: "sqlite", DB_PATH: " " }),
@@ -211,6 +217,96 @@ test("supports browser SDK CORS preflight and REST responses", async () => {
   );
   assert.equal(response.status, 200);
   assert.equal(response.headers["access-control-allow-origin"], "*");
+});
+
+test("authenticates protected HTTP routes when an API key is configured", async () => {
+  const handler = createTrackerHandler(new TrackerStore(), {}, undefined, {
+    apiKey: "test-secret",
+  });
+
+  for (const method of ["POST", "PUT", "DELETE"]) {
+    const missing = await invokeRaw(
+      handler,
+      method,
+      "/api/v1/not-a-route",
+      undefined,
+      "192.0.2.20",
+    );
+    assert.equal(missing.status, 401);
+    assert.deepEqual(JSON.parse(missing.body), { error: "Missing API key" });
+  }
+
+  const invalid = await invokeRaw(
+    handler,
+    "POST",
+    "/api/v1/broadcasts",
+    { id: "live", playlistUrl: "http://origin/live.m3u8" },
+    "192.0.2.21",
+    { "x-api-key": "wrong-secret" },
+  );
+  assert.equal(invalid.status, 401);
+  assert.deepEqual(JSON.parse(invalid.body), { error: "Invalid API key" });
+
+  const registered = await invokeRaw(
+    handler,
+    "POST",
+    "/api/v1/broadcasts",
+    { id: "live", playlistUrl: "http://origin/live.m3u8" },
+    "192.0.2.22",
+    { "x-api-key": "test-secret" },
+  );
+  assert.equal(registered.status, 201);
+
+  for (const path of [
+    "/api/v1/stats",
+    "/api/v1/stats/events",
+    "/dashboard",
+  ]) {
+    const response = await invokeRaw(
+      handler,
+      "GET",
+      path,
+      undefined,
+      "192.0.2.23",
+    );
+    assert.equal(response.status, 401, path);
+    assert.deepEqual(JSON.parse(response.body), { error: "Missing API key" });
+  }
+
+  const stats = await invokeRaw(
+    handler,
+    "GET",
+    "/api/v1/stats",
+    undefined,
+    "192.0.2.24",
+    { "x-api-key": "test-secret" },
+  );
+  assert.equal(stats.status, 200);
+
+  const publicHealth = await invokeRaw(
+    handler,
+    "GET",
+    "/health",
+    undefined,
+    "192.0.2.25",
+  );
+  const publicMetrics = await invokeRaw(
+    handler,
+    "GET",
+    "/metrics",
+    undefined,
+    "192.0.2.25",
+  );
+  const publicPreflight = await invokeRaw(
+    handler,
+    "OPTIONS",
+    "/api/v1/broadcasts",
+    undefined,
+    "192.0.2.25",
+  );
+  assert.equal(publicHealth.status, 200);
+  assert.equal(publicMetrics.status, 200);
+  assert.equal(publicPreflight.status, 204);
 });
 
 test("rate limits mutations per IP and enforces the broadcast peer cap", async () => {
@@ -624,6 +720,52 @@ test("pushes peer and segment updates to WebSocket subscribers", async () => {
     });
   } finally {
     socket?.close();
+    await server.stop();
+  }
+});
+
+test("authenticates WebSocket upgrades with the API key query parameter", async () => {
+  const server = new TrackerServer(
+    () => new TrackerStore(),
+    30_000,
+    {
+      trackerApiKey: "test secret/with symbols",
+      rateLimitRps: 100,
+      rateLimitBurst: 200,
+      maxPeersPerBroadcast: 500,
+    },
+  );
+  const port = await server.start(0, "127.0.0.1");
+  const websocketUrl = `ws://127.0.0.1:${port}/ws`;
+  const rejectedStatus = (url: string): Promise<number> =>
+    new Promise((resolve, reject) => {
+      const socket = new WebSocket(url);
+      socket.once("unexpected-response", (_request, response) => {
+        response.resume();
+        resolve(response.statusCode ?? 0);
+      });
+      socket.once("open", () => {
+        socket.close();
+        reject(new Error("Expected WebSocket upgrade to be rejected"));
+      });
+      socket.once("error", reject);
+    });
+
+  let authenticatedSocket: WebSocket | undefined;
+  try {
+    assert.equal(await rejectedStatus(websocketUrl), 401);
+    assert.equal(await rejectedStatus(`${websocketUrl}?apiKey=wrong`), 401);
+
+    authenticatedSocket = new WebSocket(
+      `${websocketUrl}?apiKey=${encodeURIComponent("test secret/with symbols")}`,
+    );
+    await new Promise<void>((resolve, reject) => {
+      authenticatedSocket?.once("open", resolve);
+      authenticatedSocket?.once("error", reject);
+    });
+    assert.equal(authenticatedSocket.readyState, WebSocket.OPEN);
+  } finally {
+    authenticatedSocket?.close();
     await server.stop();
   }
 });

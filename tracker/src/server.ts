@@ -13,6 +13,7 @@ import {
   type PeerJoinRequest,
   type SegmentPossessionReport,
 } from "@openstreamgrid/common";
+import { apiKeysMatch } from "./api-key.js";
 import { SQLiteStore } from "./sqlite-store.js";
 import {
   StoreError,
@@ -48,6 +49,7 @@ export interface TrackerConfiguration {
   port: number;
   host: string;
   stalePeerMs: number;
+  trackerApiKey?: string;
   rateLimitRps: number;
   rateLimitBurst: number;
   maxPeersPerBroadcast: number;
@@ -78,6 +80,10 @@ export const parseTrackerConfiguration = (
 ): TrackerConfiguration => {
   const host = environment.HOST ?? DEFAULT_HOST;
   if (host.trim() === "") throw new Error("HOST must not be empty");
+  const trackerApiKey = environment.TRACKER_API_KEY;
+  if (trackerApiKey !== undefined && trackerApiKey.trim() === "") {
+    throw new Error("TRACKER_API_KEY must not be empty");
+  }
   return {
     port: parseInteger(
       environment.PORT ?? String(DEFAULT_PORT),
@@ -86,6 +92,7 @@ export const parseTrackerConfiguration = (
       65_535,
     ),
     host: host.trim(),
+    ...(trackerApiKey ? { trackerApiKey } : {}),
     stalePeerMs: parseInteger(
       environment.STALE_PEER_MS ?? String(DEFAULT_STALE_PEER_MS),
       "STALE_PEER_MS",
@@ -637,6 +644,7 @@ const decodedPathComponent = (value: string): string => {
 };
 
 export interface TrackerHttpOptions {
+  apiKey?: string;
   rateLimitRps?: number;
   rateLimitBurst?: number;
   maxPeersPerBroadcast?: number;
@@ -660,6 +668,7 @@ export const createTrackerHandler = (
     );
   const maxPeersPerBroadcast =
     options.maxPeersPerBroadcast ?? DEFAULT_MAX_PEERS_PER_BROADCAST;
+  const apiKey = options.apiKey;
 
   return async (
     request: IncomingMessage,
@@ -680,6 +689,27 @@ export const createTrackerHandler = (
         if (method === "OPTIONS") {
           sendEmpty(response, 204);
           return;
+        }
+      }
+
+      const requiresApiKey =
+        apiKey !== undefined &&
+        ((isRestRequest &&
+          (method === "POST" || method === "PUT" || method === "DELETE")) ||
+          (method === "GET" &&
+            (path === "/api/v1/stats" ||
+              path === "/api/v1/stats/events" ||
+              path === "/dashboard")));
+      if (requiresApiKey) {
+        const providedApiKey = request.headers?.["x-api-key"];
+        if (providedApiKey === undefined || providedApiKey === "") {
+          throw new RequestError("Missing API key", 401);
+        }
+        if (
+          typeof providedApiKey !== "string" ||
+          !apiKeysMatch(apiKey, providedApiKey)
+        ) {
+          throw new RequestError("Invalid API key", 401);
         }
       }
 
@@ -965,7 +995,10 @@ export class TrackerServer {
     private readonly stalePeerMs = DEFAULT_STALE_PEER_MS,
     configuration: Pick<
       TrackerConfiguration,
-      "rateLimitRps" | "rateLimitBurst" | "maxPeersPerBroadcast"
+      | "trackerApiKey"
+      | "rateLimitRps"
+      | "rateLimitBurst"
+      | "maxPeersPerBroadcast"
     > = {
       rateLimitRps: DEFAULT_RATE_LIMIT_RPS,
       rateLimitBurst: DEFAULT_RATE_LIMIT_BURST,
@@ -997,10 +1030,18 @@ export class TrackerServer {
         rateLimitRps: configuration.rateLimitRps,
         rateLimitBurst: configuration.rateLimitBurst,
         maxPeersPerBroadcast: configuration.maxPeersPerBroadcast,
+        ...(configuration.trackerApiKey
+          ? { apiKey: configuration.trackerApiKey }
+          : {}),
         metrics,
       }),
     );
-    webSockets = new TrackerWebSocketHub(this.server, store, this.statsEvents);
+    webSockets = new TrackerWebSocketHub(
+      this.server,
+      store,
+      this.statsEvents,
+      configuration.trackerApiKey,
+    );
     this.webSockets = webSockets;
   }
 

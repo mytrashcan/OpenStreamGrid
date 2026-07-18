@@ -328,6 +328,7 @@ export class OpenStreamGridHlsPlugin {
 
     this.wsClient = new WsTrackerClient({
       trackerUrl: config.trackerUrl,
+      ...(this.trackerApiKey ? { apiKey: this.trackerApiKey } : {}),
       broadcastId: config.broadcastId,
       peerId: this.peerId,
       getSegments: () => this.cachedSegmentIds(),
