@@ -2,6 +2,18 @@
 
 All notable changes to OpenStreamGrid are documented in this file.
 
+## [0.4.1] - 2026-07-18
+
+### Security audit remediation
+
+#### Fixed
+- **Tracker authentication was documented but not implemented.** The `TRACKER_API_KEY` env var was listed in CORS headers and SECURITY.md, but the tracker never validated it. Added `apiKeysMatch()` (constant-time comparison) and middleware enforcing `X-API-Key` on REST POST/PUT/DELETE, stats, and dashboard SSE endpoints. WebSocket upgrades now validate `?apiKey=` query parameter.
+- **CI `npx eslint` without version pin.** Replaced with `npm run lint` using the locally installed eslint version.
+- **SDK WebSocket client** now appends `?apiKey=` to the tracker URL when `apiKey` is configured.
+
+#### Changed
+- Package versions advanced to 0.4.1.
+
 ## [0.4.0] - 2026-07-17
 
 ### Zero-install browser peers
