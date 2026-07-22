@@ -1,3 +1,4 @@
+import { validatePeerHttpBaseUrl } from "@openstreamgrid/common";
 import type { TransportAdapter, TransportOptions, TransportStats } from "./transport.js";
 import type { FetchFunction, SegmentIntegrityVerifier } from "./verifier.js";
 import { keepAliveFetch } from "./http-client.js";
@@ -20,6 +21,7 @@ export class HttpTransport implements TransportAdapter {
   private readonly verifier: SegmentIntegrityVerifier | undefined;
   private readonly p2pTimeoutMs: number;
   private activePeers: string[] = [];
+  private readonly authorizationTokens = new Map<string, string>();
   private readonly stats: TransportStats = {
     segmentsFetched: 0,
     segmentsFailed: 0,
@@ -40,6 +42,7 @@ export class HttpTransport implements TransportAdapter {
 
   async stop(): Promise<void> {
     this.activePeers = [];
+    this.authorizationTokens.clear();
   }
 
   get peers(): string[] {
@@ -47,8 +50,24 @@ export class HttpTransport implements TransportAdapter {
   }
 
   /** Update the known peer address list. */
-  setPeers(addresses: string[]): void {
-    this.activePeers = [...addresses];
+  setPeers(
+    peers: Array<string | { address: string; authorizationToken?: string }>,
+  ): void {
+    const normalized = peers.map((peer) =>
+      typeof peer === "string" ? { address: peer } : peer,
+    );
+    this.activePeers = normalized.map((peer) => peer.address);
+    this.authorizationTokens.clear();
+    for (const peer of normalized) {
+      if (peer.authorizationToken) {
+        this.authorizationTokens.set(peer.address, peer.authorizationToken);
+      }
+    }
+  }
+
+  setPeerAuthorization(address: string, token: string | undefined): void {
+    if (token) this.authorizationTokens.set(address, token);
+    else this.authorizationTokens.delete(address);
   }
 
   async requestSegment(
@@ -70,12 +89,20 @@ export class HttpTransport implements TransportAdapter {
     if (signal?.aborted) onOuterAbort();
 
     try {
+      const baseUrl = validatePeerHttpBaseUrl(peerAddress);
       const url = new URL(
         `/segments/${encodeURIComponent(segmentName)}`,
-        peerAddress,
+        baseUrl,
       );
       const response = await this.fetchImpl(url, {
         signal: controller.signal,
+        ...(this.authorizationTokens.has(peerAddress)
+          ? {
+              headers: {
+                Authorization: `Bearer ${this.authorizationTokens.get(peerAddress)}`,
+              },
+            }
+          : {}),
       });
       if (!response.ok) {
         throw new Error(`Peer returned HTTP ${response.status}`);

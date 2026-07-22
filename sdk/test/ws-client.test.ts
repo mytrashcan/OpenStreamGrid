@@ -25,12 +25,11 @@ class FakeWebSocket {
   }
 }
 
-test("appends the configured API key to the WebSocket URL", async () => {
+test("appends the peer session token to the WebSocket URL", async () => {
   const socket = new FakeWebSocket();
   let requestedUrl = "";
   const client = new WsTrackerClient({
     trackerUrl: "https://tracker.example/base?ignored=true",
-    apiKey: "test secret/with symbols",
     broadcastId: "live",
     peerId: "browser-viewer",
     reportPeerState: false,
@@ -39,6 +38,7 @@ test("appends the configured API key to the WebSocket URL", async () => {
       return socket as unknown as WebSocket;
     },
   });
+  client.setSessionToken("test session/with symbols");
 
   const started = client.start();
   socket.open();
@@ -47,7 +47,7 @@ test("appends the configured API key to the WebSocket URL", async () => {
 
   assert.equal(
     requestedUrl,
-    "wss://tracker.example/ws?apiKey=test+secret%2Fwith+symbols",
+    "wss://tracker.example/ws?sessionToken=test+session%2Fwith+symbols",
   );
 });
 
@@ -61,6 +61,7 @@ test("supports passive subscriptions without reporting unregistered peer state",
     reportIntervalMs: 5,
     webSocketFactory: () => socket as unknown as WebSocket,
   });
+  client.setSessionToken("test-session");
 
   const started = client.start();
   socket.open();
@@ -98,6 +99,7 @@ test("enables peer reports after registration", async () => {
     reportIntervalMs: 5,
     webSocketFactory: () => socket as unknown as WebSocket,
   });
+  client.setSessionToken("test-session");
 
   const started = client.start();
   socket.open();
@@ -123,6 +125,7 @@ test("relays validated WebRTC signaling messages", async () => {
     onWebRtcSignal: (message) => received.push(message),
     webSocketFactory: () => socket as unknown as WebSocket,
   });
+  client.setSessionToken("test-session");
   const started = client.start();
   socket.open();
   await started;

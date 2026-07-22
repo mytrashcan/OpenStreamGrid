@@ -1,6 +1,7 @@
 {
   "name": "@openstreamgrid/peer",
-  "version": "0.4.0",
+  "version": "0.5.0",
+  "license": "GPL-3.0-only",
   "private": true,
   "type": "module",
   "main": "dist/client.js",
@@ -15,7 +16,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@openstreamgrid/common": "0.4.0",
+    "@openstreamgrid/common": "0.5.0",
     "@roamhq/wrtc": "^0.10.0",
     "ws": "^8.21.1"
   },

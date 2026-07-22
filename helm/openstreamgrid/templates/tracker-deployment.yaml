@@ -1,3 +1,6 @@
+{{- if and (eq .Values.tracker.env.STORE_TYPE "sqlite") (gt (int .Values.tracker.replicaCount) 1) }}
+{{- fail "tracker.replicaCount must be 1 when STORE_TYPE is sqlite" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -39,6 +42,18 @@ spec:
               value: {{ .Values.tracker.env.STORE_TYPE | quote }}
             - name: DB_PATH
               value: {{ .Values.tracker.env.DB_PATH | quote }}
+            {{- if .Values.tracker.auth.existingSecret }}
+            - name: TRACKER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.tracker.auth.existingSecret | quote }}
+                  key: {{ .Values.tracker.auth.apiKeyKey | quote }}
+            - name: PEER_SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.tracker.auth.existingSecret | quote }}
+                  key: {{ .Values.tracker.auth.peerSessionSecretKey | quote }}
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.tracker.port }}

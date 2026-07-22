@@ -63,7 +63,10 @@ export class OriginHashVerifier {
   private readonly originBaseUrl: URL;
   private readonly pendingHashes = new Map<string, Promise<string>>();
 
-  constructor(originBaseUrl: string) {
+  constructor(
+    originBaseUrl: string,
+    private readonly hashUrlResolver?: (segmentUrl: string) => string,
+  ) {
     let url: URL;
     try {
       url = new URL(
@@ -88,19 +91,21 @@ export class OriginHashVerifier {
     segmentUrl: string,
     data: Uint8Array,
   ): Promise<SegmentVerificationResult> {
-    const url = new URL(segmentUrl);
+    const segment = new URL(segmentUrl);
     const basePath = this.originBaseUrl.pathname.endsWith("/")
       ? this.originBaseUrl.pathname
       : `${this.originBaseUrl.pathname}/`;
     if (
-      url.origin !== this.originBaseUrl.origin ||
-      !url.pathname.startsWith(basePath)
+      segment.origin !== this.originBaseUrl.origin ||
+      !segment.pathname.startsWith(basePath)
     ) {
       throw new Error("Segment URL is outside the configured origin base URL");
     }
-    url.search = "";
+    const url = new URL(
+      this.hashUrlResolver?.(segmentUrl) ?? segment.href,
+    );
     url.hash = "";
-    url.pathname = `${url.pathname}.sha256`;
+    if (!this.hashUrlResolver) url.pathname = `${url.pathname}.sha256`;
     const response = await fetch(url);
     if (!response.ok) {
       throw new Error(

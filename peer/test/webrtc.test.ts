@@ -136,11 +136,13 @@ test("transfers and reassembles a segment over a real DataChannel", async () => 
         signalUrl: `ws://127.0.0.1:${port}`,
         peerId: "peer-a",
         broadcastId: "live",
+        sessionToken: "test-peer-a-session",
       }),
       responder.start({
         signalUrl: `ws://127.0.0.1:${port}`,
         peerId: "peer-b",
         broadcastId: "live",
+        sessionToken: "test-peer-b-session",
       }),
     ]);
     await waitFor(() => subscriptions.size === 2);

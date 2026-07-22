@@ -65,14 +65,20 @@ test("penalizes integrity failures more heavily and expires stale peers", () => 
   store.registerBroadcast({ id: "live", playlistUrl: "http://origin/stream.m3u8" });
   store.joinPeer("live", { id: "bad", address: "http://bad" });
   store.joinPeer("live", { id: "reporter", address: "http://reporter" });
-  const peer = store.reportPeerFailure("live", "bad", {
+  store.joinPeer("live", { id: "reporter-2", address: "http://reporter-2" });
+  const firstReport = store.reportPeerFailure("live", "bad", {
     reporterId: "reporter",
+    reason: "integrity",
+  });
+  assert.equal(firstReport.trustScore, 1);
+  const peer = store.reportPeerFailure("live", "bad", {
+    reporterId: "reporter-2",
     reason: "integrity",
   });
   assert.equal(peer.trustScore, 0.65);
 
   now = new Date("2026-07-17T00:01:00.000Z");
-  assert.equal(store.removeStalePeers(30_000), 2);
+  assert.equal(store.removeStalePeers(30_000), 3);
   assert.equal(store.listPeers("live").length, 0);
 });
 

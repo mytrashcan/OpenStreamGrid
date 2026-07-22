@@ -430,6 +430,31 @@ test("reports peer timeouts and falls back to a verified origin segment", async 
   });
 });
 
+test("aborts an in-flight Origin request when the fetcher stops", async () => {
+  const fetcher = new HybridSegmentFetcher({
+    selfPeerId: "self",
+    originBaseUrl: new URL("http://origin:8080/hls/"),
+    cache: new SegmentCache(1_000),
+    directory: new FakeDirectory(),
+    verifier,
+    stats: new TrafficStats(),
+    fetchImpl: async (_input, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => reject(init.signal?.reason),
+          { once: true },
+        );
+      }),
+  });
+
+  const pending = fetcher.fetchSegment("segment.ts", 0);
+  await new Promise((resolve) => setImmediate(resolve));
+  fetcher.stop();
+
+  await assert.rejects(pending, /Segment fetcher stopped/);
+});
+
 test("rejects origin HTTP and integrity failures with useful errors", async () => {
   const create = (
     fetchImpl: FetchFunction,

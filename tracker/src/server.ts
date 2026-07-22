@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import {
   createLogger,
   parsePeerTrafficStats,
+  validatePeerHttpBaseUrl,
   type Broadcast,
   type BroadcastRegistration,
   type BroadcastStats,
@@ -14,6 +15,11 @@ import {
   type SegmentPossessionReport,
 } from "@openstreamgrid/common";
 import { apiKeysMatch } from "./api-key.js";
+import {
+  bearerToken,
+  PeerSessionTokenService,
+  type PeerSessionClaims,
+} from "./peer-session.js";
 import { SQLiteStore } from "./sqlite-store.js";
 import {
   StoreError,
@@ -28,13 +34,14 @@ const DEFAULT_STALE_PEER_MS = 30_000;
 const DEFAULT_RATE_LIMIT_RPS = 100;
 const DEFAULT_RATE_LIMIT_BURST = 200;
 const DEFAULT_MAX_PEERS_PER_BROADCAST = 500;
+const DEFAULT_PEER_SESSION_TTL_MS = 60 * 60 * 1_000;
 const STATS_EVENT_INTERVAL_MS = 3_000;
 const STATS_EVENT_RETRY_MS = 3_000;
 const MAX_BODY_BYTES = 1_000_000;
 const API_CORS_HEADERS = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "access-control-allow-headers": "Content-Type, X-API-Key",
+  "access-control-allow-headers": "Authorization, Content-Type, X-API-Key",
   "access-control-expose-headers": "Retry-After",
   "access-control-max-age": "600",
 } as const;
@@ -50,6 +57,8 @@ export interface TrackerConfiguration {
   host: string;
   stalePeerMs: number;
   trackerApiKey?: string;
+  peerSessionSecret?: string;
+  peerSessionTtlMs: number;
   rateLimitRps: number;
   rateLimitBurst: number;
   maxPeersPerBroadcast: number;
@@ -84,6 +93,13 @@ export const parseTrackerConfiguration = (
   if (trackerApiKey !== undefined && trackerApiKey.trim() === "") {
     throw new Error("TRACKER_API_KEY must not be empty");
   }
+  const peerSessionSecret = environment.PEER_SESSION_SECRET;
+  if (
+    peerSessionSecret !== undefined &&
+    Buffer.byteLength(peerSessionSecret, "utf8") < 32
+  ) {
+    throw new Error("PEER_SESSION_SECRET must contain at least 32 bytes");
+  }
   return {
     port: parseInteger(
       environment.PORT ?? String(DEFAULT_PORT),
@@ -93,6 +109,12 @@ export const parseTrackerConfiguration = (
     ),
     host: host.trim(),
     ...(trackerApiKey ? { trackerApiKey } : {}),
+    ...(peerSessionSecret ? { peerSessionSecret } : {}),
+    peerSessionTtlMs: parseInteger(
+      environment.PEER_SESSION_TTL_MS ?? String(DEFAULT_PEER_SESSION_TTL_MS),
+      "PEER_SESSION_TTL_MS",
+      1_000,
+    ),
     stalePeerMs: parseInteger(
       environment.STALE_PEER_MS ?? String(DEFAULT_STALE_PEER_MS),
       "STALE_PEER_MS",
@@ -260,6 +282,7 @@ interface TokenBucket {
 /** In-memory token-bucket limiter keyed by the direct client address. */
 export class IpRateLimiter {
   private readonly buckets = new Map<string, TokenBucket>();
+  private operations = 0;
 
   constructor(
     private readonly requestsPerSecond: number,
@@ -269,6 +292,13 @@ export class IpRateLimiter {
 
   consume(clientIp: string): number | undefined {
     const nowMs = this.now();
+    this.operations += 1;
+    if (this.operations % 1_000 === 0) {
+      const idleCutoff = nowMs - Math.max(60_000, (this.burst / this.requestsPerSecond) * 2_000);
+      for (const [ip, candidate] of this.buckets) {
+        if (candidate.lastRefillMs < idleCutoff) this.buckets.delete(ip);
+      }
+    }
     const bucket = this.buckets.get(clientIp) ?? {
       tokens: this.burst,
       lastRefillMs: nowMs,
@@ -643,8 +673,26 @@ const decodedPathComponent = (value: string): string => {
   }
 };
 
+const validatePeerAddress = (address: string, peerId: string): void => {
+  const url = new URL(address);
+  if (url.protocol === "http:" || url.protocol === "https:") {
+    validatePeerHttpBaseUrl(address);
+    return;
+  }
+  if (
+    url.protocol !== "webrtc:" ||
+    decodeURIComponent(url.hostname) !== peerId ||
+    url.pathname !== "" ||
+    url.search !== "" ||
+    url.hash !== ""
+  ) {
+    throw new RequestError("Peer address is invalid");
+  }
+};
+
 export interface TrackerHttpOptions {
   apiKey?: string;
+  peerSessions?: PeerSessionTokenService;
   rateLimitRps?: number;
   rateLimitBurst?: number;
   maxPeersPerBroadcast?: number;
@@ -669,6 +717,7 @@ export const createTrackerHandler = (
   const maxPeersPerBroadcast =
     options.maxPeersPerBroadcast ?? DEFAULT_MAX_PEERS_PER_BROADCAST;
   const apiKey = options.apiKey;
+  const peerSessions = options.peerSessions ?? new PeerSessionTokenService();
 
   return async (
     request: IncomingMessage,
@@ -692,32 +741,52 @@ export const createTrackerHandler = (
         }
       }
 
-      const requiresApiKey =
-        apiKey !== undefined &&
-        ((isRestRequest &&
-          (method === "POST" || method === "PUT" || method === "DELETE")) ||
-          (method === "GET" &&
-            (path === "/api/v1/stats" ||
-              path === "/api/v1/stats/events" ||
-              path === "/dashboard")));
-      if (requiresApiKey) {
-        const providedApiKey = request.headers?.["x-api-key"];
-        if (providedApiKey === undefined || providedApiKey === "") {
-          throw new RequestError("Missing API key", 401);
+      const providedApiKey = request.headers?.["x-api-key"];
+      const hasAdminAccess =
+        apiKey === undefined ||
+        (typeof providedApiKey === "string" && apiKeysMatch(apiKey, providedApiKey));
+      const session = peerSessions.verify(
+        bearerToken(request.headers?.authorization),
+      );
+      const requireAdminAccess = (): void => {
+        if (hasAdminAccess) return;
+        throw new RequestError(
+          providedApiKey === undefined ? "Missing API key" : "Invalid API key",
+          401,
+        );
+      };
+      const requirePeerSession = (
+        broadcastId: string,
+        peerId?: string,
+      ): PeerSessionClaims => {
+        if (hasAdminAccess) {
+          return {
+            broadcastId,
+            peerId: peerId ?? "admin",
+            expiresAt: Number.MAX_SAFE_INTEGER,
+          };
         }
         if (
-          typeof providedApiKey !== "string" ||
-          !apiKeysMatch(apiKey, providedApiKey)
+          !session ||
+          session.broadcastId !== broadcastId ||
+          (peerId !== undefined && session.peerId !== peerId)
         ) {
-          throw new RequestError("Invalid API key", 401);
+          throw new RequestError("Missing or invalid peer session", 401);
         }
-      }
+        return session;
+      };
 
       if (method === "GET" && path === "/health") {
-        sendJson(response, 200, { status: "ok", service: "tracker" });
+        try {
+          store.getGlobalStats();
+          sendJson(response, 200, { status: "ok", service: "tracker" });
+        } catch {
+          sendJson(response, 503, { status: "unavailable", service: "tracker" });
+        }
         return;
       }
       if (method === "GET" && path === "/metrics") {
+        requireAdminAccess();
         sendPrometheus(response, metrics.render(store));
         return;
       }
@@ -736,14 +805,17 @@ export const createTrackerHandler = (
         }
       }
       if (method === "GET" && path === "/dashboard") {
+        requireAdminAccess();
         sendHtml(response, 200, await loadDashboardHtml());
         return;
       }
       if (method === "GET" && path === "/api/v1/stats") {
+        requireAdminAccess();
         sendJson(response, 200, store.getGlobalStats());
         return;
       }
       if (method === "GET" && path === "/api/v1/stats/events") {
+        requireAdminAccess();
         if (!statsEvents) {
           throw new RequestError("Stats event stream is unavailable", 503);
         }
@@ -751,6 +823,7 @@ export const createTrackerHandler = (
         return;
       }
       if (path === "/api/v1/broadcasts" && method === "POST") {
+        requireAdminAccess();
         const body = await readJson(request);
         const metadata = optionalMetadata(body);
         const registration: BroadcastRegistration = {
@@ -765,12 +838,14 @@ export const createTrackerHandler = (
         return;
       }
       if (path === "/api/v1/broadcasts" && method === "GET") {
+        requireAdminAccess();
         sendJson(response, 200, { broadcasts: store.listBroadcasts() });
         return;
       }
 
       const statsMatch = path.match(/^\/api\/v1\/broadcasts\/([^/]+)\/stats$/);
       if (statsMatch?.[1] && method === "GET") {
+        requireAdminAccess();
         sendJson(response, 200, store.getBroadcastStats(decodedPathComponent(statsMatch[1])));
         return;
       }
@@ -784,6 +859,7 @@ export const createTrackerHandler = (
         const action = peerActionMatch[3];
         const body = await readJson(request);
         if (action === "segments" && method === "POST") {
+          requirePeerSession(broadcastId, peerId);
           const replace = optionalBoolean(body, "replace");
           const report: SegmentPossessionReport = {
             segments: stringArray(body, "segments"),
@@ -800,6 +876,7 @@ export const createTrackerHandler = (
           return;
         }
         if (action === "heartbeat" && method === "PUT") {
+          requirePeerSession(broadcastId, peerId);
           const latencyMs = optionalNonNegativeNumber(body, "latencyMs");
           const uploadBandwidthBps = optionalNonNegativeNumber(
             body,
@@ -816,6 +893,7 @@ export const createTrackerHandler = (
           return;
         }
         if (action === "stats" && method === "POST") {
+          requirePeerSession(broadcastId, peerId);
           let stats;
           try {
             stats = parsePeerTrafficStats(body.stats);
@@ -844,6 +922,7 @@ export const createTrackerHandler = (
             reporterId: requiredString(body, "reporterId"),
             reason,
           };
+          requirePeerSession(broadcastId, report.reporterId);
           sendJson(response, 200, store.reportPeerFailure(broadcastId, peerId, report));
           events.peerListChanged?.(broadcastId);
           return;
@@ -869,9 +948,18 @@ export const createTrackerHandler = (
             ...(uploadBandwidthBps !== undefined ? { uploadBandwidthBps } : {}),
             ...(metadata ? { metadata } : {}),
           };
+          try {
+            validatePeerAddress(join.address, join.id);
+          } catch (error) {
+            if (error instanceof RequestError) throw error;
+            throw new RequestError(
+              error instanceof Error ? error.message : "Peer address is invalid",
+            );
+          }
           const alreadyJoined = store
             .listPeers(broadcastId)
             .some((peer) => peer.id === join.id);
+          if (alreadyJoined) requirePeerSession(broadcastId, join.id);
           if (
             !alreadyJoined &&
             store.listPeers(broadcastId).length >= maxPeersPerBroadcast
@@ -882,13 +970,19 @@ export const createTrackerHandler = (
             });
           }
           const peer = store.joinPeer(broadcastId, join);
+          const issuedSession = peerSessions.issue(broadcastId, join.id);
           if (!alreadyJoined) metrics.peerJoined();
-          sendJson(response, alreadyJoined ? 200 : 201, peer);
+          sendJson(response, alreadyJoined ? 200 : 201, {
+            peer,
+            sessionToken: issuedSession.token,
+            expiresAt: issuedSession.expiresAt,
+          });
           if (alreadyJoined) events.peerListChanged?.(broadcastId);
           else events.peerJoined?.(broadcastId, peer);
           return;
         }
         if (!encodedPeerId && method === "GET") {
+          requirePeerSession(broadcastId);
           const segment = url.searchParams.get("segment") ?? undefined;
           sendJson(response, 200, {
             peers: store.listPeers(broadcastId, segment),
@@ -897,6 +991,7 @@ export const createTrackerHandler = (
         }
         if (encodedPeerId && method === "DELETE") {
           const peerId = decodedPathComponent(encodedPeerId);
+          requirePeerSession(broadcastId, peerId);
           store.leavePeer(broadcastId, peerId);
           sendEmpty(response, 204);
           events.peerLeft?.(broadcastId, peerId);
@@ -908,6 +1003,7 @@ export const createTrackerHandler = (
       if (broadcastMatch?.[1]) {
         const broadcastId = decodedPathComponent(broadcastMatch[1]);
         if (method === "GET") {
+          requirePeerSession(broadcastId);
           sendJson(response, 200, {
             broadcast: store.getBroadcast(broadcastId),
             peers: store.listPeers(broadcastId),
@@ -915,6 +1011,7 @@ export const createTrackerHandler = (
           return;
         }
         if (method === "DELETE") {
+          requireAdminAccess();
           metrics.synchronizeTraffic(store);
           store.unregisterBroadcast(broadcastId);
           metrics.synchronizeTraffic(store);
@@ -987,6 +1084,7 @@ export class TrackerServer {
   private readonly webSockets: TrackerWebSocketHub;
   private readonly statsEvents: TrackerStatsSse;
   private cleanupTimer: NodeJS.Timeout | undefined;
+  private rollupTimer: NodeJS.Timeout | undefined;
   private startPromise: Promise<number> | undefined;
   private stopPromise: Promise<void> | undefined;
 
@@ -995,20 +1093,28 @@ export class TrackerServer {
     private readonly stalePeerMs = DEFAULT_STALE_PEER_MS,
     configuration: Pick<
       TrackerConfiguration,
-      | "trackerApiKey"
-      | "rateLimitRps"
-      | "rateLimitBurst"
-      | "maxPeersPerBroadcast"
-    > = {
+      "rateLimitRps" | "rateLimitBurst" | "maxPeersPerBroadcast"
+    > &
+      Partial<
+        Pick<
+          TrackerConfiguration,
+          "trackerApiKey" | "peerSessionSecret" | "peerSessionTtlMs"
+        >
+      > = {
       rateLimitRps: DEFAULT_RATE_LIMIT_RPS,
       rateLimitBurst: DEFAULT_RATE_LIMIT_BURST,
       maxPeersPerBroadcast: DEFAULT_MAX_PEERS_PER_BROADCAST,
+      peerSessionTtlMs: DEFAULT_PEER_SESSION_TTL_MS,
     },
   ) {
     const store = storeFactory();
     this.store = store;
     this.statsEvents = new TrackerStatsSse(store);
     const metrics = new TrackerMetrics();
+    const peerSessions = new PeerSessionTokenService(
+      configuration.peerSessionSecret,
+      configuration.peerSessionTtlMs ?? DEFAULT_PEER_SESSION_TTL_MS,
+    );
     let webSockets: TrackerWebSocketHub | undefined;
     const events: TrackerEvents = {
       peerJoined: (broadcastId, peer) =>
@@ -1016,7 +1122,7 @@ export class TrackerServer {
       peerLeft: (broadcastId, peerId) =>
         webSockets?.peerLeft(broadcastId, peerId),
       segmentsAvailable: (broadcastId, peerId, segments) =>
-        webSockets?.segmentsAvailable(broadcastId, peerId, segments),
+        webSockets?.segmentsAvailable(broadcastId, peerId, segments, true),
       statsUpdated: (broadcastId, peerId) => {
         metrics.synchronizeTraffic(store);
         webSockets?.statsUpdated(broadcastId, peerId);
@@ -1033,14 +1139,19 @@ export class TrackerServer {
         ...(configuration.trackerApiKey
           ? { apiKey: configuration.trackerApiKey }
           : {}),
+        peerSessions,
         metrics,
       }),
     );
+    this.server.headersTimeout = 10_000;
+    this.server.requestTimeout = 15_000;
+    this.server.keepAliveTimeout = 5_000;
+    this.server.maxRequestsPerSocket = 1_000;
     webSockets = new TrackerWebSocketHub(
       this.server,
       store,
       this.statsEvents,
-      configuration.trackerApiKey,
+      peerSessions,
     );
     this.webSockets = webSockets;
   }
@@ -1077,6 +1188,16 @@ export class TrackerServer {
       Math.max(1_000, Math.floor(this.stalePeerMs / 2)),
     );
     this.cleanupTimer.unref();
+    if (this.store instanceof SQLiteStore) {
+      const sqliteStore = this.store;
+      const rollup = (): void => {
+        sqliteStore.rollupStats();
+        sqliteStore.pruneStatsHistory(new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000).toISOString());
+      };
+      rollup();
+      this.rollupTimer = setInterval(rollup, 5 * 60_000);
+      this.rollupTimer.unref();
+    }
     const address = this.server.address();
     return typeof address === "object" && address ? address.port : port;
   }
@@ -1089,7 +1210,9 @@ export class TrackerServer {
   private async stopOnce(): Promise<void> {
     await this.startPromise?.catch(() => undefined);
     if (this.cleanupTimer) clearInterval(this.cleanupTimer);
+    if (this.rollupTimer) clearInterval(this.rollupTimer);
     this.cleanupTimer = undefined;
+    this.rollupTimer = undefined;
     if (!this.server.listening) {
       this.store.close();
       return;
@@ -1112,15 +1235,24 @@ export class TrackerServer {
         new Set(this.store.listPeers(broadcast.id).map((peer) => peer.id)),
       ]),
     );
-    if (this.store.removeStalePeers(this.stalePeerMs) === 0) return;
-    for (const [broadcastId, peerIds] of peersBefore) {
-      const activePeerIds = new Set(
-        this.store.listPeers(broadcastId).map((peer) => peer.id),
-      );
-      for (const peerId of peerIds) {
-        if (!activePeerIds.has(peerId)) {
-          this.webSockets.peerLeft(broadcastId, peerId);
+    if (this.store.removeStalePeers(this.stalePeerMs) > 0) {
+      for (const [broadcastId, peerIds] of peersBefore) {
+        const activePeerIds = new Set(
+          this.store.listPeers(broadcastId).map((peer) => peer.id),
+        );
+        for (const peerId of peerIds) {
+          if (!activePeerIds.has(peerId)) {
+            this.webSockets.peerLeft(broadcastId, peerId);
+          }
         }
+      }
+    }
+    const nowMs = Date.now();
+    for (const broadcast of this.store.listBroadcasts()) {
+      const lease = broadcast.metadata?.leaseExpiresAt;
+      if (broadcast.metadata?.owner === "origin" && lease && Date.parse(lease) <= nowMs) {
+        this.store.unregisterBroadcast(broadcast.id);
+        this.webSockets.broadcastListChanged();
       }
     }
   }

@@ -36,6 +36,9 @@ services:
       MAX_PEERS_PER_BROADCAST: "500"
       STORE_TYPE: sqlite
       DB_PATH: /app/data/tracker.db
+      # Development-only credentials. Override both values outside local demos.
+      TRACKER_API_KEY: "${TRACKER_API_KEY:-openstreamgrid-local-admin}"
+      PEER_SESSION_SECRET: "${PEER_SESSION_SECRET:-openstreamgrid-local-peer-session-secret-32-bytes}"
     volumes:
       - tracker-data:/app/data
     ports:
@@ -60,6 +63,7 @@ services:
     environment:
       PORT: "8080"
       TRACKER_URL: http://tracker:7070
+      TRACKER_API_KEY: "${TRACKER_API_KEY:-openstreamgrid-local-admin}"
       BROADCAST_ID: live
       MULTI_STREAM_COUNT: "1"
       PUBLIC_ORIGIN_URL: http://origin:8080
@@ -159,7 +163,7 @@ services:
       TRACKER_URL: http://tracker:7070
       BROADCAST_ID: live
       ORIGIN_URL: http://origin:8080/hls
-      ADVERTISE_URL: http://127.0.0.1:9090
+      ADVERTISE_URL: http://load-test:9090
       UPLOAD_PORT: "9090"
     depends_on:
       tracker:

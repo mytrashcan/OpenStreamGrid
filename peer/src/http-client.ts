@@ -6,6 +6,9 @@ import {
 } from "node:http";
 import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 
+const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
+const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+
 const httpAgent = new HttpAgent({
   keepAlive: true,
   keepAliveMsecs: 1_000,
@@ -66,8 +69,23 @@ export const keepAliveFetch = async (
       options,
       (response) => {
         const chunks: Buffer[] = [];
+        let receivedBytes = 0;
+        const declaredLength = Number(response.headers["content-length"]);
+        if (
+          Number.isFinite(declaredLength) &&
+          declaredLength > MAX_RESPONSE_BYTES
+        ) {
+          response.destroy(new Error("HTTP response exceeds the maximum size"));
+          return;
+        }
         response.on("data", (chunk: Buffer | string) => {
-          chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+          const bytes = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+          receivedBytes += bytes.byteLength;
+          if (receivedBytes > MAX_RESPONSE_BYTES) {
+            response.destroy(new Error("HTTP response exceeds the maximum size"));
+            return;
+          }
+          chunks.push(bytes);
         });
         response.once("error", reject);
         response.once("end", () => {
@@ -90,6 +108,9 @@ export const keepAliveFetch = async (
       },
     );
     request.once("error", reject);
+    request.setTimeout(DEFAULT_REQUEST_TIMEOUT_MS, () => {
+      request.destroy(new Error("HTTP request timed out"));
+    });
     request.end(body);
   });
 };

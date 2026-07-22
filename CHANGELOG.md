@@ -2,6 +2,27 @@
 
 All notable changes to OpenStreamGrid are documented in this file.
 
+## [0.5.0] - 2026-07-22
+
+### Security
+
+- Replaced browser-visible administrator credentials with signed, short-lived
+  peer sessions bound to a broadcast and peer identity.
+- Added authenticated peer uploads, address validation, bounded payloads,
+  WebSocket quotas, failure-report consensus, and transport size limits.
+
+### Reliability
+
+- Added origin restart/backoff, immutable segment names, streaming hashes,
+  broadcast leases, network timeouts, bounded buffer retention, and stronger
+  SQLite constraints with incremental segment updates and retained rollups.
+- Corrected urgent-segment routing and browser integrity accounting.
+
+### Operations
+
+- Made Helm defaults safe for SQLite, added secret references, aligned packages
+  at 0.5.0, and corrected protocol and TLS documentation.
+
 ## [0.4.1] - 2026-07-18
 
 ### Security audit remediation

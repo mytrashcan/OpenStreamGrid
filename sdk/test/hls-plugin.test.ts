@@ -136,7 +136,12 @@ test("registers and unregisters a zero-install browser peer", async (context) =>
       method: init?.method ?? "GET",
       ...(typeof init?.body === "string" ? { body: init.body } : {}),
     });
-    return new Response("{}", { status: init?.method === "POST" ? 201 : 204 });
+    return init?.method === "POST"
+      ? Response.json({
+          sessionToken: "test-peer-session",
+          expiresAt: "2099-01-01T00:00:00.000Z",
+        }, { status: 201 })
+      : new Response(null, { status: 204 });
   });
   const plugin = new OpenStreamGridHlsPlugin({
     trackerUrl: "wss://tracker.example/ws",

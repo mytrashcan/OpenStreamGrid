@@ -10,8 +10,8 @@ Universal hybrid P2P-CDN middleware for standards-based live streaming.
 
 [English](README.md) | [한국어](README.ko.md)
 
-OpenStreamGrid adds peer-assisted segment delivery to an existing HLS, LL-HLS,
-or CMAF service. Your origin continues to encode and publish media while
+OpenStreamGrid adds peer-assisted delivery to MPEG-TS HLS streams. LL-HLS and
+CMAF/fMP4 are roadmap items, not supported media formats in this release. Your origin continues to encode and publish media while
 OpenStreamGrid discovers peers, verifies segments, limits resource use, reports
 delivery metrics, and immediately falls back to the origin when P2P cannot meet
 the playback deadline.
@@ -25,7 +25,7 @@ With [Docker Compose v2](https://docs.docker.com/compose/) installed, start the
 tracker, test origin, and two peers with one command:
 
 ```bash
-git clone --branch v0.4.1 --depth 1 https://github.com/mytrashcan/OpenStreamGrid.git
+git clone --depth 1 https://github.com/mytrashcan/OpenStreamGrid.git
 cd OpenStreamGrid
 docker compose up --build --detach
 docker compose ps
@@ -42,14 +42,13 @@ The Compose stack generates a live test pattern with FFmpeg. Once healthy, the
 peers begin exchanging verified segments and fall back to the origin whenever a
 peer is unavailable or too slow. Stop the stack with `docker compose down`.
 
-## Current Release
+## Release Status
 
 [OpenStreamGrid v0.4.1](https://github.com/mytrashcan/OpenStreamGrid/releases/tag/v0.4.1)
-is the current stable release. It enforces `TRACKER_API_KEY` across protected
-tracker REST operations, statistics, dashboard access, and WebSocket upgrades.
-It also includes the v0.4.0 zero-install browser peer path and its CORS and
-bandwidth-aware WebRTC transfer fixes. See the [changelog](CHANGELOG.md) for the
-complete history.
+is the latest published stable release. The `main` branch currently contains
+the upcoming 0.5.0 production-hardening changes. Use the release tag for a
+stable deployment or `main` when evaluating the current development version.
+See the [changelog](CHANGELOG.md) for the complete history.
 
 Tagged container images are published to GHCR for production deployment:
 
@@ -85,7 +84,7 @@ planning a production rollout.
 ## Architecture
 
 ```text
-                         HTTPS / API key
+                    HTTP behind TLS proxy / API key
   encoder ──► origin ─────────────────────────► tracker + SQLite WAL
      │          │                                  │  │
      │          ├── HLS renditions                 │  ├── REST + WebSocket
@@ -114,8 +113,8 @@ playlist URLs through the same API.
 ## Features
 
 - Hybrid HTTP/WebRTC segment delivery with immediate origin fallback.
-- API-key authentication for tracker REST, WebSocket, dashboard, and SSE access (constant-time comparison with `timingSafeEqual`).
-- Native tracker HTTPS and HTTPS-compatible tracker/origin clients.
+- Admin API-key authentication plus short-lived, peer-scoped session tokens.
+- HTTPS-compatible clients; terminate TLS at a trusted reverse proxy.
 - Configurable STUN and TURN servers for WebRTC NAT traversal.
 - Multi-channel isolation and multi-rendition HLS generation.
 - Quality-based peer ranking, parallel downloads, and request coalescing.
@@ -163,18 +162,15 @@ Set `peerParticipation: false` for receive-only playback. A native agent or
 browser extension can still be useful as an optional dedicated seed in managed
 environments, but it is not part of the normal viewer path.
 
-`trackerApiKey` is a deployment-wide credential, not per-viewer authorization.
-Supply it when tracker authentication is enabled, but do not hard-code a
-long-lived key in a public JavaScript bundle. For public deployments, protect
-the tracker behind an authenticated gateway or use another trusted mechanism
-that does not expose the shared secret to viewers.
+Browser peers automatically receive a short-lived, identity-scoped session when
+they register. Do not pass or embed `TRACKER_API_KEY` in viewer code; reserve the
+administrator credential for trusted origin and operations components.
 
 ## Tracker API
 
-Tracker resources are under `/api/v1`. When `TRACKER_API_KEY` is set, send
-`X-API-Key: <key>` on protected HTTP requests. WebSocket clients can send the
-header or pass `?apiKey=<key>`; browsers use the query parameter because the
-WebSocket API cannot set arbitrary upgrade headers.
+Tracker resources are under `/api/v1`. Administrators send `X-API-Key: <key>`.
+Peer join returns a short-lived session token; peer REST calls use
+`Authorization: Bearer <token>` and WebSocket upgrades use `?sessionToken=<token>`.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -206,14 +202,14 @@ codes, and origin/peer endpoints.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `PORT` | `7070` | HTTP/HTTPS listen port |
+| `PORT` | `7070` | HTTP listen port |
 | `HOST` | `0.0.0.0` | Listen address |
 | `STALE_PEER_MS` | `30000` | Peer inactivity timeout |
 | `STORE_TYPE` | `sqlite` | Persistence backend: `sqlite` or `memory` |
 | `DB_PATH` | `./data/tracker.db` | SQLite database path |
-| `TRACKER_API_KEY` | unset | Enable API-key authentication (v0.4.1+: enforced on REST POST/PUT/DELETE, stats, dashboard, and WebSocket upgrade) |
-| `TLS_CERT_PATH` | unset | PEM certificate path; requires `TLS_KEY_PATH` |
-| `TLS_KEY_PATH` | unset | PEM private-key path; requires `TLS_CERT_PATH` |
+| `TRACKER_API_KEY` | unset | Admin credential for broadcast management, monitoring, and metrics |
+| `PEER_SESSION_SECRET` | random per process | HMAC secret of at least 32 bytes; set explicitly in deployments |
+| `PEER_SESSION_TTL_MS` | `3600000` | Peer session lifetime |
 | `RATE_LIMIT_RPS` | `100` | Sustained requests per second per client |
 | `RATE_LIMIT_BURST` | `200` | Token-bucket burst capacity per client |
 | `MAX_PEERS_PER_BROADCAST` | `500` | Active-peer limit per broadcast |
@@ -240,7 +236,7 @@ codes, and origin/peer endpoints.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `TRACKER_URL` | `http://tracker:7070` | Tracker base URL |
-| `TRACKER_API_KEY` | unset | Tracker REST/WebSocket API key |
+| `TRACKER_API_KEY` | unset | Optional admin key; normal peer traffic uses the issued session token |
 | `BROADCAST_ID` | `live` | Broadcast to join |
 | `ORIGIN_URL` | required | Rendition directory or `.m3u8` URL |
 | `PEER_ADDRESS` | required | Advertised `http://host:port` address |
@@ -272,7 +268,7 @@ configuration is available through the following environment variables.
 | `maxUploadConnections` | `3` | Concurrent browser DataChannel uploads |
 | `peerTimeoutMs` | `3000` | Peer request and negotiation deadline |
 | `maxCacheBytes` | `100 MB` | Browser segment-cache limit |
-| `trackerApiKey` | unset | API key for REST peer registration |
+| `hashUrlResolver` | adjacent `.sha256` | Override signed/query-aware sidecar URL resolution |
 
 ### Benchmark
 

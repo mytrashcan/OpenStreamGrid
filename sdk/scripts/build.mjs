@@ -13,7 +13,7 @@ const commonOptions = {
   platform: "browser",
   target: "es2020",
   external: ["hls.js"],
-  sourcemap: true,
+  sourcemap: false,
   minify: true,
 };
 

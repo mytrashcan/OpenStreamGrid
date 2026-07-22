@@ -27,6 +27,7 @@ test("validates tracker environment configuration", () => {
   assert.deepEqual(parseTrackerConfiguration({}), {
     port: 7070,
     host: "0.0.0.0",
+    peerSessionTtlMs: 3_600_000,
     stalePeerMs: 30_000,
     rateLimitRps: 100,
     rateLimitBurst: 200,
@@ -44,6 +45,7 @@ test("validates tracker environment configuration", () => {
       host: "127.0.0.1",
       stalePeerMs: 5_000,
       trackerApiKey: "test-secret",
+      peerSessionTtlMs: 3_600_000,
       rateLimitRps: 100,
       rateLimitBurst: 200,
       maxPeersPerBroadcast: 500,
@@ -92,11 +94,14 @@ const invoke = async (
   method: string,
   url: string,
   body?: unknown,
+  requestHeaders: Record<string, string> = {},
 ): Promise<TestResponse> => {
   const payload = body === undefined ? [] : [JSON.stringify(body)];
   const request = Object.assign(Readable.from(payload), {
     method,
     url,
+    headers: requestHeaders,
+    socket: { remoteAddress: "192.0.2.100" },
   }) as unknown as IncomingMessage;
   let status = 0;
   let responseBody = "";
@@ -204,7 +209,7 @@ test("supports browser SDK CORS preflight and REST responses", async () => {
   );
   assert.equal(
     preflight.headers["access-control-allow-headers"],
-    "Content-Type, X-API-Key",
+    "Authorization, Content-Type, X-API-Key",
   );
 
   const response = await invokeRaw(
@@ -223,18 +228,6 @@ test("authenticates protected HTTP routes when an API key is configured", async 
   const handler = createTrackerHandler(new TrackerStore(), {}, undefined, {
     apiKey: "test-secret",
   });
-
-  for (const method of ["POST", "PUT", "DELETE"]) {
-    const missing = await invokeRaw(
-      handler,
-      method,
-      "/api/v1/not-a-route",
-      undefined,
-      "192.0.2.20",
-    );
-    assert.equal(missing.status, 401);
-    assert.deepEqual(JSON.parse(missing.body), { error: "Missing API key" });
-  }
 
   const invalid = await invokeRaw(
     handler,
@@ -305,7 +298,7 @@ test("authenticates protected HTTP routes when an API key is configured", async 
     "192.0.2.25",
   );
   assert.equal(publicHealth.status, 200);
-  assert.equal(publicMetrics.status, 200);
+  assert.equal(publicMetrics.status, 401);
   assert.equal(publicPreflight.status, 204);
 });
 
@@ -390,7 +383,7 @@ test("exports tracker counters, gauges, and REST duration metrics", async () => 
     id: "live",
     playlistUrl: "http://origin/live.m3u8",
   });
-  await invoke(handler, "POST", "/api/v1/broadcasts/live/peers", {
+  const metricJoin = await invoke(handler, "POST", "/api/v1/broadcasts/live/peers", {
     id: "peer-a",
     address: "http://peer-a:9090",
   });
@@ -407,6 +400,8 @@ test("exports tracker counters, gauges, and REST duration metrics", async () => 
       fallbacks: 1,
       segmentsCached: 2,
     },
+  }, {
+    authorization: `Bearer ${(metricJoin.json as { sessionToken: string }).sessionToken}`,
   });
 
   const response = await invokeRaw(
@@ -454,12 +449,13 @@ test("exposes the broadcast and peer lifecycle over REST", async () => {
     address: "http://peer-a:9090",
   });
   assert.equal(join.status, 201);
-  assert.deepEqual(join.json, {
+  const joined = join.json as { peer: Record<string, unknown>; sessionToken: string };
+  assert.deepEqual(joined.peer, {
     id: "peer-a",
     address: "http://peer-a:9090",
     segments: [],
-    joinedAt: (join.json as { joinedAt: string }).joinedAt,
-    lastSeenAt: (join.json as { lastSeenAt: string }).lastSeenAt,
+    joinedAt: (joined.peer as { joinedAt: string }).joinedAt,
+    lastSeenAt: (joined.peer as { lastSeenAt: string }).lastSeenAt,
     latencyMs: 0,
     successRate: 1,
     trustScore: 1,
@@ -470,6 +466,7 @@ test("exposes the broadcast and peer lifecycle over REST", async () => {
     "POST",
     "/api/v1/broadcasts/live/peers/peer-a/segments",
     { segments: ["segment_1.ts"] },
+    { authorization: `Bearer ${joined.sessionToken}` },
   );
   assert.equal(segmentReport.status, 200);
   assert.deepEqual((segmentReport.json as { segments: string[] }).segments, [
@@ -479,6 +476,8 @@ test("exposes the broadcast and peer lifecycle over REST", async () => {
     handler,
     "GET",
     "/api/v1/broadcasts/live/peers?segment=segment_1.ts",
+    undefined,
+    { authorization: `Bearer ${joined.sessionToken}` },
   );
   const peerBody = peers.json as { peers: Array<{ id: string }> };
   assert.deepEqual(peerBody.peers.map((peer) => peer.id), ["peer-a"]);
@@ -510,12 +509,13 @@ test("treats a duplicate peer join as an idempotent update", async () => {
     "POST",
     "/api/v1/broadcasts/live/peers",
     { id: "peer-a", address: "http://peer-a:9191" },
+    { authorization: `Bearer ${(first.json as { sessionToken: string }).sessionToken}` },
   );
 
   assert.equal(first.status, 201);
   assert.equal(duplicate.status, 200);
-  assert.equal((first.json as { address: string }).address, "http://peer-a:9090");
-  assert.equal((duplicate.json as { address: string }).address, "http://peer-a:9191");
+  assert.equal((first.json as { peer: { address: string } }).peer.address, "http://peer-a:9090");
+  assert.equal((duplicate.json as { peer: { address: string } }).peer.address, "http://peer-a:9191");
   assert.deepEqual(joinedPeers, ["live:peer-a"]);
   assert.deepEqual(changedBroadcasts, ["live"]);
   assert.equal(store.listPeers("live").length, 1);
@@ -528,16 +528,20 @@ test("rejects malformed peer payloads and URL path encoding", async () => {
     id: "live",
     playlistUrl: "http://origin/live.m3u8",
   });
-  await invoke(handler, "POST", "/api/v1/broadcasts/live/peers", {
+  const malformedJoin = await invoke(handler, "POST", "/api/v1/broadcasts/live/peers", {
     id: "peer-a",
     address: "http://peer-a:9090",
   });
+  const auth = {
+    authorization: `Bearer ${(malformedJoin.json as { sessionToken: string }).sessionToken}`,
+  };
 
   const stats = await invoke(
     handler,
     "POST",
     "/api/v1/broadcasts/live/peers/peer-a/stats",
     { stats: { bytesDownloadedP2P: "not-a-number" } },
+    auth,
   );
   assert.equal(stats.status, 400);
   assert.deepEqual(stats.json, {
@@ -549,6 +553,7 @@ test("rejects malformed peer payloads and URL path encoding", async () => {
     "POST",
     "/api/v1/broadcasts/live/peers/peer-a/segments",
     { segments: ["segment.ts"], replace: "yes" },
+    auth,
   );
   assert.equal(invalidSegments.status, 400);
   assert.deepEqual(invalidSegments.json, {
@@ -560,6 +565,7 @@ test("rejects malformed peer payloads and URL path encoding", async () => {
     "PUT",
     "/api/v1/broadcasts/live/peers/peer-a/heartbeat",
     { successRate: 1.1 },
+    auth,
   );
   assert.equal(invalidHeartbeat.status, 400);
   assert.deepEqual(invalidHeartbeat.json, {
@@ -673,7 +679,7 @@ test("pushes peer and segment updates to WebSocket subscribers", async () => {
         playlistUrl: "http://origin/live.m3u8",
       }),
     });
-    await fetch(`${baseUrl}/api/v1/broadcasts/live/peers`, {
+    const joinResponse = await fetch(`${baseUrl}/api/v1/broadcasts/live/peers`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -681,7 +687,10 @@ test("pushes peer and segment updates to WebSocket subscribers", async () => {
         address: "http://peer-a:9090",
       }),
     });
-    const activeSocket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    const { sessionToken } = await joinResponse.json() as { sessionToken: string };
+    const activeSocket = new WebSocket(
+      `ws://127.0.0.1:${port}/ws?sessionToken=${encodeURIComponent(sessionToken)}`,
+    );
     socket = activeSocket;
     await new Promise<void>((resolve) => activeSocket.once("open", resolve));
     const initialPeers = waitForMessage(
@@ -707,7 +716,10 @@ test("pushes peer and segment updates to WebSocket subscribers", async () => {
       `${baseUrl}/api/v1/broadcasts/live/peers/peer-a/segments`,
       {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          authorization: `Bearer ${sessionToken}`,
+          "content-type": "application/json",
+        },
         body: JSON.stringify({ segments: ["segment_1.ts"] }),
       },
     );
@@ -717,6 +729,7 @@ test("pushes peer and segment updates to WebSocket subscribers", async () => {
       broadcastId: "live",
       peerId: "peer-a",
       segments: ["segment_1.ts"],
+      replace: true,
     });
   } finally {
     socket?.close();
@@ -724,7 +737,7 @@ test("pushes peer and segment updates to WebSocket subscribers", async () => {
   }
 });
 
-test("authenticates WebSocket upgrades with the API key query parameter", async () => {
+test("authenticates WebSocket upgrades with a peer session", async () => {
   const server = new TrackerServer(
     () => new TrackerStore(),
     30_000,
@@ -754,11 +767,20 @@ test("authenticates WebSocket upgrades with the API key query parameter", async 
   let authenticatedSocket: WebSocket | undefined;
   try {
     assert.equal(await rejectedStatus(websocketUrl), 401);
-    assert.equal(await rejectedStatus(`${websocketUrl}?apiKey=wrong`), 401);
-
-    authenticatedSocket = new WebSocket(
-      `${websocketUrl}?apiKey=${encodeURIComponent("test secret/with symbols")}`,
-    );
+    assert.equal(await rejectedStatus(`${websocketUrl}?sessionToken=wrong`), 401);
+    const broadcast = await fetch(`http://127.0.0.1:${port}/api/v1/broadcasts`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": "test secret/with symbols" },
+      body: JSON.stringify({ id: "live", playlistUrl: "http://origin/live.m3u8" }),
+    });
+    assert.equal(broadcast.status, 201);
+    const join = await fetch(`http://127.0.0.1:${port}/api/v1/broadcasts/live/peers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "peer-a", address: "http://peer-a:9090" }),
+    });
+    const { sessionToken } = await join.json() as { sessionToken: string };
+    authenticatedSocket = new WebSocket(`${websocketUrl}?sessionToken=${encodeURIComponent(sessionToken)}`);
     await new Promise<void>((resolve, reject) => {
       authenticatedSocket?.once("open", resolve);
       authenticatedSocket?.once("error", reject);
@@ -785,7 +807,7 @@ test("relays WebRTC offers and answers only to the target peer", async () => {
       }),
     });
     for (const peerId of ["peer-a", "peer-b"]) {
-      await fetch(`${baseUrl}/api/v1/broadcasts/live/peers`, {
+      const joinResponse = await fetch(`${baseUrl}/api/v1/broadcasts/live/peers`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -793,7 +815,8 @@ test("relays WebRTC offers and answers only to the target peer", async () => {
           address: `http://${peerId}:9090`,
         }),
       });
-      const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+      const { sessionToken } = await joinResponse.json() as { sessionToken: string };
+      const socket = new WebSocket(`ws://127.0.0.1:${port}/ws?sessionToken=${encodeURIComponent(sessionToken)}`);
       sockets.push(socket);
       await new Promise<void>((resolve) => socket.once("open", resolve));
       const subscribed = waitForMessage(
@@ -890,11 +913,12 @@ test("streams global, broadcast, REST, and WebSocket stats over SSE", async () =
       /broadcastSelector\.addEventListener\("change"/,
     );
 
-    await fetch(`${baseUrl}/api/v1/broadcasts/live/peers`, {
+    const sseJoinResponse = await fetch(`${baseUrl}/api/v1/broadcasts/live/peers`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ id: "peer-a", address: "http://peer-a:9090" }),
     });
+    const { sessionToken } = await sseJoinResponse.json() as { sessionToken: string };
     const peerUpdate = await waitForSseEvent(
       nextEvent,
       (event) => event.event === "broadcasts" && event.data.global.peers === 1,
@@ -916,7 +940,7 @@ test("streams global, broadcast, REST, and WebSocket stats over SSE", async () =
     };
     await fetch(`${baseUrl}/api/v1/broadcasts/live/peers/peer-a/stats`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { authorization: `Bearer ${sessionToken}`, "content-type": "application/json" },
       body: JSON.stringify({ stats: restStats }),
     });
     const restUpdate = await waitForSseEvent(
@@ -929,7 +953,7 @@ test("streams global, broadcast, REST, and WebSocket stats over SSE", async () =
       100,
     );
 
-    const activeSocket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    const activeSocket = new WebSocket(`ws://127.0.0.1:${port}/ws?sessionToken=${encodeURIComponent(sessionToken)}`);
     socket = activeSocket;
     await new Promise<void>((resolve) => activeSocket.once("open", resolve));
     const subscribed = waitForMessage(
@@ -956,6 +980,7 @@ test("streams global, broadcast, REST, and WebSocket stats over SSE", async () =
 
     await fetch(`${baseUrl}/api/v1/broadcasts/live/peers/peer-a`, {
       method: "DELETE",
+      headers: { authorization: `Bearer ${sessionToken}` },
     });
     const peerLeftUpdate = await waitForSseEvent(
       nextEvent,

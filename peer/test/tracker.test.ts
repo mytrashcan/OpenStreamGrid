@@ -78,6 +78,7 @@ test("uses validated WebSocket peer updates and reconnects after disconnect", as
     trackerUrl: `http://127.0.0.1:${port}`,
     broadcastId: "live",
     peerId: "peer-a",
+    initialSessionToken: "test-peer-session",
     heartbeat: () => ({ uploadBandwidthBps: 500_000, successRate: 1 }),
     stats,
     segments: () => ["local.ts"],
@@ -129,6 +130,7 @@ test("backs off when sockets close before a valid peer list", async (context) =>
     trackerUrl: `http://127.0.0.1:${port}`,
     broadcastId: "live",
     peerId: "peer-a",
+    initialSessionToken: "test-peer-session",
     heartbeat: () => ({}),
     stats,
     segments: () => [],
@@ -163,7 +165,11 @@ test("authenticates tracker REST requests with the configured API key", async ()
     fetchImpl: async (_input, init = {}) => {
       requests.push(init);
       if (init.method === "DELETE") return new Response(null, { status: 204 });
-      return Response.json(remotePeer);
+      return Response.json({
+        peer: remotePeer,
+        sessionToken: "peer-session-token",
+        expiresAt: "2099-01-01T00:00:00.000Z",
+      });
     },
   });
 

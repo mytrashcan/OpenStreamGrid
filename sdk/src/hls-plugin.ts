@@ -18,7 +18,10 @@
  *   hls.attachMedia(videoElement);
  */
 
-import { createLogger } from "@openstreamgrid/common";
+import {
+  createLogger,
+  validatePeerHttpBaseUrl,
+} from "@openstreamgrid/common";
 import type {
   default as Hls,
   HlsConfig,
@@ -41,6 +44,7 @@ import type {
 
 const DEFAULT_MAX_CACHE_BYTES = 100 * 1024 * 1024;
 const DEFAULT_PEER_TIMEOUT_MS = 3_000;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const MAX_PARALLEL_PEER_PROBES = 3;
 const logger = createLogger("sdk");
 
@@ -75,6 +79,7 @@ class OpenStreamGridLoader implements Loader<LoaderContext> {
 
   private callbacks: LoaderCallbacks<LoaderContext> | null = null;
   private aborted = false;
+  private timedOut = false;
   private abortController: AbortController | null = null;
   private fallbackLoader: Loader<LoaderContext> | null = null;
 
@@ -116,6 +121,7 @@ class OpenStreamGridLoader implements Loader<LoaderContext> {
     this.stats = this.createStats();
     this.stats.loading.start = performance.now();
     this.aborted = false;
+    this.timedOut = false;
     this.abortController = new AbortController();
 
     const url = context.url;
@@ -131,13 +137,23 @@ class OpenStreamGridLoader implements Loader<LoaderContext> {
     }
 
     const segmentName = this.extractSegmentName(url);
+    const timeoutMs = config.timeout || config.loadPolicy.maxLoadTimeMs;
+    const timeout = setTimeout(() => {
+      if (this.aborted || this.timedOut) return;
+      this.timedOut = true;
+      this.stats.aborted = true;
+      this.abortController?.abort(
+        new DOMException("Loader timed out", "TimeoutError"),
+      );
+      callbacks.onTimeout(this.stats, context, null);
+    }, timeoutMs);
     void this.loadThroughGrid(
       segmentName,
       url,
       context,
       callbacks,
       this.abortController.signal,
-    );
+    ).finally(() => clearTimeout(timeout));
   }
 
   // ---- internal ----
@@ -151,10 +167,18 @@ class OpenStreamGridLoader implements Loader<LoaderContext> {
   ): Promise<void> {
     try {
       const result = await this.plugin.loadSegment(segmentName, url, signal);
-      if (this.aborted) return;
+      if (this.aborted || this.timedOut) return;
       this.stats.loading.end = performance.now();
+      this.stats.loading.first = this.stats.loading.end;
       this.stats.loaded = result.data.byteLength;
       this.stats.total = result.data.byteLength;
+      this.stats.chunkCount = 1;
+      const durationMs = Math.max(
+        1,
+        this.stats.loading.end - this.stats.loading.start,
+      );
+      this.stats.bwEstimate =
+        (result.data.byteLength * 8 * 1_000) / durationMs;
       callbacks.onSuccess(
         { url, data: Uint8Array.from(result.data).buffer },
         this.stats,
@@ -162,7 +186,7 @@ class OpenStreamGridLoader implements Loader<LoaderContext> {
         null,
       );
     } catch (error) {
-      if (this.aborted) return;
+      if (this.aborted || this.timedOut) return;
       this.stats.loading.end = performance.now();
       callbacks.onError(
         {
@@ -253,7 +277,6 @@ export class OpenStreamGridHlsPlugin {
   private readonly peerId: string;
   private readonly broadcastId: string;
   private readonly trackerUrl: string;
-  private readonly trackerApiKey: string | undefined;
   private readonly peerParticipation: boolean;
   private readonly webRtcOptions: Pick<
     HlsjsPluginConfig,
@@ -267,7 +290,9 @@ export class OpenStreamGridHlsPlugin {
   private readonly cacheKeysBySegmentId = new Map<string, string>();
   private webRtcPeer: BrowserWebRtcPeer | undefined;
   private registered = false;
+  private peerSessionToken: string | undefined;
   private registrationRetry: ReturnType<typeof setTimeout> | undefined;
+  private sessionRefresh: ReturnType<typeof setTimeout> | undefined;
   private attachedHls: Hls | undefined;
   private originalLoader: HlsConfig["loader"] | undefined;
   private installedLoader: HlsConfig["loader"] | undefined;
@@ -279,7 +304,6 @@ export class OpenStreamGridHlsPlugin {
     this.peerId = config.peerId?.trim() ?? generatePeerId();
     this.broadcastId = config.broadcastId;
     this.trackerUrl = config.trackerUrl;
-    this.trackerApiKey = config.trackerApiKey?.trim() || undefined;
     this.peerParticipation = config.peerParticipation !== false;
     this.webRtcOptions = {
       ...(config.iceServers ? { iceServers: config.iceServers } : {}),
@@ -323,12 +347,11 @@ export class OpenStreamGridHlsPlugin {
     }
     this.verifier =
       config.verifySegments !== false && config.originBaseUrl
-        ? new OriginHashVerifier(config.originBaseUrl)
+        ? new OriginHashVerifier(config.originBaseUrl, config.hashUrlResolver)
         : undefined;
 
     this.wsClient = new WsTrackerClient({
       trackerUrl: config.trackerUrl,
-      ...(this.trackerApiKey ? { apiKey: this.trackerApiKey } : {}),
       broadcastId: config.broadcastId,
       peerId: this.peerId,
       getSegments: () => this.cachedSegmentIds(),
@@ -363,12 +386,6 @@ export class OpenStreamGridHlsPlugin {
 
     this.webRtcPeer = this.createWebRtcPeer();
 
-    this.wsClient.start().catch((error: unknown) => {
-      logger.warn("tracker_connection_failed", {
-        error: error instanceof Error ? error.message : String(error),
-        fallback: "origin",
-      });
-    });
     if (this.peerParticipation) {
       this.startPeerRegistration();
     }
@@ -385,7 +402,9 @@ export class OpenStreamGridHlsPlugin {
     this.webRtcPeer?.stop();
     this.webRtcPeer = undefined;
     if (this.registrationRetry) clearTimeout(this.registrationRetry);
+    if (this.sessionRefresh) clearTimeout(this.sessionRefresh);
     this.registrationRetry = undefined;
+    this.sessionRefresh = undefined;
     if (this.registered) void this.unregisterPeer();
     if (
       this.attachedHls &&
@@ -466,9 +485,6 @@ export class OpenStreamGridHlsPlugin {
           signal,
         );
         if (result && !signal.aborted) {
-          this.stats.bytesDownloadedP2P += result.data.byteLength;
-          this.stats.p2pSuccesses++;
-
           if (this.verifier) {
             const verification = await this.verifier.verifyUrl(
               segmentUrl,
@@ -485,6 +501,9 @@ export class OpenStreamGridHlsPlugin {
             }
             this.emit({ type: "integrity_ok", segment: segmentName });
           }
+
+          this.stats.bytesDownloadedP2P += result.data.byteLength;
+          this.stats.p2pSuccesses++;
 
           this.cacheSegment(cacheKeyFrom(segmentUrl), segmentId, result.data);
 
@@ -668,18 +687,36 @@ export class OpenStreamGridHlsPlugin {
     if (signal.aborted) onAbort();
 
     try {
+      const peerBaseUrl = validatePeerHttpBaseUrl(peer.address);
+      if (globalThis.location?.protocol === "https:" && peerBaseUrl.protocol === "http:") {
+        throw new Error("Mixed-content HTTP peer transport is unavailable on HTTPS pages");
+      }
       const url = new URL(
         `/segments/${encodeURIComponent(this.segmentFileName(segmentId))}`,
-        peer.address,
+        peerBaseUrl,
       );
       const response = await fetch(url, {
         signal: controller.signal,
         method: "GET",
+        ...(peer.metadata?.uploadToken
+          ? {
+              headers: {
+                Authorization: `Bearer ${peer.metadata.uploadToken}`,
+              },
+            }
+          : {}),
       });
       if (!response.ok) {
         throw new Error(`Peer returned HTTP ${response.status}`);
       }
+      const contentLength = Number(response.headers.get("content-length"));
+      if (Number.isFinite(contentLength) && contentLength > 16 * 1024 * 1024) {
+        throw new Error("Peer segment exceeds the 16 MiB safety limit");
+      }
       const buffer = await response.arrayBuffer();
+      if (buffer.byteLength > 16 * 1024 * 1024) {
+        throw new Error("Peer segment exceeds the 16 MiB safety limit");
+      }
       return new Uint8Array(buffer);
     } finally {
       clearTimeout(timeoutId);
@@ -716,7 +753,13 @@ export class OpenStreamGridHlsPlugin {
 
   private segmentPeerId(segmentUrl: string): string {
     try {
-      return new URL(segmentUrl, globalThis.location?.href).pathname.replace(/^\/+/, "");
+      const url = new URL(segmentUrl, globalThis.location?.href);
+      const pathname = url.pathname.replace(/^\/+/, "");
+      if (!url.search) return pathname;
+      const suffix = urlFingerprint(url.search);
+      return pathname.endsWith(".ts")
+        ? `${pathname.slice(0, -3)}~q-${suffix}.ts`
+        : `${pathname}~q-${suffix}`;
     } catch {
       return segmentUrl.replace(/^\/+/, "");
     }
@@ -786,11 +829,25 @@ export class OpenStreamGridHlsPlugin {
       }),
     });
     if (!response.ok) throw new Error(`Tracker registration returned HTTP ${response.status}`);
+    const payload: unknown = await response.json();
+    if (
+      payload === null ||
+      typeof payload !== "object" ||
+      typeof (payload as Record<string, unknown>).sessionToken !== "string" ||
+      typeof (payload as Record<string, unknown>).expiresAt !== "string" ||
+      !Number.isFinite(Date.parse((payload as { expiresAt: string }).expiresAt))
+    ) {
+      throw new Error("Tracker registration did not return a peer session token");
+    }
+    this.peerSessionToken = (payload as { sessionToken: string }).sessionToken;
+    this.scheduleSessionRefresh(Date.parse((payload as { expiresAt: string }).expiresAt));
+    this.wsClient.setSessionToken(this.peerSessionToken);
     this.registered = true;
     if (!this.attachedHls) {
       await this.unregisterPeer();
       return;
     }
+    await this.wsClient.start();
     this.wsClient.enablePeerStateReporting();
   }
 
@@ -810,6 +867,8 @@ export class OpenStreamGridHlsPlugin {
 
   private async unregisterPeer(): Promise<void> {
     this.registered = false;
+    if (this.sessionRefresh) clearTimeout(this.sessionRefresh);
+    this.sessionRefresh = undefined;
     try {
       await fetch(`${this.peerCollectionUrl()}/${encodeURIComponent(this.peerId)}`, {
         method: "DELETE",
@@ -819,6 +878,28 @@ export class OpenStreamGridHlsPlugin {
     } catch {
       // The tracker expires stale peers if page teardown prevents delivery.
     }
+    this.peerSessionToken = undefined;
+  }
+
+  private scheduleSessionRefresh(expiresAt: number): void {
+    if (this.sessionRefresh) clearTimeout(this.sessionRefresh);
+    const remainingMs = Math.max(1_000, expiresAt - Date.now() - 60_000);
+    this.sessionRefresh = setTimeout(() => {
+      this.sessionRefresh = undefined;
+      if (remainingMs > MAX_TIMER_DELAY_MS) {
+        this.scheduleSessionRefresh(expiresAt);
+        return;
+      }
+      if (!this.attachedHls || !this.registered) return;
+      void this.registerPeer().catch((error: unknown) => {
+        logger.warn("browser_peer_session_refresh_failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        if (this.attachedHls && this.registered) {
+          this.scheduleSessionRefresh(Date.now() + 65_000);
+        }
+      });
+    }, Math.min(MAX_TIMER_DELAY_MS, remainingMs));
   }
 
   private peerCollectionUrl(): string {
@@ -834,7 +915,9 @@ export class OpenStreamGridHlsPlugin {
   private trackerHeaders(json: boolean): Headers {
     const headers = new Headers();
     if (json) headers.set("Content-Type", "application/json");
-    if (this.trackerApiKey) headers.set("X-API-Key", this.trackerApiKey);
+    if (this.peerSessionToken) {
+      headers.set("Authorization", `Bearer ${this.peerSessionToken}`);
+    }
     return headers;
   }
 }
@@ -842,10 +925,20 @@ export class OpenStreamGridHlsPlugin {
 const cacheKeyFrom = (segmentUrl: string): string => {
   try {
     const url = new URL(segmentUrl, globalThis.location?.href);
-    return `${url.origin}${url.pathname}`;
+    url.hash = "";
+    return url.href;
   } catch {
     return segmentUrl;
   }
+};
+
+const urlFingerprint = (value: string): string => {
+  let hash = 0xcbf29ce484222325n;
+  for (const byte of new TextEncoder().encode(value)) {
+    hash ^= BigInt(byte);
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+  }
+  return hash.toString(16).padStart(16, "0");
 };
 
 /** Generate a random peer ID using Web Crypto API. */

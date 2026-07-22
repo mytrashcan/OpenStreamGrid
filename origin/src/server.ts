@@ -30,6 +30,8 @@ const DEFAULT_MULTI_STREAM_COUNT = 1;
 const MAX_MULTI_STREAM_COUNT = 5;
 const DEFAULT_HLS_DIRECTORY = "/tmp/openstreamgrid-hls";
 const REGISTER_RETRY_MS = 1_000;
+const REGISTER_MAX_RETRY_MS = 30_000;
+const TRACKER_REQUEST_TIMEOUT_MS = 5_000;
 const IMMUTABLE_CACHE_MAX_AGE_SECONDS = 3_600;
 const logger = createLogger("origin");
 
@@ -44,6 +46,8 @@ interface RegistrationOptions {
   registration: BroadcastRegistration;
   signal?: AbortSignal;
   retryMs?: number;
+  requestTimeoutMs?: number;
+  random?: () => number;
   fetchImpl?: (
     input: string | URL,
     init?: RequestInit,
@@ -293,12 +297,18 @@ export const createOriginHandler = (
           ? streams.every((stream) => stream.playlistAvailable)
           : await fileExists(streamer.playlistPath);
         const running = streamer.isRunning();
+        const failureReason = streamer.failureReason?.();
         const health: HealthStatus = {
-          status: running && playlistAvailable ? "ok" : "starting",
+          status: running && playlistAvailable
+            ? "ok"
+            : failureReason
+              ? "error"
+              : "starting",
           service: "origin",
           details: {
             ffmpegRunning: running,
             playlistAvailable,
+            ...(failureReason ? { failureReason } : {}),
             ...(streams
               ? {
                   streamCount: streams.length,
@@ -492,11 +502,18 @@ export const registerBroadcast = async ({
   registration,
   signal,
   retryMs = REGISTER_RETRY_MS,
+  requestTimeoutMs = TRACKER_REQUEST_TIMEOUT_MS,
+  random = Math.random,
   fetchImpl = fetch,
 }: RegistrationOptions): Promise<void> => {
   const endpoint = new URL("/api/v1/broadcasts", trackerUrl);
+  let attempt = 0;
   while (!signal?.aborted) {
     try {
+      const timeoutSignal = AbortSignal.timeout(requestTimeoutMs);
+      const requestSignal = signal
+        ? AbortSignal.any([signal, timeoutSignal])
+        : timeoutSignal;
       const response = await fetchImpl(endpoint, {
         method: "POST",
         headers: {
@@ -504,24 +521,46 @@ export const registerBroadcast = async ({
           ...(apiKey ? { "X-API-Key": apiKey } : {}),
         },
         body: JSON.stringify(registration),
-        ...(signal ? { signal } : {}),
+        signal: requestSignal,
       });
       if (!response.ok) {
+        if (
+          response.status >= 400 &&
+          response.status < 500 &&
+          response.status !== 408 &&
+          response.status !== 429
+        ) {
+          throw new PermanentRegistrationError(
+            `Tracker rejected broadcast registration with HTTP ${response.status}`,
+          );
+        }
         throw new Error(`Tracker returned HTTP ${response.status}`);
       }
       return;
     } catch (error) {
       if (signal?.aborted) throw error;
+      if (error instanceof PermanentRegistrationError) throw error;
+      const exponentialDelay = Math.min(
+        retryMs * 2 ** attempt,
+        REGISTER_MAX_RETRY_MS,
+      );
+      const retryDelayMs = Math.max(
+        1,
+        Math.round(exponentialDelay * (0.8 + random() * 0.4)),
+      );
+      attempt += 1;
       logger.error("broadcast_registration_retry", error, {
         trackerUrl: endpoint.href,
         broadcastId: registration.id,
-        retryMs,
+        retryMs: retryDelayMs,
       });
-      await delay(retryMs, signal);
+      await delay(retryDelayMs, signal);
     }
   }
   throw signal?.reason ?? new Error("Broadcast registration aborted");
 };
+
+class PermanentRegistrationError extends Error {}
 
 /** Registers every origin stream as an independent tracker broadcast. */
 export const registerBroadcasts = async ({
@@ -533,6 +572,45 @@ export const registerBroadcasts = async ({
       registerBroadcast({ ...options, registration }),
     ),
   );
+};
+
+/** Releases origin-owned broadcast registrations during graceful shutdown. */
+export const unregisterBroadcasts = async ({
+  trackerUrl,
+  apiKey,
+  broadcastIds,
+  fetchImpl = fetch,
+}: {
+  trackerUrl: string;
+  apiKey?: string;
+  broadcastIds: readonly string[];
+  fetchImpl?: NonNullable<RegistrationOptions["fetchImpl"]>;
+}): Promise<void> => {
+  const results = await Promise.allSettled(
+    broadcastIds.map(async (broadcastId) => {
+      const endpoint = new URL(
+        `/api/v1/broadcasts/${encodeURIComponent(broadcastId)}`,
+        trackerUrl,
+      );
+      const response = await fetchImpl(endpoint, {
+        method: "DELETE",
+        ...(apiKey ? { headers: { "X-API-Key": apiKey } } : {}),
+        signal: AbortSignal.timeout(TRACKER_REQUEST_TIMEOUT_MS),
+      });
+      if (!response.ok && response.status !== 404) {
+        throw new Error(`Tracker unregister returned HTTP ${response.status}`);
+      }
+    }),
+  );
+  const failures = results.filter(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures.map((failure) => failure.reason),
+      "One or more broadcasts could not be unregistered",
+    );
+  }
 };
 
 const run = async (): Promise<void> => {
@@ -552,13 +630,42 @@ const run = async (): Promise<void> => {
     streamer,
   });
   const shutdownController = new AbortController();
+  let registrationRefresh: NodeJS.Timeout | undefined;
   let shuttingDown = false;
+  const createRegistrations = (): BroadcastRegistration[] => configuration.streamIds.map((streamId) => ({
+    id: streamId,
+    playlistUrl: new URL(
+      `/hls/${encodeURIComponent(streamId)}/stream.m3u8`,
+      configuration.publicOriginUrl,
+    ).href,
+    metadata: {
+      protocol: "hls",
+      source: "test-pattern",
+      abr: "true",
+      qualities: "low,med,high",
+      owner: "origin",
+      leaseExpiresAt: new Date(Date.now() + 90_000).toISOString(),
+    },
+  } satisfies BroadcastRegistration));
+  const registrations = createRegistrations();
 
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info("stopping", { signal });
     shutdownController.abort(new Error(`Received ${signal}`));
+    if (registrationRefresh) clearInterval(registrationRefresh);
+    try {
+      await unregisterBroadcasts({
+        trackerUrl: configuration.trackerUrl,
+        ...(configuration.trackerApiKey
+          ? { apiKey: configuration.trackerApiKey }
+          : {}),
+        broadcastIds: registrations.map((registration) => registration.id),
+      });
+    } catch (error) {
+      logger.error("broadcast_unregister_failed", error);
+    }
     await server.stop();
   };
   const requestShutdown = (signal: string): void => {
@@ -576,21 +683,20 @@ const run = async (): Promise<void> => {
     ...(configuration.trackerApiKey
       ? { apiKey: configuration.trackerApiKey }
       : {}),
-    registrations: configuration.streamIds.map((streamId) => ({
-      id: streamId,
-      playlistUrl: new URL(
-        `/hls/${encodeURIComponent(streamId)}/stream.m3u8`,
-        configuration.publicOriginUrl,
-      ).href,
-      metadata: {
-        protocol: "hls",
-        source: "test-pattern",
-        abr: "true",
-        qualities: "low,med,high",
-      },
-    })),
+    registrations,
     signal: shutdownController.signal,
   });
+  registrationRefresh = setInterval(() => {
+    void registerBroadcasts({
+      trackerUrl: configuration.trackerUrl,
+      ...(configuration.trackerApiKey ? { apiKey: configuration.trackerApiKey } : {}),
+      registrations: createRegistrations(),
+      signal: shutdownController.signal,
+    }).catch((error: unknown) => {
+      if (!shutdownController.signal.aborted) logger.error("broadcast_lease_refresh_failed", error);
+    });
+  }, 30_000);
+  registrationRefresh.unref();
   logger.info("started", {
     port: actualPort,
     host: configuration.host,

@@ -20,8 +20,11 @@ prototype releases are not maintained unless a release notice says otherwise.
 ## Deployment hardening
 
 - Set a strong, randomly generated `TRACKER_API_KEY` and rotate it if exposed.
-- Use tracker TLS or terminate TLS at a trusted reverse proxy. Protect private
-  keys with filesystem permissions and never bake them into container images.
+- Set a separate `PEER_SESSION_SECRET` of at least 32 random bytes. Never reuse
+  the administrator API key as the session-signing secret.
+- Terminate TLS at a trusted reverse proxy in front of the tracker and origin.
+  Protect private keys with filesystem permissions and never bake them into
+  container images.
 - Use `wss://` and `https://` for traffic outside a trusted development network.
 - Operate an authenticated TURN service for production; public STUN provides
   discovery, not confidentiality or relay authorization.
@@ -40,6 +43,7 @@ prototype releases are not maintained unless a release notice says otherwise.
 
 SHA-256 sidecars detect corrupted segment bytes; they do not authenticate the
 content publisher unless the sidecar itself is delivered through a trusted,
-authenticated channel. API-key authentication is deployment-wide and does not
-provide per-user authorization. The development Docker Compose topology is not
-a hardened internet-facing deployment.
+authenticated channel. The administrator API key is deployment-wide. Peer
+sessions are short-lived and identity-scoped, but they do not replace viewer
+account authorization in the integrating service. The development Docker
+Compose topology is not a hardened internet-facing deployment.

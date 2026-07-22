@@ -14,6 +14,7 @@ import {
 } from "@openstreamgrid/common";
 import {
   clampUnitInterval,
+  PeerFailureConsensus,
   penalizePeerQuality,
   sanitizePeerTrafficStats,
 } from "./store-utils.js";
@@ -90,11 +91,14 @@ interface BroadcastState {
 /** In-memory tracker store used for development and tests. */
 export class TrackerStore implements TrackerStoreBackend {
   private readonly broadcasts = new Map<string, BroadcastState>();
+  private readonly failureConsensus: PeerFailureConsensus;
 
   constructor(
     private readonly now: () => Date = () => new Date(),
     private readonly maxSegmentsPerPeer = 2_000,
-  ) {}
+  ) {
+    this.failureConsensus = new PeerFailureConsensus(() => this.now().getTime());
+  }
 
   registerBroadcast(registration: BroadcastRegistration): {
     broadcast: Broadcast;
@@ -251,6 +255,9 @@ export class TrackerStore implements TrackerStoreBackend {
   ): Peer {
     const reported = this.requirePeer(broadcastId, peerId);
     this.requirePeer(broadcastId, report.reporterId);
+    if (!this.failureConsensus.observe(broadcastId, peerId, report)) {
+      return this.copyPeer(reported.peer);
+    }
     const quality = penalizePeerQuality(reported.peer, report.reason);
     reported.peer.trustScore = quality.trustScore;
     reported.peer.successRate = quality.successRate;

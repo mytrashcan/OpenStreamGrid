@@ -1,7 +1,11 @@
-# OpenStreamGrid 0.4.0 Release Notes
+# OpenStreamGrid 0.5.0 Release Notes
 
-OpenStreamGrid 0.4.0 removes the installation barrier for viewer peers. A page
-using the Hls.js SDK now registers the viewer with the tracker, advertises
+OpenStreamGrid 0.5.0 hardens the peer-assisted HLS prototype for public review.
+Peer identity now uses scoped sessions, peer uploads are authenticated, and
+untrusted network inputs have explicit quotas and size limits. Origin and
+tracker lifecycles recover and expire state predictably.
+
+A page using the Hls.js SDK now registers the viewer with the tracker, advertises
 verified cached segments, exchanges those segments over WebRTC DataChannels,
 reports traffic, and leaves cleanly when playback ends. Origin fallback remains
 active throughout the lifecycle.
