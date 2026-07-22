@@ -52,10 +52,17 @@ spec:
               value: {{ .Values.origin.port | quote }}
             - name: TRACKER_URL
               value: "http://{{ include "openstreamgrid.trackerName" . }}:{{ .Values.tracker.port }}"
+            {{- if .Values.tracker.auth.existingSecret }}
+            - name: TRACKER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.tracker.auth.existingSecret | quote }}
+                  key: {{ .Values.tracker.auth.apiKeyKey | quote }}
+            {{- end }}
             - name: BROADCAST_ID
               value: {{ .Values.origin.env.BROADCAST_ID | quote }}
             - name: PUBLIC_ORIGIN_URL
-              value: {{ printf "http://%s" .Values.ingress.host | quote }}
+              value: {{ default (printf "http://%s:%v" (include "openstreamgrid.originName" .) .Values.origin.port) .Values.origin.env.PUBLIC_ORIGIN_URL | quote }}
             - name: HLS_DIRECTORY
               value: {{ .Values.origin.env.HLS_DIRECTORY | quote }}
           ports:

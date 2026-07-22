@@ -8,8 +8,9 @@ HTTP surfaces exposed by the origin and Node peers. Examples assume a tracker at
 
 - JSON request bodies use `Content-Type: application/json`.
 - Path identifiers must be percent-encoded.
-- When `TRACKER_API_KEY` is configured, protected requests require
-  `X-API-Key: <key>`. WebSocket clients send the same header during upgrade.
+- Administrative requests use `X-API-Key: <key>`. A successful peer join
+  returns a scoped session token. Peer REST calls use `Authorization: Bearer
+  <token>` and WebSocket clients use `?sessionToken=<token>`.
 - Errors use `{ "error": "message" }`.
 - Common statuses are `400` invalid input, `401` missing/invalid API key, `404`
   unknown resource, `409` capacity conflict, `413` body too large, `429` rate
@@ -131,10 +132,11 @@ Joins or refreshes a peer.
 }
 ```
 
-Returns `201` for a new peer or `200` for an existing peer. A peer contains:
+Returns `201` for a new peer or `200` for an authenticated refresh:
 
 ```json
 {
+  "peer": {
   "id": "peer-a",
   "address": "http://peer-a:9090",
   "segments": [],
@@ -145,10 +147,13 @@ Returns `201` for a new peer or `200` for an existing peer. A peer contains:
   "successRate": 1,
   "trustScore": 1,
   "metadata": { "region": "local" }
+  },
+  "sessionToken": "<opaque-token>",
+  "expiresAt": "2026-07-20T04:00:00.000Z"
 }
 ```
 
-Returns `409` when the configured per-broadcast peer capacity is exhausted.
+Returns `429` when the configured per-broadcast peer capacity is exhausted.
 
 Zero-install browser peers use a signaling-only address and identify their
 transport in metadata:

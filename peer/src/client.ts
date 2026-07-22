@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomBytes } from "node:crypto";
 import { hostname } from "node:os";
 import { pathToFileURL } from "node:url";
 import { createLogger } from "@openstreamgrid/common";
@@ -88,6 +89,7 @@ class PeerApplication {
   private readonly transportManager: TransportManager;
   private readonly fetcher: HybridSegmentFetcher;
   private readonly inFlightSegments = new Set<string>();
+  private readonly uploadToken = randomBytes(32).toString("base64url");
 
   constructor(private readonly configuration: PeerConfiguration) {
     this.cache = new SegmentCache(
@@ -113,6 +115,7 @@ class PeerApplication {
       stats: this.stats,
       maxUploadSpeedBps: configuration.maxUploadSpeedBps,
       maxConnections: configuration.maxConnections,
+      authorizationToken: this.uploadToken,
       ready: () => this.cache.size > 0,
     });
     const verifier = new OriginHashVerifier(configuration.originBaseUrl);
@@ -135,11 +138,11 @@ class PeerApplication {
             }
           : {}),
         segmentProvider: (segmentName) => {
-          const data = this.cache.get(segmentName);
-          return data ? Buffer.from(data) : undefined;
+          return this.cache.get(segmentName);
         },
         onUpload: (bytes) => this.stats.recordUpload(bytes),
         maxUploadConnections: configuration.maxConnections,
+        maxUploadBitrate: configuration.maxUploadSpeedBps,
       },
     });
     this.fetcher = new HybridSegmentFetcher({
@@ -159,19 +162,35 @@ class PeerApplication {
     const address = new URL(this.configuration.peerAddress);
     const port = Number.parseInt(address.port || DEFAULT_HTTP_PORT, 10);
     await this.uploader.start(port, this.configuration.uploadHost);
+    const stopActiveWork = (): void => {
+      this.fetcher.stop();
+      this.tracker.stop();
+      void Promise.allSettled([
+        this.uploader.stop(),
+        this.transportManager.stop(),
+      ]);
+    };
+    signal.addEventListener("abort", stopActiveWork, { once: true });
+    if (signal.aborted) stopActiveWork();
     try {
       await this.tracker.join({
         id: this.configuration.peerId,
         address: this.configuration.peerAddress,
         uploadBandwidthBps: this.configuration.maxUploadSpeedBps,
+        metadata: { uploadToken: this.uploadToken },
       });
-      await Promise.all([this.tracker.start(), this.transportManager.start()]);
+      this.transportManager.setSessionToken(this.tracker.getPeerSessionToken());
+      await Promise.all([
+        this.tracker.start(signal),
+        this.transportManager.start(),
+      ]);
       logger.info("started", {
         peerId: this.configuration.peerId,
         address: this.configuration.peerAddress,
       });
       await this.consumePlaylist(signal);
     } finally {
+      signal.removeEventListener("abort", stopActiveWork);
       await this.shutdown();
     }
   }
@@ -230,10 +249,20 @@ class PeerApplication {
     for (const { segmentName } of batch) this.inFlightSegments.add(segmentName);
     let fetched: Map<string, Buffer>;
     try {
-      fetched = await this.fetcher.fetchSegments(
-        batch.map(({ segmentName }) => segmentName),
-        this.tracker.allPeers(),
-      );
+      if (batch.some(({ segmentsAhead }) => segmentsAhead < MINIMUM_P2P_SEGMENTS_AHEAD)) {
+        const results = await Promise.all(
+          batch.map(async ({ segmentName, segmentsAhead }) => [
+            segmentName,
+            (await this.fetcher.fetchSegment(segmentName, segmentsAhead)).data,
+          ] as const),
+        );
+        fetched = new Map(results);
+      } else {
+        fetched = await this.fetcher.fetchSegments(
+          batch.map(({ segmentName }) => segmentName),
+          this.tracker.allPeers(),
+        );
+      }
     } catch (error) {
       logger.error("parallel_segment_fetch_failed", error);
       return;

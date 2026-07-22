@@ -72,7 +72,7 @@ test("verifies a variant segment against its adjacent sidecar", async (context) 
   context.mock.method(globalThis, "fetch", async (input: RequestInfo | URL) => {
     assert.equal(
       String(input),
-      "https://origin.example/hls/high/segment.ts.sha256",
+      "https://origin.example/hls/high/segment.ts.sha256?token=ignored",
     );
     return new Response(`${digest}  segment.ts\n`);
   });

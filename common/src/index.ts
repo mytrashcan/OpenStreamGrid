@@ -1,6 +1,39 @@
 /** Supported adaptive-bitrate quality identifiers. */
 export type Quality = "low" | "med" | "high";
 
+const UNSAFE_PEER_HOSTNAMES = new Set([
+  "0.0.0.0",
+  "::",
+  "::1",
+  "localhost",
+  "metadata.google.internal",
+]);
+
+/** Rejects peer HTTP addresses that can trivially target local metadata services. */
+export const validatePeerHttpBaseUrl = (address: string): URL => {
+  const url = new URL(address);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Peer address must use HTTP or HTTPS");
+  }
+  if (url.username || url.password) {
+    throw new Error("Peer address must not contain credentials");
+  }
+  const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (
+    UNSAFE_PEER_HOSTNAMES.has(hostname) ||
+    hostname.endsWith(".localhost") ||
+    hostname.startsWith("127.") ||
+    hostname.startsWith("169.254.") ||
+    hostname.startsWith("fe80:")
+  ) {
+    throw new Error("Peer address targets a reserved local endpoint");
+  }
+  if (url.search || url.hash) {
+    throw new Error("Peer address must not contain a query or fragment");
+  }
+  return url;
+};
+
 /** Payload used to register or update a broadcast. */
 export interface BroadcastRegistration {
   id: string;
@@ -226,8 +259,10 @@ export type WsClientMessage =
       type: "report_segments";
       broadcastId: string;
       peerId: string;
-      segments: string[];
+      segments?: string[];
       replace?: boolean;
+      added?: string[];
+      removed?: string[];
     }
   | {
       type: "report_stats";
@@ -254,6 +289,15 @@ export type WsServerMessage =
       broadcastId: string;
       peerId: string;
       segments: string[];
+      /** When true, the list replaces the peer's previous inventory. */
+      replace?: boolean;
+    }
+  | {
+      type: "segment_inventory_delta";
+      broadcastId: string;
+      peerId: string;
+      added: string[];
+      removed: string[];
     }
   | {
       type: "stats_update";

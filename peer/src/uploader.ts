@@ -6,50 +6,9 @@ import {
 import { createLogger, type HealthStatus } from "@openstreamgrid/common";
 import type { SegmentCache } from "./cache.js";
 import type { TrafficStats } from "./stats.js";
+import { BandwidthLimiter } from "./bandwidth-limiter.js";
 
-const MAX_WRITE_CHUNK_BYTES = 64 * 1024;
 const logger = createLogger("peer");
-
-class TokenBucket {
-  private tokens: number;
-  private lastRefill = performance.now();
-
-  constructor(private readonly bytesPerSecond: number) {
-    if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) {
-      throw new Error("Upload speed must be positive");
-    }
-    this.tokens = bytesPerSecond;
-  }
-
-  get maximumChunkBytes(): number {
-    return Math.max(1, Math.min(MAX_WRITE_CHUNK_BYTES, Math.floor(this.bytesPerSecond)));
-  }
-
-  async consume(bytes: number): Promise<void> {
-    while (true) {
-      this.refill();
-      if (this.tokens >= bytes) {
-        this.tokens -= bytes;
-        return;
-      }
-      const waitMs = Math.max(1, ((bytes - this.tokens) / this.bytesPerSecond) * 1_000);
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, waitMs);
-        timer.unref();
-      });
-    }
-  }
-
-  private refill(): void {
-    const now = performance.now();
-    const elapsedSeconds = Math.max(0, now - this.lastRefill) / 1_000;
-    this.tokens = Math.min(
-      this.bytesPerSecond,
-      this.tokens + elapsedSeconds * this.bytesPerSecond,
-    );
-    this.lastRefill = now;
-  }
-}
 
 interface UploadServerOptions {
   cache: SegmentCache;
@@ -57,12 +16,13 @@ interface UploadServerOptions {
   maxUploadSpeedBps: number;
   maxConnections: number;
   ready?: () => boolean;
+  authorizationToken?: string;
 }
 
 /** Rate- and concurrency-limited HTTP server for cached peer segments. */
 export class UploadServer {
   private readonly server;
-  private readonly bucket: TokenBucket;
+  private readonly bucket: BandwidthLimiter;
   private activeConnections = 0;
   private startPromise: Promise<number> | undefined;
   private stopPromise: Promise<void> | undefined;
@@ -71,7 +31,7 @@ export class UploadServer {
     if (!Number.isSafeInteger(options.maxConnections) || options.maxConnections <= 0) {
       throw new Error("Maximum connections must be a positive integer");
     }
-    this.bucket = new TokenBucket(options.maxUploadSpeedBps / 8);
+    this.bucket = new BandwidthLimiter(options.maxUploadSpeedBps / 8);
     this.server = createServer((request, response) =>
       void this.handle(request, response),
     );
@@ -122,6 +82,16 @@ export class UploadServer {
     try {
       const method = request.method ?? "GET";
       const url = new URL(request.url ?? "/", "http://peer.local");
+      if (method === "OPTIONS" && url.pathname.startsWith("/segments/")) {
+        response.writeHead(204, {
+          "access-control-allow-origin": "*",
+          "access-control-allow-methods": "GET, HEAD, OPTIONS",
+          "access-control-allow-headers": "Authorization",
+          "access-control-max-age": "600",
+        });
+        response.end();
+        return;
+      }
       if (method === "GET" && url.pathname === "/health") {
         const ready = this.options.ready?.() ?? true;
         const health: HealthStatus = {
@@ -141,6 +111,13 @@ export class UploadServer {
       if (!match?.[1] || (method !== "GET" && method !== "HEAD")) {
         this.sendJson(response, 404, { error: "Route not found" });
         return;
+      }
+      if (this.options.authorizationToken) {
+        const expected = `Bearer ${this.options.authorizationToken}`;
+        if (request.headers.authorization !== expected) {
+          this.sendJson(response, 401, { error: "Invalid peer upload token" });
+          return;
+        }
       }
       if (this.activeConnections >= this.options.maxConnections) {
         this.sendJson(

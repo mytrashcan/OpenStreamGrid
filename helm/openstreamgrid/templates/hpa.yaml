@@ -1,4 +1,7 @@
 {{- if .Values.tracker.autoscaling.enabled }}
+{{- if eq .Values.tracker.env.STORE_TYPE "sqlite" }}
+{{- fail "tracker.autoscaling cannot be enabled when STORE_TYPE is sqlite" }}
+{{- end }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:

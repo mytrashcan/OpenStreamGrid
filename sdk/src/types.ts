@@ -42,6 +42,8 @@ export interface HlsjsPluginConfig {
   peerId?: string;
   /** Base URL used to fetch segment hashes. Required unless verification is disabled. */
   originBaseUrl?: string;
+  /** Resolves the SHA-256 sidecar URL for signed or non-adjacent media URLs. */
+  hashUrlResolver?: (segmentUrl: string) => string;
   /** Max cache size in bytes (default: 100 MB). */
   maxCacheBytes?: number;
   /** P2P request timeout in ms (default: 3000). */
@@ -54,8 +56,6 @@ export interface HlsjsPluginConfig {
   maxUploadConnections?: number;
   /** Browser upload bitrate limit in bits per second (default: 1 Mbps). */
   maxUploadBitrate?: number;
-  /** Optional tracker API key used for peer registration requests. */
-  trackerApiKey?: string;
   /** Test and embedded-runtime hook for constructing peer connections. */
   peerConnectionFactory?: (configuration: RTCConfiguration) => RTCPeerConnection;
   /** Whether to enable SHA-256 segment verification (default: true). */
@@ -104,8 +104,10 @@ export type WsClientMessage =
       type: "report_segments";
       broadcastId: string;
       peerId: string;
-      segments: string[];
+      segments?: string[];
       replace?: boolean;
+      added?: string[];
+      removed?: string[];
     }
   | {
       type: "report_stats";
@@ -134,6 +136,14 @@ export type WsServerMessage =
       broadcastId: string;
       peerId: string;
       segments: string[];
+      replace?: boolean;
+    }
+  | {
+      type: "segment_inventory_delta";
+      broadcastId: string;
+      peerId: string;
+      added: string[];
+      removed: string[];
     }
   | { type: "stats_update"; broadcastId: string; peerId: string; stats: unknown }
   | { type: "peer_list"; broadcastId: string; peers: PeerInfo[] }

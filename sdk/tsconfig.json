@@ -11,7 +11,7 @@
     "noImplicitOverride": true,
     "exactOptionalPropertyTypes": true,
     "declaration": true,
-    "declarationMap": true,
+    "declarationMap": false,
     "sourceMap": true,
     "outDir": "./dist/types",
     "rootDir": "./src",
