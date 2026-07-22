@@ -1,9 +1,10 @@
 # OpenStreamGrid
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/mytrashcan/OpenStreamGrid)](https://github.com/mytrashcan/OpenStreamGrid/releases/latest)
+[![CI](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/ci.yml/badge.svg)](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/ci.yml)
 [![Node.js 22+](https://img.shields.io/badge/Node.js-22%2B-green.svg)](package.json)
-[![Docker](https://img.shields.io/badge/Docker-ready-blue.svg)](docker-compose.yml)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-green.svg)](CONTRIBUTING.md)
+[![Docker images](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/docker-publish.yml)
 
 표준 라이브 스트리밍을 위한 범용 하이브리드 P2P-CDN 전송 미들웨어입니다.
 
@@ -31,7 +32,10 @@ P2P 전송이 불가능하거나 재생 기한 안에 완료되지 않으면 즉
 명령 하나로 Tracker, 테스트 Origin, 피어 2개를 실행할 수 있습니다.
 
 ```bash
-docker compose up --build
+git clone --depth 1 https://github.com/mytrashcan/OpenStreamGrid.git
+cd OpenStreamGrid
+docker compose up --build --detach
+docker compose ps
 ```
 
 | 서비스 | 로컬 주소 |
@@ -44,6 +48,32 @@ docker compose up --build
 Compose 스택은 FFmpeg 테스트 패턴으로 라이브 HLS 스트림을 생성합니다. 피어는
 정상 기동 후 검증된 세그먼트를 교환하며, P2P 요청이 실패하거나 느리면
 Origin으로 폴백합니다. 종료할 때는 `docker compose down`을 실행하세요.
+
+## 릴리스 상태
+
+최근 공개된 안정 릴리스는
+[OpenStreamGrid v0.4.1](https://github.com/mytrashcan/OpenStreamGrid/releases/tag/v0.4.1)입니다.
+현재 `main` 브랜치에는 출시 예정인 0.5.0 프로덕션 강화 변경사항이 포함되어
+있습니다. 안정 배포에는 릴리스 태그를 사용하고, 최신 개발 버전 평가에는
+`main`을 사용하세요. 전체 변경 내역은 [변경 이력](CHANGELOG.md)을 확인하세요.
+
+운영 배포용 컨테이너 이미지는 GHCR에 게시됩니다.
+
+| 구성 요소 | 이미지 |
+| --- | --- |
+| Tracker | `ghcr.io/mytrashcan/openstreamgrid-tracker:v0.4.1` |
+| Origin | `ghcr.io/mytrashcan/openstreamgrid-origin:v0.4.1` |
+| Node Peer | `ghcr.io/mytrashcan/openstreamgrid-peer:v0.4.1` |
+
+운영 환경에서는 변경되지 않는 버전 태그를 사용하세요. `latest` 태그는 평가용으로
+제공합니다. 브라우저 SDK는 CI에서 빌드와 npm 게시 dry-run까지 검증하지만 아직
+npm 레지스트리에는 게시하지 않았습니다. 최초 게시 전까지는 태그가 지정된 소스를
+받아 다음 명령으로 빌드해 사용하세요.
+
+```bash
+npm ci --prefix sdk
+npm run build --prefix sdk
+```
 
 ## 아키텍처 개요
 
@@ -98,7 +128,14 @@ Hls.js SDK를 적용한 시청자는 페이지에 접속하는 즉시 WebRTC Pee
 DataChannel 업로드, 트래픽 보고, 재생 종료 시 등록 해제를 자동으로
 처리합니다. 시청자가 EXE나 크롬 확장 프로그램을 설치할 필요가 없습니다.
 
+다음 예제는 번들러가 로컬에서 빌드한 `@openstreamgrid/sdk` 패키지를 해석하도록
+설정한 환경을 기준으로 합니다.
+
 ```ts
+import Hls from "hls.js";
+import { OpenStreamGridHlsPlugin } from "@openstreamgrid/sdk";
+
+const hls = new Hls();
 const plugin = new OpenStreamGridHlsPlugin({
   trackerUrl: "https://stream.example.com",
   broadcastId: "live",
@@ -115,11 +152,17 @@ const plugin = new OpenStreamGridHlsPlugin({
   ],
 });
 plugin.attach(hls);
+hls.loadSource("https://stream.example.com/hls/stream.m3u8");
+hls.attachMedia(document.querySelector("video")!);
 ```
 
 수신 전용 재생은 `peerParticipation: false`로 설정할 수 있습니다. 네이티브
 에이전트나 크롬 확장 프로그램은 관리형 환경의 전용 Seed Peer에는 유용하지만,
 일반 시청자 경로에는 필요하지 않습니다.
+
+브라우저 Peer는 등록 시 신원이 제한된 단기 세션을 자동으로 발급받습니다.
+시청자 코드에 `TRACKER_API_KEY`를 전달하거나 포함하지 말고, 관리자 키는 신뢰할
+수 있는 Origin과 운영 구성 요소에서만 사용하세요.
 
 ## API 요약
 
@@ -248,7 +291,7 @@ npm ci --prefix sdk
 npm run build
 npm run typecheck
 npm test
-npx eslint .
+npm run lint
 ```
 
 P2P 교환과 Origin 폴백 통합 테스트는 `bash test/docker-test.sh`, 기본 부하

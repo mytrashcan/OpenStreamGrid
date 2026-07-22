@@ -1,9 +1,10 @@
 # OpenStreamGrid
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/mytrashcan/OpenStreamGrid)](https://github.com/mytrashcan/OpenStreamGrid/releases/latest)
+[![CI](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/ci.yml/badge.svg)](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/ci.yml)
 [![Node.js 22+](https://img.shields.io/badge/Node.js-22%2B-green.svg)](package.json)
-[![Docker](https://img.shields.io/badge/Docker-ready-blue.svg)](docker-compose.yml)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-green.svg)](CONTRIBUTING.md)
+[![Docker images](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/docker-publish.yml)
 
 Universal hybrid P2P-CDN middleware for standards-based live streaming.
 
@@ -24,7 +25,10 @@ With [Docker Compose v2](https://docs.docker.com/compose/) installed, start the
 tracker, test origin, and two peers with one command:
 
 ```bash
-docker compose up --build
+git clone --depth 1 https://github.com/mytrashcan/OpenStreamGrid.git
+cd OpenStreamGrid
+docker compose up --build --detach
+docker compose ps
 ```
 
 | Service | Local URL |
@@ -37,6 +41,32 @@ docker compose up --build
 The Compose stack generates a live test pattern with FFmpeg. Once healthy, the
 peers begin exchanging verified segments and fall back to the origin whenever a
 peer is unavailable or too slow. Stop the stack with `docker compose down`.
+
+## Release Status
+
+[OpenStreamGrid v0.4.1](https://github.com/mytrashcan/OpenStreamGrid/releases/tag/v0.4.1)
+is the latest published stable release. The `main` branch currently contains
+the upcoming 0.5.0 production-hardening changes. Use the release tag for a
+stable deployment or `main` when evaluating the current development version.
+See the [changelog](CHANGELOG.md) for the complete history.
+
+Tagged container images are published to GHCR for production deployment:
+
+| Component | Image |
+| --- | --- |
+| Tracker | `ghcr.io/mytrashcan/openstreamgrid-tracker:v0.4.1` |
+| Origin | `ghcr.io/mytrashcan/openstreamgrid-origin:v0.4.1` |
+| Node peer | `ghcr.io/mytrashcan/openstreamgrid-peer:v0.4.1` |
+
+Use immutable version tags in deployments; `latest` is provided for evaluation.
+The browser SDK package is build- and publish-dry-run verified in CI but is not
+yet published to npm. Until the first registry release, consume it from a tagged
+source checkout and build it locally:
+
+```bash
+npm ci --prefix sdk
+npm run build --prefix sdk
+```
 
 ## Use Cases
 
@@ -100,7 +130,14 @@ the viewer, caches verified segments, advertises availability, serves cached
 bytes through a rate-limited DataChannel, reports traffic, and unregisters on
 detach. Viewers do not install an executable or browser extension.
 
+The following example assumes your bundler resolves the locally built
+`@openstreamgrid/sdk` package:
+
 ```ts
+import Hls from "hls.js";
+import { OpenStreamGridHlsPlugin } from "@openstreamgrid/sdk";
+
+const hls = new Hls();
 const plugin = new OpenStreamGridHlsPlugin({
   trackerUrl: "https://stream.example.com",
   broadcastId: "live",
@@ -117,11 +154,17 @@ const plugin = new OpenStreamGridHlsPlugin({
   ],
 });
 plugin.attach(hls);
+hls.loadSource("https://stream.example.com/hls/stream.m3u8");
+hls.attachMedia(document.querySelector("video")!);
 ```
 
 Set `peerParticipation: false` for receive-only playback. A native agent or
 browser extension can still be useful as an optional dedicated seed in managed
 environments, but it is not part of the normal viewer path.
+
+Browser peers automatically receive a short-lived, identity-scoped session when
+they register. Do not pass or embed `TRACKER_API_KEY` in viewer code; reserve the
+administrator credential for trusted origin and operations components.
 
 ## Tracker API
 
