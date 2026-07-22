@@ -14,12 +14,15 @@ npm ci --prefix sdk
 npm run build
 npm run typecheck
 npm test
-npx eslint .
+npm run lint
 ```
 
 Use `bash test/docker-test.sh` for delivery/fallback changes and
 `bash scripts/benchmark.sh` for performance-sensitive changes. Docker tests use
 isolated Compose projects but bind the documented local ports.
+
+The browser SDK is intentionally published independently and therefore owns
+`sdk/package-lock.json`; run SDK dependency commands with `--prefix sdk`.
 
 ## Change guidelines
 

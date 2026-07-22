@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE=(docker compose --project-directory "$ROOT_DIR")
+TRACKER_API_KEY="${TRACKER_API_KEY:-openstreamgrid-local-admin}"
 TEST_SUCCEEDED=0
 
 cleanup() {
@@ -33,7 +34,7 @@ wait_for_url() {
 stat_value() {
   local field="$1"
   local body
-  body="$(curl --fail --silent --show-error http://127.0.0.1:7070/api/v1/broadcasts/live/stats)"
+  body="$(curl --fail --silent --show-error --header "X-API-Key: $TRACKER_API_KEY" http://127.0.0.1:7070/api/v1/broadcasts/live/stats)"
   node -e 'const body=JSON.parse(process.argv[1]); const value=body[process.argv[2]]; if(typeof value!=="number") process.exit(2); process.stdout.write(String(value));' "$body" "$field"
 }
 
@@ -65,7 +66,7 @@ wait_for_url peer-a http://127.0.0.1:9091/health
 wait_for_url peer-b http://127.0.0.1:9092/health
 wait_for_stat_greater_than p2pSuccesses 0 60
 
-p2p_stats="$(curl --fail --silent --show-error http://127.0.0.1:7070/api/v1/broadcasts/live/stats)"
+p2p_stats="$(curl --fail --silent --show-error --header "X-API-Key: $TRACKER_API_KEY" http://127.0.0.1:7070/api/v1/broadcasts/live/stats)"
 fallbacks_before="$(stat_value fallbacks)"
 echo "Forcing a stale-peer request to exercise origin fallback"
 "${COMPOSE[@]}" kill peer-b peer-a
@@ -73,7 +74,7 @@ echo "Forcing a stale-peer request to exercise origin fallback"
 wait_for_url peer-b http://127.0.0.1:9092/health 20
 wait_for_stat_greater_than fallbacks "$fallbacks_before" 20
 
-stats="$(curl --fail --silent --show-error http://127.0.0.1:7070/api/v1/broadcasts/live/stats)"
+stats="$(curl --fail --silent --show-error --header "X-API-Key: $TRACKER_API_KEY" http://127.0.0.1:7070/api/v1/broadcasts/live/stats)"
 node -e '
 const p2pPhase = JSON.parse(process.argv[1]);
 const fallbackPhase = JSON.parse(process.argv[2]);

@@ -16,7 +16,10 @@ import type { FetchFunction } from "./verifier.js";
 const DEFAULT_REPORT_INTERVAL_MS = 5_000;
 const DEFAULT_RECONNECT_INITIAL_MS = 1_000;
 const DEFAULT_RECONNECT_MAX_MS = 30_000;
+const DEFAULT_STARTUP_TIMEOUT_MS = 10_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const RECONNECT_BACKOFF_MULTIPLIER = 2;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const WEBSOCKET_NORMAL_CLOSURE_CODE = 1_000;
 const logger = createLogger("peer");
 
@@ -24,7 +27,12 @@ type JsonObject = Record<string, unknown>;
 type PeerUpdateMessage = Extract<
   WsServerMessage,
   {
-    type: "peer_list" | "peer_joined" | "peer_left" | "segment_available";
+    type:
+      | "peer_list"
+      | "peer_joined"
+      | "peer_left"
+      | "segment_available"
+      | "segment_inventory_delta";
   }
 >;
 
@@ -100,6 +108,26 @@ const parsePeer = (value: unknown): Peer => {
   };
 };
 
+const parsePeerSession = (value: unknown): {
+  peer: Peer;
+  sessionToken: string;
+  expiresAt: number;
+} => {
+  if (
+    !isObject(value) ||
+    typeof value.sessionToken !== "string" ||
+    typeof value.expiresAt !== "string" ||
+    !Number.isFinite(Date.parse(value.expiresAt))
+  ) {
+    throw new TypeError("Peer session response is invalid");
+  }
+  return {
+    peer: parsePeer(value.peer),
+    sessionToken: value.sessionToken,
+    expiresAt: Date.parse(value.expiresAt),
+  };
+};
+
 const parsePeerUpdate = (data: RawData): PeerUpdateMessage | undefined => {
   const value: unknown = JSON.parse(data.toString());
   if (
@@ -136,6 +164,22 @@ const parsePeerUpdate = (data: RawData): PeerUpdateMessage | undefined => {
         broadcastId,
         peerId: value.peerId,
         segments: value.segments,
+        ...(value.replace === true ? { replace: true } : {}),
+      };
+    case "segment_inventory_delta":
+      if (
+        typeof value.peerId !== "string" ||
+        !isStringArray(value.added) ||
+        !isStringArray(value.removed)
+      ) {
+        throw new TypeError("Tracker segment inventory delta is invalid");
+      }
+      return {
+        type: "segment_inventory_delta",
+        broadcastId,
+        peerId: value.peerId,
+        added: value.added,
+        removed: value.removed,
       };
     default:
       return undefined;
@@ -156,6 +200,10 @@ export interface TrackerClientOptions {
   reportIntervalMs?: number;
   reconnectInitialMs?: number;
   reconnectMaxMs?: number;
+  startupTimeoutMs?: number;
+  requestTimeoutMs?: number;
+  /** Restores a previously issued session, primarily for reconnecting clients. */
+  initialSessionToken?: string;
 }
 
 /** Maintains tracker membership, WebSocket updates, and periodic reports. */
@@ -165,7 +213,10 @@ export class TrackerClient implements PeerDirectory {
   private readonly reportIntervalMs: number;
   private readonly reconnectInitialMs: number;
   private readonly reconnectMaxMs: number;
+  private readonly startupTimeoutMs: number;
+  private readonly requestTimeoutMs: number;
   private readonly peers = new Map<string, Peer>();
+  private readonly lastReportedSegments = new Set<string>();
   private socket: WebSocket | undefined;
   private reportTimer: NodeJS.Timeout | undefined;
   private reconnectTimer: NodeJS.Timeout | undefined;
@@ -173,8 +224,12 @@ export class TrackerClient implements PeerDirectory {
   private started = false;
   private firstConnectionResolver: (() => void) | undefined;
   private firstConnectionPromise: Promise<void> | undefined;
+  private sessionToken: string | undefined;
+  private sessionRefreshTimer: NodeJS.Timeout | undefined;
+  private joinRequest: PeerJoinRequest | undefined;
 
   constructor(private readonly options: TrackerClientOptions) {
+    this.sessionToken = options.initialSessionToken;
     this.fetchImpl = options.fetchImpl ?? keepAliveFetch;
     this.webSocketFactory =
       options.webSocketFactory ??
@@ -190,10 +245,14 @@ export class TrackerClient implements PeerDirectory {
     this.reconnectInitialMs =
       options.reconnectInitialMs ?? DEFAULT_RECONNECT_INITIAL_MS;
     this.reconnectMaxMs = options.reconnectMaxMs ?? DEFAULT_RECONNECT_MAX_MS;
+    this.startupTimeoutMs = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     for (const [label, value] of [
       ["Report interval", this.reportIntervalMs],
       ["Initial reconnect delay", this.reconnectInitialMs],
       ["Maximum reconnect delay", this.reconnectMaxMs],
+      ["Startup timeout", this.startupTimeoutMs],
+      ["Request timeout", this.requestTimeoutMs],
     ] as const) {
       if (!Number.isSafeInteger(value) || value <= 0) {
         throw new Error(`${label} must be a positive integer`);
@@ -206,11 +265,15 @@ export class TrackerClient implements PeerDirectory {
   }
 
   async join(request: PeerJoinRequest): Promise<Peer> {
-    return parsePeer(await this.requestJson(this.peersUrl(), {
+    const session = parsePeerSession(await this.requestJson(this.peersUrl(), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(request),
     }));
+    this.sessionToken = session.sessionToken;
+    this.joinRequest = { ...request, ...(request.metadata ? { metadata: { ...request.metadata } } : {}) };
+    this.scheduleSessionRefresh(session.expiresAt);
+    return session.peer;
   }
 
   async leave(): Promise<void> {
@@ -219,14 +282,22 @@ export class TrackerClient implements PeerDirectory {
         `${this.peersUrl().pathname}/${encodeURIComponent(this.options.peerId)}`,
         this.options.trackerUrl,
       ),
-      this.withApiKey({ method: "DELETE" }),
+      this.withAuthorization({
+        method: "DELETE",
+        signal: AbortSignal.timeout(this.requestTimeoutMs),
+      }),
     );
     if (!response.ok && response.status !== 404) {
       throw new Error(`Tracker leave returned HTTP ${response.status}`);
     }
+    this.sessionToken = undefined;
+    this.joinRequest = undefined;
   }
 
-  start(): Promise<void> {
+  start(signal?: AbortSignal): Promise<void> {
+    if (!this.sessionToken) {
+      return Promise.reject(new Error("Peer must join before tracker WebSocket startup"));
+    }
     if (this.started) return this.firstConnectionPromise ?? Promise.resolve();
     this.started = true;
     this.reportTimer = setInterval(
@@ -234,8 +305,33 @@ export class TrackerClient implements PeerDirectory {
       this.reportIntervalMs,
     );
     this.reportTimer.unref();
-    this.firstConnectionPromise = new Promise<void>((resolve) => {
+    this.firstConnectionPromise = new Promise<void>((resolve, reject) => {
       this.firstConnectionResolver = resolve;
+      const timeout = setTimeout(() => {
+        cleanup();
+        this.stop();
+        reject(new Error("Tracker WebSocket startup timed out"));
+      }, this.startupTimeoutMs);
+      timeout.unref();
+      const onAbort = (): void => {
+        cleanup();
+        this.stop();
+        reject(signal?.reason ?? new Error("Tracker startup aborted"));
+      };
+      const cleanup = (): void => {
+        clearTimeout(timeout);
+        signal?.removeEventListener("abort", onAbort);
+      };
+      const connected = this.firstConnectionResolver;
+      this.firstConnectionResolver = () => {
+        cleanup();
+        connected?.();
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
       this.openSocket();
     });
     return this.firstConnectionPromise;
@@ -244,10 +340,13 @@ export class TrackerClient implements PeerDirectory {
   stop(): void {
     this.started = false;
     this.peers.clear();
+    this.lastReportedSegments.clear();
     if (this.reportTimer) clearInterval(this.reportTimer);
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    if (this.sessionRefreshTimer) clearTimeout(this.sessionRefreshTimer);
     this.reportTimer = undefined;
     this.reconnectTimer = undefined;
+    this.sessionRefreshTimer = undefined;
     this.firstConnectionResolver?.();
     this.firstConnectionResolver = undefined;
     this.firstConnectionPromise = undefined;
@@ -269,14 +368,29 @@ export class TrackerClient implements PeerDirectory {
     return [...this.peers.values()].map((peer) => this.copyPeer(peer));
   }
 
+  getPeerSessionToken(): string {
+    if (!this.sessionToken) throw new Error("Peer has not joined the tracker");
+    return this.sessionToken;
+  }
+
   reportSegments(): void {
-    this.send({
+    const current = new Set(this.options.segments());
+    const added = [...current].filter(
+      (segment) => !this.lastReportedSegments.has(segment),
+    );
+    const removed = [...this.lastReportedSegments].filter(
+      (segment) => !current.has(segment),
+    );
+    if (added.length === 0 && removed.length === 0) return;
+    if (!this.send({
       type: "report_segments",
       broadcastId: this.options.broadcastId,
       peerId: this.options.peerId,
-      segments: this.options.segments(),
-      replace: true,
-    });
+      added,
+      removed,
+    })) return;
+    this.lastReportedSegments.clear();
+    for (const segment of current) this.lastReportedSegments.add(segment);
   }
 
   async reportFailure(
@@ -393,27 +507,41 @@ export class TrackerClient implements PeerDirectory {
       if (message.type === "segment_available") {
         const peer = this.peers.get(message.peerId);
         if (peer) {
-          peer.segments = [...new Set([...peer.segments, ...message.segments])];
+          peer.segments = message.replace
+            ? [...message.segments]
+            : [...new Set([...peer.segments, ...message.segments])];
         }
+        return;
+      }
+      if (message.type === "segment_inventory_delta") {
+        const peer = this.peers.get(message.peerId);
+        if (!peer) return;
+        const segments = new Set(peer.segments);
+        for (const segment of message.removed) segments.delete(segment);
+        for (const segment of message.added) segments.add(segment);
+        peer.segments = [...segments];
       }
     } catch (error) {
       logger.error("invalid_tracker_message", error);
     }
   }
 
-  private send(message: WsClientMessage): void {
+  private send(message: WsClientMessage): boolean {
     if (this.socket?.readyState === WebSocket.OPEN) {
       try {
         this.socket.send(JSON.stringify(message));
+        return true;
       } catch (error) {
         if (this.started) logger.error("tracker_message_send_failed", error);
       }
     }
+    return false;
   }
 
   private webSocketUrl(): URL {
     const url = new URL("/ws", this.options.trackerUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    if (this.sessionToken) url.searchParams.set("sessionToken", this.sessionToken);
     return url;
   }
 
@@ -424,21 +552,45 @@ export class TrackerClient implements PeerDirectory {
     );
   }
 
+  private scheduleSessionRefresh(expiresAt: number): void {
+    if (this.sessionRefreshTimer) clearTimeout(this.sessionRefreshTimer);
+    const remainingMs = Math.max(1_000, expiresAt - Date.now() - 60_000);
+    const delayMs = Math.min(MAX_TIMER_DELAY_MS, remainingMs);
+    this.sessionRefreshTimer = setTimeout(() => {
+      this.sessionRefreshTimer = undefined;
+      if (remainingMs > MAX_TIMER_DELAY_MS) {
+        this.scheduleSessionRefresh(expiresAt);
+        return;
+      }
+      const request = this.joinRequest;
+      if (!request) return;
+      void this.join(request).catch((error: unknown) => {
+        logger.error("peer_session_refresh_failed", error);
+        this.scheduleSessionRefresh(Date.now() + 30_000);
+      });
+    }, delayMs);
+    this.sessionRefreshTimer.unref();
+  }
+
   private async requestJson(
     endpoint: URL,
     init?: RequestInit,
   ): Promise<unknown> {
-    const response = await this.fetchImpl(endpoint, this.withApiKey(init));
+    const timeoutSignal = AbortSignal.timeout(this.requestTimeoutMs);
+    const response = await this.fetchImpl(
+      endpoint,
+      this.withAuthorization({ ...init, signal: init?.signal ?? timeoutSignal }),
+    );
     if (!response.ok) {
       throw new Error(`Tracker returned HTTP ${response.status}`);
     }
     return response.json();
   }
 
-  private withApiKey(init: RequestInit = {}): RequestInit {
-    if (!this.options.apiKey) return init;
+  private withAuthorization(init: RequestInit = {}): RequestInit {
     const headers = new Headers(init.headers);
-    headers.set("X-API-Key", this.options.apiKey);
+    if (this.options.apiKey) headers.set("X-API-Key", this.options.apiKey);
+    if (this.sessionToken) headers.set("Authorization", `Bearer ${this.sessionToken}`);
     return { ...init, headers };
   }
 

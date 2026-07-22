@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT_NAME="${E2E_PROJECT_NAME:-openstreamgrid-e2e}"
 COMPOSE=(docker compose --project-directory "$ROOT_DIR" --project-name "$PROJECT_NAME")
 TRACKER_URL="${TRACKER_URL:-http://127.0.0.1:7070}"
+TRACKER_API_KEY="${TRACKER_API_KEY:-openstreamgrid-local-admin}"
 ORIGIN_URL="${ORIGIN_URL:-http://127.0.0.1:8080}"
 BROADCAST_ID="${BROADCAST_ID:-live}"
 TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openstreamgrid-e2e.XXXXXX")"
@@ -23,7 +24,7 @@ cleanup() {
   local exit_code=$?
   if [[ "$TEST_SUCCEEDED" -ne 1 ]]; then
     "${COMPOSE[@]}" ps || true
-    "${COMPOSE[@]}" logs --no-color --tail=120 || true
+    "${COMPOSE[@]}" logs --no-color --tail=50 || true
   fi
   log "Stopping the Docker Compose stack"
   "${COMPOSE[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
@@ -39,7 +40,8 @@ require_command() {
 }
 
 curl_json() {
-  curl --fail --silent --show-error --max-time 10 "$1"
+  curl --fail --silent --show-error --max-time 10 \
+    --header "X-API-Key: $TRACKER_API_KEY" "$1"
 }
 
 wait_for_url() {
@@ -95,7 +97,7 @@ wait_for_peer_count() {
       const body = JSON.parse(process.argv[1]);
       process.stdout.write(String(Array.isArray(body.peers) ? body.peers.length : -1));
     ' "$body")"
-    if ((count >= expected)); then
+    if ((count == expected)); then
       log "Tracker reports $count connected peers"
       return 0
     fi
@@ -150,7 +152,7 @@ log "Removing any stale isolated E2E stack"
 "${COMPOSE[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
 
 log "Starting tracker, origin, peer-a, and peer-b"
-"${COMPOSE[@]}" up --detach --build tracker origin peer-a peer-b
+"${COMPOSE[@]}" up --detach --build --quiet-build tracker origin peer-a peer-b
 
 wait_for_url tracker "$TRACKER_URL/health"
 wait_for_url origin "$ORIGIN_URL/health"
@@ -210,8 +212,11 @@ wait_for_peer_segments peer-a
 wait_for_stat_greater_than p2pSuccesses 0
 p2p_phase_stats="$(curl_json "$TRACKER_URL/api/v1/broadcasts/$BROADCAST_ID/stats")"
 
-log "Stopping both peers, then starting only peer-b to force Origin fallback"
-"${COMPOSE[@]}" kill peer-a peer-b
+log "Stopping peer-b cleanly before simulating an abrupt peer-a crash"
+"${COMPOSE[@]}" stop peer-b
+wait_for_peer_count 1 15
+"${COMPOSE[@]}" kill peer-a
+log "Restarting peer-b while the unreachable peer-a lease is still advertised"
 PEER_B_WEBRTC_ENABLED=false \
   "${COMPOSE[@]}" up --detach --no-deps --force-recreate peer-b
 wait_for_url peer-b http://127.0.0.1:9092/health 30
@@ -219,6 +224,8 @@ wait_for_stat_greater_than fallbacks 0 60
 fallback_phase_stats="$(curl_json "$TRACKER_URL/api/v1/broadcasts/$BROADCAST_ID/stats")"
 
 log "Restarting peer-a and recreating peer-b with WebRTC unavailable"
+log "Waiting for the crashed peer-a lease to expire before reusing its identity"
+wait_for_peer_count 1 75
 "${COMPOSE[@]}" up --detach --no-deps peer-a
 wait_for_url peer-a http://127.0.0.1:9091/health 30
 wait_for_peer_segments peer-a 60

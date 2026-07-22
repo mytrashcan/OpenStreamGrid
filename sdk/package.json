@@ -1,6 +1,6 @@
 {
   "name": "@openstreamgrid/sdk",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "OpenStreamGrid Browser SDK — hybrid P2P-CDN live streaming middleware for Hls.js",
   "type": "module",
   "main": "./dist/sdk.cjs",
@@ -16,11 +16,10 @@
     }
   },
   "files": [
-    "dist/",
-    "src/"
+    "dist/"
   ],
   "scripts": {
-    "build": "npm run typecheck && tsc -p tsconfig.json --emitDeclarationOnly && node scripts/build.mjs",
+    "build": "node scripts/clean.mjs && npm run typecheck && tsc -p tsconfig.json --emitDeclarationOnly && node scripts/build.mjs",
     "test": "tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepublishOnly": "npm run build"
@@ -31,8 +30,8 @@
   "devDependencies": {
     "@openstreamgrid/common": "file:../common",
     "@roamhq/wrtc": "^0.10.0",
-    "esbuild": "^0.24.0",
-    "typescript": "^5.5.0"
+    "esbuild": "0.28.1",
+    "typescript": "6.0.3"
   },
   "keywords": [
     "p2p",
@@ -42,5 +41,5 @@
     "cdn",
     "webrtc"
   ],
-  "license": "MIT"
+  "license": "GPL-3.0-only"
 }

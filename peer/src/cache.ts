@@ -4,6 +4,7 @@ import { BufferPool } from "./buffer-pool.js";
 export interface CacheEntry {
   readonly data: Buffer;
   readonly storedAt: number;
+  readonly allocatedBytes: number;
   leases: number;
   evicted: boolean;
 }
@@ -42,7 +43,8 @@ export class SegmentCache {
   }
 
   get(segmentName: string): Buffer | undefined {
-    return this.touch(segmentName)?.data;
+    const data = this.touch(segmentName)?.data;
+    return data ? Buffer.from(data) : undefined;
   }
 
   lease(segmentName: string): CacheLease | undefined {
@@ -79,13 +81,19 @@ export class SegmentCache {
     const existing = this.entries.get(segmentName);
     if (existing) this.remove(segmentName, existing);
     const pooledData = this.bufferPool.copy(data);
+    const allocatedBytes = this.bufferPool.allocationSize(pooledData);
+    if (allocatedBytes > this.maxBytes) {
+      this.bufferPool.release(pooledData);
+      return false;
+    }
     this.entries.set(segmentName, {
       data: pooledData,
       storedAt: this.now(),
+      allocatedBytes,
       leases: 0,
       evicted: false,
     });
-    this.totalBytes += pooledData.byteLength;
+    this.totalBytes += allocatedBytes;
     while (this.totalBytes > this.maxBytes) {
       const oldestKey = this.entries.keys().next().value;
       if (oldestKey === undefined) break;
@@ -131,7 +139,7 @@ export class SegmentCache {
 
   private remove(segmentName: string, entry: CacheEntry): void {
     if (!this.entries.delete(segmentName)) return;
-    this.totalBytes -= entry.data.byteLength;
+    this.totalBytes -= entry.allocatedBytes;
     entry.evicted = true;
     if (entry.leases === 0) this.bufferPool.release(entry.data);
   }

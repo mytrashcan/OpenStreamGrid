@@ -1,21 +1,39 @@
 # Kubernetes deployment
 
+## Required tracker credentials
+
+Create the target namespace and the Secret referenced by
+`tracker.auth.existingSecret` before installing the Helm chart. Use independent
+random values and do not commit them:
+
+```bash
+kubectl create namespace openstreamgrid --dry-run=client -o yaml | kubectl apply -f -
+kubectl create secret generic openstreamgrid-auth \
+  --namespace openstreamgrid \
+  --from-literal=tracker-api-key='<random-admin-key>' \
+  --from-literal=peer-session-secret='<at-least-32-random-bytes>'
+```
+
+The default chart intentionally uses one tracker replica with SQLite. It rejects
+SQLite autoscaling or multiple replicas; choose a shared external store before
+enabling horizontal scaling.
+
 OpenStreamGrid ships a Helm chart for the tracker and origin services. The
-default configuration creates two tracker replicas backed by a 1 Gi SQLite PVC,
-one origin replica with memory-backed HLS storage, an ingress for
-`stream.example.com`, a tracker HPA, and port-restricted network policies.
+default configuration creates one tracker replica backed by a 1 Gi SQLite PVC,
+one origin replica with memory-backed HLS storage, and port-restricted network
+policies. Ingress and tracker autoscaling are disabled by default.
 
 ## Prerequisites
 
 - Kubernetes 1.23 or newer
 - Helm 3
-- An ingress controller
-- Metrics Server for tracker autoscaling
+- An ingress controller when `ingress.enabled` is set
+- Metrics Server only when a future shared tracker store permits autoscaling
 
 The container images must be available to the cluster:
 
-- `ghcr.io/mytrashcan/openstreamgrid-tracker:latest`
-- `ghcr.io/mytrashcan/openstreamgrid-origin:latest`
+- `ghcr.io/mytrashcan/openstreamgrid-tracker:0.5.0`
+- `ghcr.io/mytrashcan/openstreamgrid-origin:0.5.0`
 
 ## Deploy with Helm
 
@@ -25,6 +43,7 @@ Review and override the ingress host and storage class for your cluster:
 helm upgrade --install openstreamgrid helm/openstreamgrid \
   --namespace openstreamgrid \
   --create-namespace \
+  --set ingress.enabled=true \
   --set ingress.host=stream.example.com \
   --set ingress.className=nginx
 ```
@@ -33,6 +52,7 @@ For TLS, add a values file such as:
 
 ```yaml
 ingress:
+  enabled: true
   host: stream.example.com
   className: nginx
   tls:
@@ -80,10 +100,8 @@ traffic to the tracker.
 
 ## Operational notes
 
-- The default `ReadWriteOnce` SQLite volume is suitable for a single-node
-  prototype. A multi-node cluster needs storage that can mount the volume for
-  all scheduled tracker replicas; use a compatible storage class or reduce
-  `tracker.replicaCount` to `1`.
+- The default `ReadWriteOnce` SQLite volume supports exactly one tracker
+  replica. The chart rejects multiple SQLite replicas and SQLite autoscaling.
 - For horizontally scaled production trackers, use a shared external store
   instead of a single SQLite file when that store adapter is available.
 - The HLS `emptyDir` uses node memory and is intentionally ephemeral. Its

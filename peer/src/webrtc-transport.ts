@@ -15,9 +15,12 @@ import type {
   TransportStats,
 } from "./transport.js";
 import type { SegmentIntegrityVerifier } from "./verifier.js";
+import { BandwidthLimiter } from "./bandwidth-limiter.js";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_UPLOAD_CONNECTIONS = 3;
+const DEFAULT_MAX_UPLOAD_BITRATE = 1_000_000;
+const DEFAULT_MAX_SEGMENT_BYTES = 16 * 1024 * 1024;
 const DEFAULT_SIGNAL_RECONNECT_MS = 1_000;
 const MAX_TRACKED_PEERS = 2_000;
 const DATA_CHANNEL_LABEL = "segment-request";
@@ -42,6 +45,8 @@ export interface WebRtcTransportOptions {
   verifier?: SegmentIntegrityVerifier;
   onUpload?: (bytes: number) => void;
   maxUploadConnections?: number;
+  maxUploadBitrate?: number;
+  maxSegmentBytes?: number;
   signalReconnectMs?: number;
   peerConnectionFactory?: (configuration: RTCConfiguration) => RTCPeerConnection;
   webSocketFactory?: (url: URL) => WebSocket;
@@ -97,6 +102,8 @@ export class WebRtcTransport implements TransportAdapter {
   private readonly verifier: SegmentIntegrityVerifier | undefined;
   private readonly onUpload: ((bytes: number) => void) | undefined;
   private readonly maxUploadConnections: number;
+  private readonly maxSegmentBytes: number;
+  private readonly uploadLimiter: BandwidthLimiter;
   private readonly signalReconnectMs: number;
   private readonly peerConnectionFactory: (
     configuration: RTCConfiguration,
@@ -139,6 +146,12 @@ export class WebRtcTransport implements TransportAdapter {
       this.maxUploadConnections <= 0
     ) {
       throw new Error("Maximum WebRTC upload connections must be a positive integer");
+    }
+    const maxUploadBitrate = options.maxUploadBitrate ?? DEFAULT_MAX_UPLOAD_BITRATE;
+    this.uploadLimiter = new BandwidthLimiter(maxUploadBitrate / 8);
+    this.maxSegmentBytes = options.maxSegmentBytes ?? DEFAULT_MAX_SEGMENT_BYTES;
+    if (!Number.isSafeInteger(this.maxSegmentBytes) || this.maxSegmentBytes <= 0) {
+      throw new Error("Maximum WebRTC segment size must be a positive integer");
     }
     this.signalReconnectMs =
       options.signalReconnectMs ?? DEFAULT_SIGNAL_RECONNECT_MS;
@@ -296,15 +309,15 @@ export class WebRtcTransport implements TransportAdapter {
   }
 
   private requireConfiguration(): Required<
-    Pick<TransportOptions, "signalUrl" | "peerId" | "broadcastId">
+    Required<Pick<TransportOptions, "signalUrl" | "peerId" | "broadcastId" | "sessionToken">>
   > {
-    const { signalUrl, peerId, broadcastId } = this.transportOptions ?? {};
-    if (!signalUrl || !peerId || !broadcastId) {
+    const { signalUrl, peerId, broadcastId, sessionToken } = this.transportOptions ?? {};
+    if (!signalUrl || !peerId || !broadcastId || !sessionToken) {
       throw new Error(
-        "WebRTC transport requires signalUrl, peerId, and broadcastId",
+        "WebRTC transport requires signalUrl, peerId, broadcastId, and sessionToken",
       );
     }
-    return { signalUrl, peerId, broadcastId };
+    return { signalUrl, peerId, broadcastId, sessionToken };
   }
 
   private async ensureSignalSocket(signal?: AbortSignal): Promise<WebSocket> {
@@ -313,6 +326,7 @@ export class WebRtcTransport implements TransportAdapter {
     if (this.signalConnection) return this.signalConnection;
     const configuration = this.requireConfiguration();
     const url = new URL(configuration.signalUrl);
+    url.searchParams.set("sessionToken", configuration.sessionToken);
     if (url.protocol === "http:") url.protocol = "ws:";
     if (url.protocol === "https:") url.protocol = "wss:";
     if (url.protocol !== "ws:" && url.protocol !== "wss:") {
@@ -600,6 +614,10 @@ export class WebRtcTransport implements TransportAdapter {
       chunkCount,
     } satisfies SegmentResponse);
     for (let offset = 0; offset < data.byteLength; offset += MAX_DATA_CHANNEL_CHUNK_BYTES) {
+      await this.uploadLimiter.consume(
+        Math.min(MAX_DATA_CHANNEL_CHUNK_BYTES, data.byteLength - offset),
+        signal,
+      );
       await this.waitForSendCapacity(channel, signal);
       const chunk = data.subarray(
         offset,
@@ -764,7 +782,9 @@ export class WebRtcTransport implements TransportAdapter {
               !Number.isSafeInteger(byteLength) ||
               !Number.isSafeInteger(chunkCount) ||
               byteLength < 0 ||
-              chunkCount < 0
+              chunkCount < 0 ||
+              byteLength > this.maxSegmentBytes ||
+              chunkCount > Math.ceil(this.maxSegmentBytes / MAX_DATA_CHANNEL_CHUNK_BYTES)
             ) {
               throw new Error("Invalid WebRTC segment response metadata");
             }

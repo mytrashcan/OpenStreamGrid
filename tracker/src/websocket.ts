@@ -9,7 +9,10 @@ import {
   type WsServerMessage,
 } from "@openstreamgrid/common";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
-import { apiKeysMatch } from "./api-key.js";
+import {
+  PeerSessionTokenService,
+  type PeerSessionClaims,
+} from "./peer-session.js";
 import type { TrackerStoreBackend } from "./store.js";
 
 interface Subscription {
@@ -17,7 +20,18 @@ interface Subscription {
   peerId: string;
 }
 
+interface MessageBudget {
+  tokens: number;
+  updatedAt: number;
+}
+
 const MAX_BUFFERED_WEB_SOCKET_BYTES = 1024 * 1024;
+const MAX_WEB_SOCKET_PAYLOAD_BYTES = 64 * 1024;
+const MAX_SEGMENTS_PER_REPORT = 512;
+const MAX_SEGMENT_ID_LENGTH = 512;
+const MESSAGE_RATE_PER_SECOND = 20;
+const MESSAGE_BURST = 40;
+const MAX_CONNECTIONS_PER_IP = 20;
 const INVALID_MESSAGE_CLOSE_CODE = 1_008;
 const UNSUPPORTED_DATA_CLOSE_CODE = 1_003;
 const MAX_CLOSE_REASON_LENGTH = 120;
@@ -84,7 +98,13 @@ const requiredSegments = (message: JsonObject): string[] => {
   const segments = message.segments;
   if (
     !Array.isArray(segments) ||
-    segments.some((segment) => typeof segment !== "string")
+    segments.length > MAX_SEGMENTS_PER_REPORT ||
+    segments.some(
+      (segment) =>
+        typeof segment !== "string" ||
+        segment.length === 0 ||
+        segment.length > MAX_SEGMENT_ID_LENGTH,
+    )
   ) {
     throw new Error("'segments' must be an array of strings");
   }
@@ -93,18 +113,30 @@ const requiredSegments = (message: JsonObject): string[] => {
 
 /** Validates tracker WebSocket messages and broadcasts peer updates. */
 export class TrackerWebSocketHub implements TrackerEvents {
-  private readonly webSocketServer = new WebSocketServer({ noServer: true });
+  private readonly webSocketServer = new WebSocketServer({
+    noServer: true,
+    maxPayload: MAX_WEB_SOCKET_PAYLOAD_BYTES,
+  });
   private readonly subscriptions = new Map<WebSocket, Subscription>();
+  private readonly sessions = new Map<WebSocket, PeerSessionClaims>();
+  private readonly messageBudgets = new Map<WebSocket, MessageBudget>();
+  private readonly connectionIps = new Map<WebSocket, string>();
+  private readonly connectionsPerIp = new Map<string, number>();
+  private readonly sessionExpiryTimers = new Map<WebSocket, NodeJS.Timeout>();
 
   constructor(
     private readonly server: Server,
     private readonly store: TrackerStoreBackend,
     private readonly downstreamEvents: TrackerEvents = {},
-    private readonly apiKey?: string,
+    private readonly peerSessions = new PeerSessionTokenService(),
   ) {
     this.server.on("upgrade", this.handleUpgrade);
     this.webSocketServer.on("connection", (socket) => {
       this.subscriptions.set(socket, { broadcastId: "", peerId: "" });
+      this.messageBudgets.set(socket, {
+        tokens: MESSAGE_BURST,
+        updatedAt: Date.now(),
+      });
       socket.on("message", (data, isBinary) => {
         if (isBinary) {
           socket.close(
@@ -113,21 +145,23 @@ export class TrackerWebSocketHub implements TrackerEvents {
           );
           return;
         }
+        if (!this.consumeMessageBudget(socket)) {
+          socket.close(INVALID_MESSAGE_CLOSE_CODE, "Message rate limit exceeded");
+          return;
+        }
         this.handleMessage(socket, data);
       });
-      socket.once("close", () => this.subscriptions.delete(socket));
+      socket.once("close", () => this.removeSocket(socket));
     });
   }
 
   peerJoined(broadcastId: string, peer: Peer): void {
     this.broadcast({ type: "peer_joined", broadcastId, peer });
-    this.broadcastPeerList(broadcastId);
     this.downstreamEvents.peerJoined?.(broadcastId, peer);
   }
 
   peerLeft(broadcastId: string, peerId: string): void {
     this.broadcast({ type: "peer_left", broadcastId, peerId });
-    this.broadcastPeerList(broadcastId);
     this.downstreamEvents.peerLeft?.(broadcastId, peerId);
   }
 
@@ -135,14 +169,15 @@ export class TrackerWebSocketHub implements TrackerEvents {
     broadcastId: string,
     peerId: string,
     segments: string[],
+    replace = false,
   ): void {
     this.broadcast({
       type: "segment_available",
       broadcastId,
       peerId,
       segments,
+      ...(replace ? { replace: true } : {}),
     });
-    this.broadcastPeerList(broadcastId);
     this.downstreamEvents.segmentsAvailable?.(
       broadcastId,
       peerId,
@@ -161,7 +196,6 @@ export class TrackerWebSocketHub implements TrackerEvents {
   }
 
   peerListChanged(broadcastId: string): void {
-    this.broadcastPeerList(broadcastId);
     this.downstreamEvents.peerListChanged?.(broadcastId);
   }
 
@@ -187,24 +221,34 @@ export class TrackerWebSocketHub implements TrackerEvents {
       socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
       return;
     }
-    if (this.apiKey !== undefined) {
-      const queryApiKey = url.searchParams.get("apiKey");
-      const headerApiKey = request.headers["x-api-key"];
-      const providedApiKey =
-        queryApiKey ??
-        (typeof headerApiKey === "string" ? headerApiKey : undefined);
-      if (
-        providedApiKey === undefined ||
-        !apiKeysMatch(this.apiKey, providedApiKey)
-      ) {
-        socket.end(
-          "HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
-        );
-        return;
-      }
+    const claims = this.peerSessions.verify(url.searchParams.get("sessionToken") ?? undefined);
+    if (!claims || !this.peerExists(claims)) {
+      socket.end(
+        "HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+      );
+      return;
+    }
+    const clientIp = request.socket.remoteAddress ?? "unknown";
+    if ((this.connectionsPerIp.get(clientIp) ?? 0) >= MAX_CONNECTIONS_PER_IP) {
+      socket.end(
+        "HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+      );
+      return;
     }
     this.webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
+      this.sessions.set(webSocket, claims);
+      this.connectionIps.set(webSocket, clientIp);
+      this.connectionsPerIp.set(
+        clientIp,
+        (this.connectionsPerIp.get(clientIp) ?? 0) + 1,
+      );
       this.webSocketServer.emit("connection", webSocket, request);
+      const expiryTimer = setTimeout(
+        () => webSocket.close(4_001, "Peer session expired"),
+        Math.max(1, claims.expiresAt - Date.now()),
+      );
+      expiryTimer.unref();
+      this.sessionExpiryTimers.set(webSocket, expiryTimer);
     });
   };
 
@@ -217,6 +261,15 @@ export class TrackerWebSocketHub implements TrackerEvents {
       const peerId = requiredString(parsed, "peerId");
 
       if (type === "subscribe") {
+        const claims = this.sessions.get(socket);
+        if (
+          !claims ||
+          claims.broadcastId !== broadcastId ||
+          claims.peerId !== peerId ||
+          !this.peerExists(claims)
+        ) {
+          throw new Error("Subscription does not match the authenticated peer session");
+        }
         this.subscriptions.set(socket, { broadcastId, peerId });
         this.send(socket, {
           type: "peer_list",
@@ -255,6 +308,26 @@ export class TrackerWebSocketHub implements TrackerEvents {
         return;
       }
       if (type === "report_segments") {
+        if (parsed.added !== undefined || parsed.removed !== undefined) {
+          const added = requiredSegments({ segments: parsed.added ?? [] });
+          const removed = requiredSegments({ segments: parsed.removed ?? [] });
+          const peer = this.store
+            .listPeers(broadcastId)
+            .find((candidate) => candidate.id === peerId);
+          if (!peer) throw new Error("Peer was not found");
+          const next = new Set(peer.segments);
+          for (const segment of removed) next.delete(segment);
+          for (const segment of added) next.add(segment);
+          this.store.reportSegments(broadcastId, peerId, [...next], true);
+          this.broadcast({
+            type: "segment_inventory_delta",
+            broadcastId,
+            peerId,
+            added,
+            removed,
+          });
+          return;
+        }
         const segments = requiredSegments(parsed);
         if (parsed.replace !== undefined && typeof parsed.replace !== "boolean") {
           throw new Error("'replace' must be a boolean");
@@ -262,7 +335,7 @@ export class TrackerWebSocketHub implements TrackerEvents {
         const replace = parsed.replace;
         if (replace && this.hasSameSegments(broadcastId, peerId, segments)) return;
         this.store.reportSegments(broadcastId, peerId, segments, replace);
-        this.segmentsAvailable(broadcastId, peerId, segments);
+        this.segmentsAvailable(broadcastId, peerId, segments, replace === true);
         return;
       }
       if (type === "report_stats") {
@@ -299,14 +372,6 @@ export class TrackerWebSocketHub implements TrackerEvents {
     }
   }
 
-  private broadcastPeerList(broadcastId: string): void {
-    this.broadcast({
-      type: "peer_list",
-      broadcastId,
-      peers: this.store.listPeers(broadcastId),
-    });
-  }
-
   private hasSameSegments(
     broadcastId: string,
     peerId: string,
@@ -332,6 +397,45 @@ export class TrackerWebSocketHub implements TrackerEvents {
         this.send(socket, message);
       }
     }
+  }
+
+  private peerExists(claims: PeerSessionClaims): boolean {
+    try {
+      return this.store
+        .listPeers(claims.broadcastId)
+        .some((peer) => peer.id === claims.peerId);
+    } catch {
+      return false;
+    }
+  }
+
+  private consumeMessageBudget(socket: WebSocket): boolean {
+    const budget = this.messageBudgets.get(socket);
+    if (!budget) return false;
+    const now = Date.now();
+    budget.tokens = Math.min(
+      MESSAGE_BURST,
+      budget.tokens + ((now - budget.updatedAt) / 1_000) * MESSAGE_RATE_PER_SECOND,
+    );
+    budget.updatedAt = now;
+    if (budget.tokens < 1) return false;
+    budget.tokens -= 1;
+    return true;
+  }
+
+  private removeSocket(socket: WebSocket): void {
+    const expiryTimer = this.sessionExpiryTimers.get(socket);
+    if (expiryTimer) clearTimeout(expiryTimer);
+    this.sessionExpiryTimers.delete(socket);
+    this.subscriptions.delete(socket);
+    this.sessions.delete(socket);
+    this.messageBudgets.delete(socket);
+    const clientIp = this.connectionIps.get(socket);
+    this.connectionIps.delete(socket);
+    if (!clientIp) return;
+    const remaining = (this.connectionsPerIp.get(clientIp) ?? 1) - 1;
+    if (remaining <= 0) this.connectionsPerIp.delete(clientIp);
+    else this.connectionsPerIp.set(clientIp, remaining);
   }
 
   private broadcast(message: WsServerMessage): void {

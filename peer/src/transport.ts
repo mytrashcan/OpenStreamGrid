@@ -5,6 +5,8 @@ export interface TransportOptions {
   peerId?: string;
   /** Broadcast ID the peer is subscribed to. */
   broadcastId?: string;
+  /** Short-lived tracker session used to authenticate signaling. */
+  sessionToken?: string;
   /** Abort signal for graceful shutdown. */
   signal?: AbortSignal;
 }

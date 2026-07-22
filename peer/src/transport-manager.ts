@@ -32,6 +32,7 @@ export interface TransportManagerStats {
 export interface TransportPeer {
   id: string;
   address: string;
+  metadata?: Record<string, string>;
 }
 
 /** Transport dependencies and WebRTC fallback configuration. */
@@ -104,6 +105,11 @@ export class TransportManager {
     });
     this.startPromise = startPromise;
     return startPromise;
+  }
+
+  setSessionToken(sessionToken: string): void {
+    if (this.started) throw new Error("Cannot change the peer session after transport startup");
+    this.transportOptions.sessionToken = sessionToken;
   }
 
   private async startOnce(): Promise<void> {
@@ -180,13 +186,24 @@ export class TransportManager {
     this.peerIdsByAddress.clear();
     for (const peer of peers) this.peerIdsByAddress.set(peer.address, peer.id);
     if (this.httpTransport instanceof HttpTransport) {
-      this.httpTransport.setPeers(peers.map((peer) => peer.address));
+      this.httpTransport.setPeers(peers.map((peer) => ({
+        address: peer.address,
+        ...(peer.metadata?.uploadToken
+          ? { authorizationToken: peer.metadata.uploadToken }
+          : {}),
+      })));
     }
   }
 
   registerPeer(peer: TransportPeer): void {
     this.peerIdsByAddress.delete(peer.address);
     this.peerIdsByAddress.set(peer.address, peer.id);
+    if (this.httpTransport instanceof HttpTransport) {
+      this.httpTransport.setPeerAuthorization(
+        peer.address,
+        peer.metadata?.uploadToken,
+      );
+    }
     while (this.peerIdsByAddress.size > MAX_TRACKED_PEERS) {
       const oldest = this.peerIdsByAddress.keys().next().value;
       if (oldest === undefined) break;

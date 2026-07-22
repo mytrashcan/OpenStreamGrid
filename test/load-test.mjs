@@ -377,6 +377,7 @@ class VirtualPeer {
     this.active = false;
     this.activeUploads = 0;
     this.sessionController = undefined;
+    this.sessionToken = undefined;
     this.intentionalClose = false;
     this.segmentsDirty = true;
     this.lastHeartbeatAt = 0;
@@ -431,8 +432,8 @@ class VirtualPeer {
   }
 
   async startSession(signal) {
-    await this.connectWebSocket(signal);
     await this.joinTracker(signal);
+    await this.connectWebSocket(signal);
     this.active = true;
     this.events.sessions += 1;
     this.reportState(true);
@@ -458,6 +459,11 @@ class VirtualPeer {
       tracker.protocol = tracker.protocol === "https:" ? "wss:" : "ws:";
       tracker.pathname = "/ws";
       tracker.search = "";
+      if (!this.sessionToken) {
+        reject(new Error("Peer session is unavailable"));
+        return;
+      }
+      tracker.searchParams.set("sessionToken", this.sessionToken);
       const ws = new WebSocket(tracker);
       this.ws = ws;
       let settled = false;
@@ -573,6 +579,11 @@ class VirtualPeer {
     if (!response.ok) {
       throw new Error(`Tracker join returned HTTP ${response.status}${await responseBody(response)}`);
     }
+    const body = await response.json();
+    if (typeof body.sessionToken !== "string") {
+      throw new Error("Tracker join did not return a peer session token");
+    }
+    this.sessionToken = body.sessionToken;
   }
 
   async leaveTracker() {
@@ -583,6 +594,9 @@ class VirtualPeer {
     try {
       const response = await fetch(endpoint, {
         method: "DELETE",
+        headers: this.sessionToken
+          ? { authorization: `Bearer ${this.sessionToken}` }
+          : {},
         signal: AbortSignal.timeout(3_000),
       });
       if (!response.ok && response.status !== 404) {
@@ -590,6 +604,8 @@ class VirtualPeer {
       }
     } catch (error) {
       this.events.errors += 1;
+    } finally {
+      this.sessionToken = undefined;
     }
   }
 

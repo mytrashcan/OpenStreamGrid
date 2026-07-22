@@ -22,6 +22,7 @@ import {
 } from "./store.js";
 import {
   clampUnitInterval,
+  PeerFailureConsensus,
   penalizePeerQuality,
   sanitizePeerTrafficStats,
 } from "./store-utils.js";
@@ -213,8 +214,14 @@ const prepareStatements = (database: Database.Database) => ({
     DELETE FROM peer_segments
     WHERE broadcast_id = @broadcastId AND peer_id = @peerId
   `),
+  deletePeerSegment: database.prepare(`
+    DELETE FROM peer_segments
+    WHERE broadcast_id = @broadcastId
+      AND peer_id = @peerId
+      AND segment_name = @segment
+  `),
   insertPeerSegment: database.prepare(`
-    INSERT INTO peer_segments(broadcast_id, peer_id, segment_name)
+    INSERT OR IGNORE INTO peer_segments(broadcast_id, peer_id, segment_name)
     VALUES (@broadcastId, @peerId, @segment)
   `),
   updatePeerLastSeen: database.prepare(`
@@ -367,6 +374,9 @@ const prepareStatements = (database: Database.Database) => ({
     WHERE broadcast_id = @broadcastId
     ORDER BY timestamp
   `),
+  deleteStatsHistoryBefore: database.prepare(`
+    DELETE FROM stats_history WHERE timestamp < @cutoff
+  `),
 });
 
 type Statements = ReturnType<typeof prepareStatements>;
@@ -375,6 +385,7 @@ type Statements = ReturnType<typeof prepareStatements>;
 export class SQLiteStore implements TrackerStoreBackend {
   private readonly database: Database.Database;
   private readonly statements: Statements;
+  private readonly failureConsensus: PeerFailureConsensus;
 
   constructor(
     databasePath = process.env.DB_PATH ?? DEFAULT_DB_PATH,
@@ -389,8 +400,10 @@ export class SQLiteStore implements TrackerStoreBackend {
     this.database.pragma("synchronous = NORMAL");
     this.database.pragma("cache_size = -65536");
     this.database.pragma(`busy_timeout = ${DATABASE_BUSY_TIMEOUT_MS}`);
+    this.database.pragma("foreign_keys = ON");
     runSQLiteMigrations(this.database);
     this.statements = prepareStatements(this.database);
+    this.failureConsensus = new PeerFailureConsensus(() => this.now().getTime());
   }
 
   registerBroadcast(registration: BroadcastRegistration): {
@@ -520,13 +533,20 @@ export class SQLiteStore implements TrackerStoreBackend {
     replace = false,
   ): Peer {
     this.requirePeer(broadcastId, peerId);
-    const existing = replace ? [] : this.getSegments(broadcastId, peerId);
-    const nextSegments = [...new Set([...existing, ...segments])].slice(
+    const existing = this.getSegments(broadcastId, peerId);
+    const nextSegments = [...new Set(replace ? segments : [...existing, ...segments])].slice(
       -this.maxSegmentsPerPeer,
     );
+    const existingSet = new Set(existing);
+    const nextSet = new Set(nextSegments);
     this.database.transaction(() => {
-      this.statements.deletePeerSegments.run({ broadcastId, peerId });
+      for (const segment of existing) {
+        if (!nextSet.has(segment)) {
+          this.statements.deletePeerSegment.run({ broadcastId, peerId, segment });
+        }
+      }
       for (const segment of nextSegments) {
+        if (existingSet.has(segment)) continue;
         this.statements.insertPeerSegment.run({ broadcastId, peerId, segment });
       }
       this.statements.updatePeerLastSeen.run({
@@ -591,6 +611,9 @@ export class SQLiteStore implements TrackerStoreBackend {
   ): Peer {
     const reported = this.requirePeer(broadcastId, peerId);
     this.requirePeer(broadcastId, report.reporterId);
+    if (!this.failureConsensus.observe(broadcastId, peerId, report)) {
+      return reported;
+    }
     const quality = penalizePeerQuality(reported, report.reason);
     this.statements.updatePeerTrust.run({
       broadcastId,
@@ -661,6 +684,10 @@ export class SQLiteStore implements TrackerStoreBackend {
       originBytes: row.origin_bytes,
       p2pSuccessRate: row.p2p_success_rate,
     }));
+  }
+
+  pruneStatsHistory(cutoff: string): number {
+    return this.statements.deleteStatsHistoryBefore.run({ cutoff }).changes;
   }
 
   close(): void {

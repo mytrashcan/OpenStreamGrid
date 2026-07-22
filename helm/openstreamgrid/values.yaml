@@ -1,13 +1,19 @@
 tracker:
   image:
     repository: ghcr.io/mytrashcan/openstreamgrid-tracker
-    tag: latest
+    tag: "0.5.0"
     pullPolicy: IfNotPresent
-  replicaCount: 2
+  # SQLite uses a single writer. Scale only after selecting a shared external store.
+  replicaCount: 1
   port: 7070
   env:
     STORE_TYPE: sqlite
     DB_PATH: /data/tracker.db
+  auth:
+    # Create this Secret before installation; see deploy/k8s/README.md.
+    existingSecret: openstreamgrid-auth
+    apiKeyKey: tracker-api-key
+    peerSessionSecretKey: peer-session-secret
   resources:
     requests:
       cpu: 100m
@@ -22,20 +28,23 @@ tracker:
     size: 1Gi
     storageClassName: ""
   autoscaling:
-    enabled: true
+    enabled: false
     maxReplicas: 6
     targetCPUUtilizationPercentage: 60
 
 origin:
   image:
     repository: ghcr.io/mytrashcan/openstreamgrid-origin
-    tag: latest
+    tag: "0.5.0"
     pullPolicy: IfNotPresent
   replicaCount: 1
   port: 8080
   env:
     HLS_DIRECTORY: /data/hls
     BROADCAST_ID: live
+    # Leave empty to advertise the in-cluster Origin service. Set the external
+    # HTTPS URL when browser clients access HLS through an ingress or CDN.
+    PUBLIC_ORIGIN_URL: ""
   hlsSizeLimit: 256Mi
   resources:
     requests:
@@ -46,7 +55,7 @@ origin:
       memory: 512Mi
 
 ingress:
-  enabled: true
+  enabled: false
   className: ""
   annotations: {}
   host: stream.example.com

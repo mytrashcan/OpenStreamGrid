@@ -1,5 +1,6 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { type ChildProcess, spawn } from "node:child_process";
+import { createReadStream } from "node:fs";
 import {
   access,
   mkdir,
@@ -20,6 +21,9 @@ const TEST_PATTERN_FRAME_RATE = 30;
 const TEST_AUDIO_FREQUENCY_HZ = 1_000;
 const AUDIO_SAMPLE_RATE_HZ = 48_000;
 const HLS_DELETE_THRESHOLD = 2;
+const RESTART_INITIAL_DELAY_MS = 1_000;
+const RESTART_MAX_DELAY_MS = 30_000;
+const MAX_RESTART_ATTEMPTS = 5;
 const logger = createLogger("origin");
 
 /** Quality level definitions for Adaptive Bitrate streaming. */
@@ -92,6 +96,7 @@ export interface StreamController {
   readonly playlistPath: string;
   readonly qualities: string[];
   isRunning(): boolean;
+  failureReason?(): string | undefined;
   start(): Promise<void>;
   stop(): Promise<void>;
   ensureHash(segmentName: string): Promise<string>;
@@ -119,6 +124,11 @@ export class HlsStreamer implements StreamController {
   private hashGeneration: Promise<void> | undefined;
   private startPromise: Promise<void> | undefined;
   private stopPromise: Promise<void> | undefined;
+  private restartTimer: NodeJS.Timeout | undefined;
+  private restartAttempts = 0;
+  private stopping = false;
+  private lastFailure: string | undefined;
+  private segmentEpoch = "";
   private readonly pendingHashes = new Map<string, Promise<string>>();
 
   constructor(private readonly options: StreamerOptions) {
@@ -159,9 +169,14 @@ export class HlsStreamer implements StreamController {
     return this.child !== undefined && this.child.exitCode === null;
   }
 
+  failureReason(): string | undefined {
+    return this.lastFailure;
+  }
+
   async start(): Promise<void> {
     if (this.stopPromise) await this.stopPromise;
     if (this.isRunning()) return;
+    this.stopping = false;
     this.startPromise ??= this.startOnce().finally(() => {
       this.startPromise = undefined;
     });
@@ -169,6 +184,7 @@ export class HlsStreamer implements StreamController {
   }
 
   private async startOnce(): Promise<void> {
+    this.segmentEpoch = `${Date.now().toString(36)}-${randomBytes(6).toString("hex")}`;
     await mkdir(this.options.outputDirectory, { recursive: true });
     await this.createVariantDirectories();
     await this.removeOldStreamFiles();
@@ -186,12 +202,14 @@ export class HlsStreamer implements StreamController {
     });
     child.once("exit", (code, signal) => {
       if (this.child === child) this.child = undefined;
-      if (code !== 0 && signal !== "SIGTERM") {
+      if (!this.stopping && signal !== "SIGTERM") {
+        this.lastFailure = `FFmpeg exited with code ${String(code)} and signal ${String(signal)}`;
         logger.error(
           "ffmpeg_exited_unexpectedly",
           new Error("FFmpeg exited before shutdown"),
           { code, signal },
         );
+        this.scheduleRestart();
       }
     });
 
@@ -208,6 +226,7 @@ export class HlsStreamer implements StreamController {
       child.once("spawn", onSpawn);
       child.once("error", onError);
     });
+    this.lastFailure = undefined;
 
     this.hashTimer = setInterval(
       () => this.scheduleHashGeneration(),
@@ -217,6 +236,9 @@ export class HlsStreamer implements StreamController {
   }
 
   async stop(): Promise<void> {
+    this.stopping = true;
+    if (this.restartTimer) clearTimeout(this.restartTimer);
+    this.restartTimer = undefined;
     this.stopPromise ??= this.stopOnce().finally(() => {
       this.stopPromise = undefined;
     });
@@ -285,8 +307,9 @@ export class HlsStreamer implements StreamController {
       if (!isMissing(error)) throw error;
     }
 
-    const segment = await readFile(segmentPath);
-    const digest = createHash("sha256").update(segment).digest("hex");
+    const hash = createHash("sha256");
+    for await (const chunk of createReadStream(segmentPath)) hash.update(chunk);
+    const digest = hash.digest("hex");
     const temporaryPath = `${hashPath}.${process.pid}.tmp`;
     await writeFile(temporaryPath, `${digest}  ${segmentName}\n`, "utf8");
     await rename(temporaryPath, hashPath);
@@ -391,9 +414,30 @@ export class HlsStreamer implements StreamController {
       "-master_pl_name",
       path.basename(this.playlistPath),
       "-hls_segment_filename",
-      "%v/segment_%06d.ts",
+      `%v/${this.segmentEpoch}_segment_%06d.ts`,
       "%v/stream.m3u8",
     ];
+  }
+
+  private scheduleRestart(): void {
+    if (this.stopping || this.restartTimer) return;
+    this.restartAttempts += 1;
+    if (this.restartAttempts > MAX_RESTART_ATTEMPTS) return;
+    const delayMs = Math.min(
+      RESTART_INITIAL_DELAY_MS * 2 ** (this.restartAttempts - 1),
+      RESTART_MAX_DELAY_MS,
+    );
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = undefined;
+      void this.start().catch((error: unknown) => {
+        this.lastFailure = error instanceof Error ? error.message : "FFmpeg restart failed";
+        logger.error("ffmpeg_restart_failed", error, {
+          attempt: this.restartAttempts,
+        });
+        this.scheduleRestart();
+      });
+    }, delayMs);
+    this.restartTimer.unref();
   }
 
   private async createVariantDirectories(): Promise<void> {
@@ -530,6 +574,12 @@ export class MultiHlsStreamer implements MultiStreamController {
 
   isRunning(): boolean {
     return [...this.streamers.values()].every((streamer) => streamer.isRunning());
+  }
+
+  failureReason(): string | undefined {
+    return [...this.streamers.values()]
+      .map((streamer) => streamer.failureReason())
+      .find((reason): reason is string => reason !== undefined);
   }
 
   async start(): Promise<void> {

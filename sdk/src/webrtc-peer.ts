@@ -7,6 +7,7 @@ const MAX_BUFFERED_BYTES = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_UPLOAD_CONNECTIONS = 3;
 const DEFAULT_MAX_UPLOAD_BITRATE = 1_000_000;
+const DEFAULT_MAX_SEGMENT_BYTES = 16 * 1024 * 1024;
 const MAX_TRANSFER_TIMEOUT_MS = 120_000;
 const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
@@ -23,10 +24,12 @@ export interface BrowserWebRtcPeerOptions {
   sendSignal: (message: WebRtcSignalMessage) => void;
   segmentProvider: SegmentProvider;
   onUpload?: (bytes: number) => void;
+  onError?: (error: Error, phase: "signaling" | "upload") => void;
   timeoutMs?: number;
   iceServers?: RTCIceServer[];
   maxUploadConnections?: number;
   maxUploadBitrate?: number;
+  maxSegmentBytes?: number;
   peerConnectionFactory?: (configuration: RTCConfiguration) => RTCPeerConnection;
 }
 
@@ -89,6 +92,7 @@ export class BrowserWebRtcPeer {
   private readonly iceServers: RTCIceServer[];
   private readonly maxUploadConnections: number;
   private readonly maxUploadBitrate: number;
+  private readonly maxSegmentBytes: number;
   private readonly peerConnectionFactory: (
     configuration: RTCConfiguration,
   ) => RTCPeerConnection;
@@ -103,10 +107,12 @@ export class BrowserWebRtcPeer {
       options.maxUploadConnections ?? DEFAULT_MAX_UPLOAD_CONNECTIONS;
     this.maxUploadBitrate =
       options.maxUploadBitrate ?? DEFAULT_MAX_UPLOAD_BITRATE;
+    this.maxSegmentBytes = options.maxSegmentBytes ?? DEFAULT_MAX_SEGMENT_BYTES;
     for (const [label, value] of [
       ["WebRTC timeout", this.timeoutMs],
       ["Maximum upload connections", this.maxUploadConnections],
       ["Maximum upload bitrate", this.maxUploadBitrate],
+      ["Maximum segment size", this.maxSegmentBytes],
     ] as const) {
       if (!Number.isSafeInteger(value) || value <= 0) {
         throw new Error(`${label} must be a positive integer`);
@@ -221,9 +227,11 @@ export class BrowserWebRtcPeer {
       return;
     }
     void this.acceptOffer(message).catch((error: unknown) => {
-      if (!this.stopped) logger.warn("browser_webrtc_offer_failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      if (!this.stopped) {
+        const failure = errorFrom(error, "Browser WebRTC signaling failed");
+        this.options.onError?.(failure, "signaling");
+        logger.warn("browser_webrtc_offer_failed", { error: failure.message });
+      }
     });
   }
 
@@ -318,8 +326,10 @@ export class BrowserWebRtcPeer {
       void this.serveSegment(event.channel, controller.signal, resetTimeout)
         .catch((error: unknown) => {
           if (!controller.signal.aborted) {
+            const failure = errorFrom(error, "Browser WebRTC upload failed");
+            this.options.onError?.(failure, "upload");
             logger.warn("browser_webrtc_upload_failed", {
-              error: error instanceof Error ? error.message : String(error),
+              error: failure.message,
             });
           }
         })
@@ -514,7 +524,9 @@ export class BrowserWebRtcPeer {
               !Number.isSafeInteger(message.byteLength) ||
               !Number.isSafeInteger(message.chunkCount) ||
               message.byteLength < 0 ||
-              message.chunkCount < 0
+              message.chunkCount < 0 ||
+              message.byteLength > this.maxSegmentBytes ||
+              message.chunkCount > Math.ceil(this.maxSegmentBytes / MAX_CHUNK_BYTES)
             ) {
               throw new Error("Invalid WebRTC response metadata");
             }
@@ -565,17 +577,26 @@ export class BrowserWebRtcPeer {
     return new Promise((resolve, reject) => {
       const cleanup = (): void => {
         connection.removeEventListener("icecandidate", onCandidate);
+        connection.removeEventListener("icegatheringstatechange", onStateChange);
         signal.removeEventListener("abort", onAbort);
       };
-      const onCandidate = (event: RTCPeerConnectionIceEvent): void => {
-        if (event.candidate !== null) return;
+      const complete = (): void => {
         cleanup();
         resolve();
       };
+      const onCandidate = (event: RTCPeerConnectionIceEvent): void => {
+        if (event.candidate !== null) return;
+        complete();
+      };
+      const onStateChange = (): void => {
+        if (connection.iceGatheringState === "complete") complete();
+      };
       const onAbort = (): void => { cleanup(); reject(abortError(signal)); };
       connection.addEventListener("icecandidate", onCandidate);
+      connection.addEventListener("icegatheringstatechange", onStateChange);
       signal.addEventListener("abort", onAbort, { once: true });
       if (signal.aborted) onAbort();
+      else if (connection.iceGatheringState === "complete") complete();
     });
   }
 

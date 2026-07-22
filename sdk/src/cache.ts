@@ -32,7 +32,7 @@ export class SegmentCache {
     const node = this.map.get(segmentName);
     if (!node) return undefined;
     this.bumpToFront(node);
-    return node.data;
+    return new Uint8Array(node.data);
   }
 
   /** Check existence without bumping LRU order. */
@@ -52,7 +52,7 @@ export class SegmentCache {
 
     const node: CacheNode = {
       key: segmentName,
-      data,
+      data: new Uint8Array(data),
       ...(hash !== undefined ? { hash } : {}),
       storedAt: Date.now(),
       prev: null,

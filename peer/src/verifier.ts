@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { keepAliveFetch } from "./http-client.js";
 
 const DEFAULT_MAX_CACHED_HASHES = 2_000;
+const HASH_REQUEST_TIMEOUT_MS = 5_000;
 
 /** Contract for validating downloaded segment bytes. */
 export interface SegmentIntegrityVerifier {
@@ -75,7 +76,9 @@ export class OriginHashVerifier implements SegmentIntegrityVerifier {
       `${encodeURIComponent(segmentName)}.sha256`,
       this.originBaseUrl,
     );
-    const response = await this.fetchImpl(hashUrl);
+    const response = await this.fetchImpl(hashUrl, {
+      signal: AbortSignal.timeout(HASH_REQUEST_TIMEOUT_MS),
+    });
     if (!response.ok) {
       throw new Error(
         `Failed to fetch hash for '${segmentName}': HTTP ${response.status}`,

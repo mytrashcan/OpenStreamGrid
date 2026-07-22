@@ -2,6 +2,7 @@ node_modules/
 dist/
 dist-test/
 coverage/
+*.tsbuildinfo
 .DS_Store
 origin/data/
 tracker/data/

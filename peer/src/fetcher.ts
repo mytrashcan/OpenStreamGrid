@@ -1,5 +1,6 @@
 import {
   createLogger,
+  validatePeerHttpBaseUrl,
   type Peer,
   type PeerFailureReport,
 } from "@openstreamgrid/common";
@@ -15,6 +16,7 @@ import { keepAliveFetch } from "./http-client.js";
 const DEFAULT_P2P_TIMEOUT_MS = 2_000;
 const DEFAULT_URGENT_THRESHOLD_SEGMENTS = 2;
 const DEFAULT_MAX_PARALLEL_DOWNLOADS = 3;
+const DEFAULT_ORIGIN_TIMEOUT_MS = 10_000;
 const MINIMUM_TRUST_SCORE = 0.3;
 const METRIC_EMA_ALPHA = 0.3;
 const MAX_TRACKED_SEGMENT_SOURCES = 2_000;
@@ -112,6 +114,7 @@ export class HybridSegmentFetcher {
     string,
     SegmentFetchResult["source"]
   >();
+  private readonly shutdownController = new AbortController();
 
   constructor(private readonly options: FetcherOptions) {
     this.fetchImpl = options.fetchImpl ?? keepAliveFetch;
@@ -272,6 +275,13 @@ export class HybridSegmentFetcher {
     return this.lastSources.get(segmentName);
   }
 
+  /** Aborts outstanding peer and Origin requests during application shutdown. */
+  stop(): void {
+    if (!this.shutdownController.signal.aborted) {
+      this.shutdownController.abort(new Error("Segment fetcher stopped"));
+    }
+  }
+
   private startSegmentFetch(
     segmentName: string,
     peer: Peer | undefined,
@@ -415,6 +425,15 @@ export class HybridSegmentFetcher {
   private async fetchFromPeer(peer: Peer, segmentName: string): Promise<Buffer> {
     this.options.stats.recordP2PRequest();
     const controller = new AbortController();
+    const onShutdown = (): void => {
+      controller.abort(
+        this.shutdownController.signal.reason ?? new Error("Segment fetcher stopped"),
+      );
+    };
+    this.shutdownController.signal.addEventListener("abort", onShutdown, {
+      once: true,
+    });
+    if (this.shutdownController.signal.aborted) onShutdown();
     const timer = this.options.transportManager
       ? undefined
       : setTimeout(
@@ -445,8 +464,20 @@ export class HybridSegmentFetcher {
         let response: Response;
         try {
           response = await this.fetchImpl(
-            new URL(`/segments/${encodeURIComponent(segmentName)}`, peer.address),
-            { signal: controller.signal },
+            new URL(
+              `/segments/${encodeURIComponent(segmentName)}`,
+              validatePeerHttpBaseUrl(peer.address),
+            ),
+            {
+              signal: controller.signal,
+              ...(peer.metadata?.uploadToken
+                ? {
+                    headers: {
+                      Authorization: `Bearer ${peer.metadata.uploadToken}`,
+                    },
+                  }
+                : {}),
+            },
           );
         } catch (error) {
           throw new PeerFetchError(
@@ -467,12 +498,18 @@ export class HybridSegmentFetcher {
       return data;
     } finally {
       if (timer) clearTimeout(timer);
+      this.shutdownController.signal.removeEventListener("abort", onShutdown);
     }
   }
 
   private async fetchFromOrigin(segmentName: string): Promise<Buffer> {
+    const signal = AbortSignal.any([
+      this.shutdownController.signal,
+      AbortSignal.timeout(DEFAULT_ORIGIN_TIMEOUT_MS),
+    ]);
     const response = await this.fetchImpl(
       new URL(encodeURIComponent(segmentName), this.options.originBaseUrl),
+      { signal },
     );
     if (!response.ok) {
       throw new Error(`Origin returned HTTP ${response.status} for '${segmentName}'`);

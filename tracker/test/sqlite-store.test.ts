@@ -69,6 +69,10 @@ test("implements broadcast, peer, segment, health, stats, and deletion CRUD", (c
     id: "reporter",
     address: "http://reporter:9090",
   });
+  store.joinPeer("live", {
+    id: "reporter-2",
+    address: "http://reporter-2:9090",
+  });
   const segmented = store.reportSegments("live", "peer-a", [
     "segment_1.ts",
     "segment_2.ts",
@@ -99,8 +103,13 @@ test("implements broadcast, peer, segment, health, stats, and deletion CRUD", (c
   assert.equal(heartbeat.uploadBandwidthBps, 0);
   assert.equal(heartbeat.successRate, 1);
 
-  const penalized = store.reportPeerFailure("live", "peer-a", {
+  const firstReport = store.reportPeerFailure("live", "peer-a", {
     reporterId: "reporter",
+    reason: "integrity",
+  });
+  assert.equal(firstReport.trustScore, 1);
+  const penalized = store.reportPeerFailure("live", "peer-a", {
+    reporterId: "reporter-2",
     reason: "integrity",
   });
   assert.equal(penalized.trustScore, 0.65);
@@ -120,20 +129,20 @@ test("implements broadcast, peer, segment, health, stats, and deletion CRUD", (c
   );
   assert.deepEqual(store.getBroadcastStats("live"), {
     broadcastId: "live",
-    peers: 2,
+    peers: 3,
     ...trafficStats({ bytesDownloadedP2P: 200, integrityFailures: 0 }),
   });
 
   store.leavePeer("live", "peer-a");
   assert.deepEqual(
     store.listPeers("live").map((peer) => peer.id),
-    ["reporter"],
+    ["reporter", "reporter-2"],
   );
   assert.equal(store.getGlobalStats().bytesDownloadedP2P, 200);
-  assert.equal(store.getGlobalStats().peers, 1);
+  assert.equal(store.getGlobalStats().peers, 2);
 
   now = new Date("2026-07-17T00:01:00.000Z");
-  assert.equal(store.removeStalePeers(30_000), 1);
+  assert.equal(store.removeStalePeers(30_000), 2);
   assert.equal(store.getBroadcastStats("live").peers, 0);
   assert.throws(
     () => store.leavePeer("live", "missing"),

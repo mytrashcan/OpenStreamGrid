@@ -1,6 +1,7 @@
 {
   "name": "openstreamgrid",
-  "version": "0.4.1",
+  "version": "0.5.0",
+  "license": "GPL-3.0-only",
   "private": true,
   "type": "module",
   "workspaces": [

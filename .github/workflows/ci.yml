@@ -15,10 +15,10 @@ jobs:
         node-version: ['22']
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
@@ -27,7 +27,8 @@ jobs:
         run: npm ci
 
       - name: Install browser SDK dependencies
-        run: npm ci --prefix sdk
+        working-directory: sdk
+        run: npm ci
 
       - name: Build all workspaces
         run: npm run build
@@ -38,5 +39,31 @@ jobs:
       - name: Run tests
         run: npm run test
 
+      - name: Capture test coverage
+        run: NODE_V8_COVERAGE=coverage npm run test
+
       - name: Lint
         run: npm run lint
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Audit SDK dependencies
+        working-directory: sdk
+        run: npm audit --audit-level=high
+
+      - name: Verify SDK package contents
+        working-directory: sdk
+        run: npm pack --dry-run
+
+  container-and-chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build runtime images
+        run: |
+          docker build -f tracker/Dockerfile -t openstreamgrid-tracker:test .
+          docker build -f origin/Dockerfile -t openstreamgrid-origin:test .
+          docker build -f peer/Dockerfile -t openstreamgrid-peer:test .
+      - name: Lint Helm chart
+        run: docker run --rm -v "$PWD:/src" alpine/helm:3.16.4 lint /src/helm/openstreamgrid

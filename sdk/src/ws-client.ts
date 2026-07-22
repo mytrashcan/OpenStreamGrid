@@ -129,6 +129,22 @@ const parseServerMessage = (raw: unknown): WsServerMessage => {
         broadcastId,
         peerId: value.peerId,
         segments: value.segments,
+        ...(value.replace === true ? { replace: true } : {}),
+      };
+    case "segment_inventory_delta":
+      if (
+        typeof value.peerId !== "string" ||
+        !isStringArray(value.added) ||
+        !isStringArray(value.removed)
+      ) {
+        throw new TypeError("Segment inventory delta is invalid");
+      }
+      return {
+        type: "segment_inventory_delta",
+        broadcastId,
+        peerId: value.peerId,
+        added: value.added,
+        removed: value.removed,
       };
     case "stats_update":
       if (typeof value.peerId !== "string") {
@@ -174,8 +190,6 @@ const callSafely = (label: string, callback: () => void): void => {
 /** Browser tracker client callbacks and reconnection settings. */
 export interface WsClientOptions {
   trackerUrl: string;
-  /** Optional API key used to authenticate the WebSocket upgrade. */
-  apiKey?: string;
   broadcastId: string;
   peerId: string;
   /** Called periodically to get current segments possessed. */
@@ -217,8 +231,10 @@ export class WsTrackerClient {
   private firstConnectResolve: (() => void) | null = null;
   private firstConnectPromise: Promise<void> | null = null;
   private reportPeerState: boolean;
+  private sessionToken: string | undefined;
   /** Track known peers. */
   private readonly peers = new Map<string, PeerInfo>();
+  private readonly lastReportedSegments = new Set<string>();
 
   constructor(private readonly options: WsClientOptions) {
     if (
@@ -265,6 +281,9 @@ export class WsTrackerClient {
 
   /** Start the WebSocket connection. Resolves on first successful connection. */
   start(): Promise<void> {
+    if (!this.sessionToken) {
+      return Promise.reject(new Error("Peer session token is required before WebSocket startup"));
+    }
     if (this.started) return this.firstConnectPromise ?? Promise.resolve();
     this.started = true;
     this.startReportTimer();
@@ -275,10 +294,17 @@ export class WsTrackerClient {
     return this.firstConnectPromise;
   }
 
+  /** Binds subsequent signaling and reports to the registered peer session. */
+  setSessionToken(token: string): void {
+    if (token.trim() === "") throw new Error("Peer session token must not be empty");
+    this.sessionToken = token;
+  }
+
   /** Gracefully stop and clean up. */
   stop(): void {
     this.started = false;
     this.peers.clear();
+    this.lastReportedSegments.clear();
     if (this.reportTimer) clearInterval(this.reportTimer);
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reportTimer = null;
@@ -318,14 +344,23 @@ export class WsTrackerClient {
   /** Send a report_segments message immediately. */
   reportSegments(): void {
     if (!this.reportPeerState) return;
-    const segments = this.options.getSegments?.() ?? [];
-    this.send({
+    const segments = new Set(this.options.getSegments?.() ?? []);
+    const added = [...segments].filter(
+      (segment) => !this.lastReportedSegments.has(segment),
+    );
+    const removed = [...this.lastReportedSegments].filter(
+      (segment) => !segments.has(segment),
+    );
+    if (added.length === 0 && removed.length === 0) return;
+    if (!this.send({
       type: "report_segments",
       broadcastId: this.options.broadcastId,
       peerId: this.options.peerId,
-      segments,
-      replace: true,
-    });
+      added,
+      removed,
+    })) return;
+    this.lastReportedSegments.clear();
+    for (const segment of segments) this.lastReportedSegments.add(segment);
   }
 
   /** Enables heartbeat, segment, and traffic reports after REST registration. */
@@ -479,12 +514,25 @@ export class WsTrackerClient {
         case "segment_available": {
           const peer = this.peers.get(msg.peerId);
           if (peer) {
-            peer.segments = [
-              ...new Set([...peer.segments, ...msg.segments]),
-            ];
+            peer.segments = msg.replace
+              ? [...msg.segments]
+              : [...new Set([...peer.segments, ...msg.segments])];
           }
           callSafely("onSegmentAvailable", () =>
             this.options.onSegmentAvailable?.(msg.peerId, msg.segments),
+          );
+          break;
+        }
+        case "segment_inventory_delta": {
+          const peer = this.peers.get(msg.peerId);
+          if (peer) {
+            const segments = new Set(peer.segments);
+            for (const segment of msg.removed) segments.delete(segment);
+            for (const segment of msg.added) segments.add(segment);
+            peer.segments = [...segments];
+          }
+          callSafely("onSegmentAvailable", () =>
+            this.options.onSegmentAvailable?.(msg.peerId, msg.added),
           );
           break;
         }
@@ -502,14 +550,16 @@ export class WsTrackerClient {
     }
   }
 
-  private send(msg: WsClientMessage): void {
+  private send(msg: WsClientMessage): boolean {
     if (this.ws?.readyState === WebSocket.OPEN) {
       try {
         this.ws.send(JSON.stringify(msg));
+        return true;
       } catch (error) {
         logger.error("tracker_message_send_failed", error);
       }
     }
+    return false;
   }
 
   private startReportTimer(): void {
@@ -523,7 +573,7 @@ export class WsTrackerClient {
   private buildWsUrl(): string {
     const url = new URL("/ws", this.options.trackerUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-    if (this.options.apiKey) url.searchParams.set("apiKey", this.options.apiKey);
+    if (this.sessionToken) url.searchParams.set("sessionToken", this.sessionToken);
     return url.href;
   }
 }
