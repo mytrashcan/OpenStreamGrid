@@ -11,10 +11,10 @@ Universal hybrid P2P-CDN middleware for standards-based live streaming.
 [English](README.md) | [한국어](README.ko.md)
 
 OpenStreamGrid adds peer-assisted delivery to MPEG-TS HLS streams. LL-HLS and
-CMAF/fMP4 are roadmap items, not supported media formats in this release. Your origin continues to encode and publish media while
-OpenStreamGrid discovers peers, verifies segments, limits resource use, reports
-delivery metrics, and immediately falls back to the origin when P2P cannot meet
-the playback deadline.
+CMAF/fMP4 are roadmap items, not supported media formats in this release. Your
+origin continues to encode and publish media while OpenStreamGrid discovers
+peers, verifies segments, limits resource use, reports delivery metrics, and
+immediately falls back to the origin when P2P cannot meet the playback deadline.
 
 > OpenStreamGrid is delivery middleware, not a complete streaming platform. It
 > integrates with your existing origin, CDN, and player stack.
@@ -25,7 +25,7 @@ With [Docker Compose v2](https://docs.docker.com/compose/) installed, start the
 tracker, test origin, and two peers with one command:
 
 ```bash
-git clone --depth 1 https://github.com/mytrashcan/OpenStreamGrid.git
+git clone --branch v0.5.0 --depth 1 https://github.com/mytrashcan/OpenStreamGrid.git
 cd OpenStreamGrid
 docker compose up --build --detach
 docker compose ps
@@ -44,19 +44,21 @@ peer is unavailable or too slow. Stop the stack with `docker compose down`.
 
 ## Release Status
 
-[OpenStreamGrid v0.4.1](https://github.com/mytrashcan/OpenStreamGrid/releases/tag/v0.4.1)
-is the latest published stable release. The `main` branch currently contains
-the upcoming 0.5.0 production-hardening changes. Use the release tag for a
-stable deployment or `main` when evaluating the current development version.
-See the [changelog](CHANGELOG.md) for the complete history.
+[OpenStreamGrid v0.5.0](https://github.com/mytrashcan/OpenStreamGrid/releases/tag/v0.5.0)
+is the current stable release. It introduces signed, peer-scoped sessions,
+authenticated peer uploads, bounded network inputs, resilient origin and
+tracker lifecycles, transactional SQLite migrations, and safer Helm defaults.
+Use the release tag for reproducible deployments and review the
+[release notes](RELEASE_NOTES.md) before upgrading. See the
+[changelog](CHANGELOG.md) for the complete history.
 
 Tagged container images are published to GHCR for production deployment:
 
 | Component | Image |
 | --- | --- |
-| Tracker | `ghcr.io/mytrashcan/openstreamgrid-tracker:v0.4.1` |
-| Origin | `ghcr.io/mytrashcan/openstreamgrid-origin:v0.4.1` |
-| Node peer | `ghcr.io/mytrashcan/openstreamgrid-peer:v0.4.1` |
+| Tracker | `ghcr.io/mytrashcan/openstreamgrid-tracker:v0.5.0` |
+| Origin | `ghcr.io/mytrashcan/openstreamgrid-origin:v0.5.0` |
+| Node peer | `ghcr.io/mytrashcan/openstreamgrid-peer:v0.5.0` |
 
 Use immutable version tags in deployments; `latest` is provided for evaluation.
 The browser SDK package is build- and publish-dry-run verified in CI but is not
