@@ -1,33 +1,54 @@
 # OpenStreamGrid 0.5.0 Release Notes
 
-OpenStreamGrid 0.5.0 hardens the peer-assisted HLS prototype for public review.
-Peer identity now uses scoped sessions, peer uploads are authenticated, and
-untrusted network inputs have explicit quotas and size limits. Origin and
-tracker lifecycles recover and expire state predictably.
-
-A page using the Hls.js SDK now registers the viewer with the tracker, advertises
-verified cached segments, exchanges those segments over WebRTC DataChannels,
-reports traffic, and leaves cleanly when playback ends. Origin fallback remains
-active throughout the lifecycle.
+OpenStreamGrid 0.5.0 hardens the peer-assisted MPEG-TS HLS middleware for
+controlled production evaluation. Peer identity now uses signed, short-lived
+sessions, peer uploads are authenticated, and untrusted network inputs have
+explicit quotas and size limits. Origin and tracker lifecycles recover and
+expire state predictably while origin fallback remains available throughout
+playback.
 
 ## Highlights
 
-- No viewer executable or Chrome extension is required.
-- Browser-to-browser uploads use WebRTC DataChannels and tracker-relayed SDP.
-- Browser peers use path-qualified segment IDs so adaptive renditions remain
-  isolated.
-- Uploads default to 1 Mbps and three concurrent connections, both configurable.
-- REST registration is retried after transient tracker failures.
-- Tracker REST endpoints support browser CORS preflight requests.
-- Active DataChannel transfers receive a size- and bandwidth-aware deadline.
-- Browser peers continue to consume existing HTTP Node peers.
-- The SDK suite includes a real two-peer DataChannel transfer test.
+- Replaced browser-visible administrator credentials with signed,
+  identity-scoped peer sessions that expire automatically.
+- Authenticated HTTP and WebRTC peer transfers and added bounded REST,
+  WebSocket, signaling, segment, and failure-report inputs.
+- Added upload concurrency and bandwidth enforcement, request coalescing,
+  deadline-aware fallback, and bounded transport buffers.
+- Added origin restart backoff, immutable segment names, streaming SHA-256
+  sidecars, broadcast leases, and graceful registration cleanup.
+- Added transactional SQLite schema migrations, stronger constraints,
+  incremental segment updates, and retained statistics rollups.
+- Corrected browser integrity accounting and urgent-segment routing while
+  preserving browser-to-browser WebRTC and HTTP Node-peer interoperability.
+- Aligned all packages and the Helm chart at 0.5.0, made SQLite single-replica
+  defaults explicit, and wired deployment credentials through Kubernetes
+  Secrets.
 
-## Upgrade
+## Upgrade notes
 
-The browser peer path is enabled by default. Existing applications can opt out
-with `peerParticipation: false`. Production deployments should provide HTTPS,
-WSS, and a TURN service for restrictive NAT and firewall environments.
+- Configure a stable, random `PEER_SESSION_SECRET` of at least 32 bytes. Do not
+  reuse `TRACKER_API_KEY`; changing the session secret invalidates active peer
+  sessions.
+- Peer join responses now include `sessionToken` and `expiresAt`. Peer REST
+  calls use `Authorization: Bearer <token>`, and WebSocket upgrades use
+  `?sessionToken=<token>`.
+- Create the Kubernetes Secret referenced by
+  `tracker.auth.existingSecret` before installing the Helm chart.
+- Keep the SQLite tracker at one replica unless a shared external store is
+  introduced.
+- This release supports MPEG-TS HLS. LL-HLS and CMAF/fMP4 remain roadmap items.
+- Browser peer participation remains enabled by default. Set
+  `peerParticipation: false` for receive-only playback, and provide HTTPS, WSS,
+  and authenticated TURN for internet-facing deployments.
+
+## Validation
+
+- Build, strict TypeScript checks, ESLint, and all 108 automated tests pass on
+  Node.js 22, including real HTTP, WebSocket, and WebRTC transfer tests.
+- Production and SDK dependency audits report zero vulnerabilities.
+- The `@openstreamgrid/sdk` package dry run contains only the compiled ESM,
+  CommonJS, declaration, and package metadata files.
 
 ---
 
