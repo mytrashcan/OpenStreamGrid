@@ -124,6 +124,11 @@ interface HedgedFetchResult extends SegmentFetchResult {
   hedgeStarted: boolean;
 }
 
+interface PeerFetchOptions {
+  accountSuccess?: boolean;
+  attemptBudgetMs?: number;
+}
+
 class PeerFetchError extends Error {
   constructor(
     message: string,
@@ -263,6 +268,7 @@ export class HybridSegmentFetcher {
           peer,
           segmentName,
           plan.execution.originHedgeDelayMs ?? 0,
+          plan.execution.peerAttemptBudgetMs,
           signal,
           () => {
             hedgeStarted = true;
@@ -653,7 +659,7 @@ export class HybridSegmentFetcher {
     peer: Peer,
     segmentName: string,
     signal?: AbortSignal,
-    accountSuccess = true,
+    options: PeerFetchOptions = {},
   ): Promise<Buffer> {
     this.options.stats.recordP2PRequest();
     const controller = new AbortController();
@@ -671,12 +677,33 @@ export class HybridSegmentFetcher {
     signal?.addEventListener("abort", onConsumerAbort, { once: true });
     if (this.shutdownController.signal.aborted) onShutdown();
     if (signal?.aborted) onConsumerAbort();
-    const timer = this.options.transportManager
+    const standardTimeoutMs = this.options.transportManager
       ? undefined
-      : setTimeout(
-          () => controller.abort(new Error("P2P request timed out")),
-          this.p2pTimeoutMs,
-        );
+      : this.p2pTimeoutMs;
+    const timeoutMs =
+      options.attemptBudgetMs === undefined
+        ? standardTimeoutMs
+        : standardTimeoutMs === undefined
+          ? options.attemptBudgetMs
+          : Math.min(standardTimeoutMs, options.attemptBudgetMs);
+    const budgetIsLimiting =
+      options.attemptBudgetMs !== undefined &&
+      (standardTimeoutMs === undefined ||
+        options.attemptBudgetMs <= standardTimeoutMs);
+    const timer =
+      timeoutMs === undefined
+        ? undefined
+        : setTimeout(
+            () =>
+              controller.abort(
+                new Error(
+                  budgetIsLimiting
+                    ? "Peer attempt budget expired"
+                    : "P2P request timed out",
+                ),
+              ),
+            timeoutMs,
+          );
     try {
       let data: Buffer;
       if (this.options.transportManager) {
@@ -731,7 +758,7 @@ export class HybridSegmentFetcher {
         this.options.stats.recordIntegrityFailure();
         throw new PeerFetchError("Peer segment integrity check failed", "integrity");
       }
-      if (accountSuccess) {
+      if (options.accountSuccess !== false) {
         this.options.stats.recordP2PSuccess(data.byteLength);
       }
       return data;
@@ -866,6 +893,7 @@ export class HybridSegmentFetcher {
     peer: Peer,
     segmentName: string,
     hedgeDelayMs: number,
+    peerAttemptBudgetMs: number | undefined,
     signal: AbortSignal,
     onHedgeStart: () => void,
   ): Promise<HedgedFetchResult> {
@@ -882,15 +910,29 @@ export class HybridSegmentFetcher {
     });
     if (signal.aborted || this.shutdownController.signal.aborted) abortBoth();
 
+    const peerBudgetDeadline =
+      peerAttemptBudgetMs === undefined
+        ? undefined
+        : performance.now() + peerAttemptBudgetMs;
     const peerAttempt = this.captureHedgedAttempt(
       "p2p",
-      () =>
-        this.fetchFromPeer(
+      () => {
+        const remainingPeerBudgetMs =
+          peerBudgetDeadline === undefined
+            ? undefined
+            : Math.max(0, peerBudgetDeadline - performance.now());
+        return this.fetchFromPeer(
           peer,
           segmentName,
           peerController.signal,
-          false,
-        ),
+          {
+            accountSuccess: false,
+            ...(remainingPeerBudgetMs === undefined
+              ? {}
+              : { attemptBudgetMs: remainingPeerBudgetMs }),
+          },
+        );
+      },
     );
     const hedgeStart = this.createHedgeStart(
       hedgeDelayMs,

@@ -27,7 +27,10 @@ const segmentPeer: Peer = {
   uploadBandwidthBps: 1_000_000,
 };
 
-const hedgedScheduler = (hedgeDelayMs: number): SegmentScheduler => ({
+const hedgedScheduler = (
+  hedgeDelayMs: number,
+  peerAttemptBudgetMs = 1_000,
+): SegmentScheduler => ({
   policyName: "test-hedged",
   planSegment(context): SegmentSchedulingPlan {
     const peerId = context.candidates[0]?.id;
@@ -40,7 +43,7 @@ const hedgedScheduler = (hedgeDelayMs: number): SegmentScheduler => ({
       reason: "deadline_hedged",
       execution: {
         strategy: "hedged-origin",
-        peerAttemptBudgetMs: hedgeDelayMs,
+        peerAttemptBudgetMs,
         originHedgeDelayMs: hedgeDelayMs,
       },
     };
@@ -235,6 +238,48 @@ test("Origin wins after the hedge delay and cancels P2P", async (context) => {
   assert.equal(stats.snapshot().p2pFailures, 0);
   assert.equal(stats.snapshot().bytesDownloadedP2P, 0);
   assert.equal(stats.snapshot().bytesDownloadedOrigin, 11);
+});
+
+test("peer attempt budget aborts P2P independently of the Origin hedge delay", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const peerResponse = deferred<Response>();
+  let peerAborted = false;
+  const requests: string[] = [];
+  const { fetcher, stats } = createFetcher(
+    async (input, init) => {
+      requests.push(String(input));
+      if (String(input).startsWith("http://peer-a")) {
+        return abortable(
+          peerResponse.promise,
+          init?.signal,
+          () => {
+            peerAborted = true;
+          },
+        );
+      }
+      return new Response("from-origin");
+    },
+    { scheduler: hedgedScheduler(100, 25) },
+  );
+
+  const pending = fetcher.fetchSegment("segment.ts", 3);
+  await flushMicrotasks();
+  context.mock.timers.tick(24);
+  await flushMicrotasks();
+  assert.equal(stats.snapshot().originRequests, 0);
+
+  context.mock.timers.tick(1);
+  await flushMicrotasks();
+  const result = await pending;
+
+  assert.equal(result.source, "origin");
+  assert.equal(peerAborted, true);
+  assert.equal(stats.snapshot().p2pFailures, 1);
+  assert.equal(stats.snapshot().originRequests, 1);
+  assert.deepEqual(requests, [
+    "http://peer-a:9090/segments/segment.ts",
+    "http://origin:8080/hls/segment.ts",
+  ]);
 });
 
 test("reports an error when both hedged attempts fail", async (context) => {
