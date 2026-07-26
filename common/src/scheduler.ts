@@ -32,6 +32,15 @@ export interface BatchAssignment {
   mode: "origin" | "single-peer";
 }
 
+export interface BatchPlanningResult {
+  assignments: readonly BatchAssignment[];
+  warnings: readonly {
+    segmentId: string;
+    code: string;
+    message: string;
+  }[];
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 
@@ -292,7 +301,7 @@ export function planBatch(
   candidates: readonly SchedulingPeer[],
   selfPeerId: string,
   maximumParallelism: number,
-): BatchAssignment[] {
+): BatchPlanningResult {
   if (
     !Number.isSafeInteger(maximumParallelism) ||
     maximumParallelism <= 0
@@ -304,6 +313,7 @@ export function planBatch(
     ...new Map(requests.map((request) => [request.segmentId, request])).values(),
   ].reverse();
   const assignments: BatchAssignment[] = [];
+  const warnings: BatchPlanningResult["warnings"][number][] = [];
 
   for (
     let offset = 0;
@@ -326,7 +336,17 @@ export function planBatch(
         selfPeerId,
         maximumParallelism,
       };
-      const { plan } = planSegmentSafely(scheduler, context);
+      const { plan, warnings: segmentWarnings } = planSegmentSafely(
+        scheduler,
+        context,
+      );
+      warnings.push(
+        ...segmentWarnings.map((warning) => ({
+          segmentId: request.segmentId,
+          code: warning.code,
+          message: warning.message,
+        })),
+      );
       const peerId = plan.mode === "origin" ? undefined : plan.peerIds[0];
       if (peerId === undefined) {
         assignments.push({
@@ -345,5 +365,5 @@ export function planBatch(
     }
   }
 
-  return assignments;
+  return { assignments, warnings };
 }

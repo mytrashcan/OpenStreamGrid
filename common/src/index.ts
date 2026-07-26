@@ -148,6 +148,7 @@ export {
 } from "./scheduler.js";
 export type {
   BatchAssignment,
+  BatchPlanningResult,
   BatchSegmentRequest,
   SchedulerPlanValidationFailure,
 } from "./scheduler.js";

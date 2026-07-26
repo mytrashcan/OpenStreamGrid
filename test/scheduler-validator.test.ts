@@ -270,7 +270,7 @@ test("plans deduplicated batch requests in reversed, distinct-peer waves", () =>
     peer("peer-b", ["one.ts", "two.ts", "three.ts"]),
   ];
 
-  const assignments = planBatch(
+  const result = planBatch(
     batchScheduler,
     [
       { segmentId: "one.ts" },
@@ -284,9 +284,45 @@ test("plans deduplicated batch requests in reversed, distinct-peer waves", () =>
   );
 
   assert.deepEqual(plannedSegments, ["three.ts", "two.ts", "one.ts"]);
-  assert.deepEqual(assignments, [
+  assert.deepEqual(result.assignments, [
     { segmentId: "three.ts", peerId: "peer-a", mode: "single-peer" },
     { segmentId: "two.ts", peerId: "peer-b", mode: "single-peer" },
     { segmentId: "one.ts", peerId: "peer-a", mode: "single-peer" },
   ]);
+  assert.deepEqual(result.warnings, []);
+});
+
+test("preserves segment-scoped validation warnings from batch planning", () => {
+  const invalidScheduler: SegmentScheduler = {
+    policyName: "invalid-batch",
+    planSegment(): SegmentSchedulingPlan {
+      return {
+        policy: this.policyName,
+        mode: "single-peer",
+        peerIds: ["unknown-peer"],
+        rankedPeers: [],
+        reason: "peer_selected",
+      };
+    },
+  };
+
+  const result = planBatch(
+    invalidScheduler,
+    [{ segmentId: "one.ts" }, { segmentId: "two.ts" }],
+    [peer("peer-a", ["one.ts", "two.ts"])],
+    "self",
+    1,
+  );
+
+  assert.deepEqual(result.assignments, [
+    { segmentId: "two.ts", mode: "origin" },
+    { segmentId: "one.ts", mode: "origin" },
+  ]);
+  assert.deepEqual(
+    result.warnings.map(({ segmentId, code }) => ({ segmentId, code })),
+    [
+      { segmentId: "two.ts", code: "unknown_peer" },
+      { segmentId: "one.ts", code: "unknown_peer" },
+    ],
+  );
 });

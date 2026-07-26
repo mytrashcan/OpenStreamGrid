@@ -202,13 +202,21 @@ export class HybridSegmentFetcher {
   ): Promise<Map<string, Buffer>> {
     const candidates = this.schedulingPeersFor(peers);
     this.reconcilePeers(candidates);
-    const assignments = planBatch(
+    const { assignments, warnings } = planBatch(
       this.scheduler,
       segments.map((segmentId) => ({ segmentId })),
       candidates,
       this.options.selfPeerId,
       this.maxParallel,
     );
+    for (const warning of warnings) {
+      logger.warn("scheduler_plan_invalid", {
+        policy: this.scheduler.policyName,
+        segmentId: warning.segmentId,
+        validationFailure: warning.code,
+        message: warning.message,
+      });
+    }
     const peersById = new Map(peers.map((peer) => [peer.id, peer]));
     const fetched = new Map<string, Buffer>();
     const failures: unknown[] = [];
