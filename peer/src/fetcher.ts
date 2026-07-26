@@ -25,10 +25,23 @@ const LATENCY_WEIGHT = 0.3;
 const SUCCESS_RATE_WEIGHT = 0.3;
 const UPLOAD_BANDWIDTH_WEIGHT = 0.2;
 const TRUST_SCORE_WEIGHT = 0.2;
+
+export const MINIMUM_TRUST_SCORE_VALUE = MINIMUM_TRUST_SCORE;
+export const METRIC_EMA_ALPHA_VALUE = METRIC_EMA_ALPHA;
+export const LATENCY_WEIGHT_VALUE = LATENCY_WEIGHT;
+export const SUCCESS_RATE_WEIGHT_VALUE = SUCCESS_RATE_WEIGHT;
+export const UPLOAD_BANDWIDTH_WEIGHT_VALUE = UPLOAD_BANDWIDTH_WEIGHT;
+export const TRUST_SCORE_WEIGHT_VALUE = TRUST_SCORE_WEIGHT;
+export const URGENT_THRESHOLD_SEGMENTS_VALUE =
+  DEFAULT_URGENT_THRESHOLD_SEGMENTS;
+export const MAX_PARALLEL_DOWNLOADS_VALUE = DEFAULT_MAX_PARALLEL_DOWNLOADS;
+
 const logger = createLogger("peer");
 
 const clamp = (value: number, minimum: number, maximum: number): number =>
   Math.min(maximum, Math.max(minimum, value));
+
+export { clamp };
 
 /** Quality measurements used to rank a potential segment source. */
 export interface PeerQualityMetrics {

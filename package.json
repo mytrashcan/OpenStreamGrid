@@ -18,7 +18,8 @@
     "benchmark:update-readme": "node scripts/benchmark-update-readme.mjs",
     "build": "npm run build --workspaces --if-present && npm --prefix sdk run build",
     "lint": "eslint .",
-    "test": "node --test test/*.test.mjs && npm run test --workspaces --if-present && npm --prefix sdk test",
+    "test": "node --test test/*.test.mjs && npm run test --workspaces --if-present && npm --prefix sdk test && npm run test:scheduler-characterization",
+    "test:scheduler-characterization": "tsc -p tsconfig.test.json && node --test dist-test/test/*scheduler-characterization.test.js",
     "test:docker-health": "bash test/docker-health-test.sh",
     "typecheck": "npm run typecheck --workspaces --if-present && npm --prefix sdk run typecheck"
   },

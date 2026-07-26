@@ -57,9 +57,20 @@ interface PeerFetchResult {
   peerId: string;
 }
 
-interface PeerCandidate {
+export interface PeerCandidate {
   peer: PeerInfo;
   segmentId: string;
+}
+
+export function sortBrowserCandidates(
+  candidates: PeerCandidate[],
+): PeerCandidate[] {
+  return [...candidates].sort((a, b) => {
+    if (b.peer.trustScore !== a.peer.trustScore) {
+      return b.peer.trustScore - a.peer.trustScore;
+    }
+    return a.peer.latencyMs - b.peer.latencyMs;
+  });
 }
 
 interface InFlightSegment {
@@ -604,12 +615,7 @@ export class OpenStreamGridHlsPlugin {
     candidates: PeerCandidate[],
     signal: AbortSignal,
   ): Promise<PeerFetchResult | null> {
-    const sorted = [...candidates].sort((a, b) => {
-      if (b.peer.trustScore !== a.peer.trustScore) {
-        return b.peer.trustScore - a.peer.trustScore;
-      }
-      return a.peer.latencyMs - b.peer.latencyMs;
-    });
+    const sorted = sortBrowserCandidates(candidates);
 
     const topPeers = sorted.slice(0, MAX_PARALLEL_PEER_PROBES);
     const controller = new AbortController();
