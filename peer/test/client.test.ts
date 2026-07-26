@@ -10,6 +10,8 @@ const environment = {
 test("parses the parallel download limit with a default of three", () => {
   assert.equal(parseArguments([], environment).maxParallelDownloads, 3);
   assert.equal(parseArguments([], environment).p2pTimeoutMs, 2_000);
+  assert.equal(parseArguments([], environment).segmentDurationMs, undefined);
+  assert.equal(parseArguments([], environment).deadlineSchedulingEnabled, true);
   assert.equal(parseArguments([], environment).uploadHost, "0.0.0.0");
   assert.equal(parseArguments([], environment).cacheSizeBytes, 512_000_000);
   assert.equal(parseArguments([], environment).cacheTtlMs, 300_000);
@@ -21,6 +23,13 @@ test("parses the parallel download limit with a default of three", () => {
     parseArguments(["--parallel-downloads", "5"], environment)
       .maxParallelDownloads,
     5,
+  );
+  assert.equal(
+    parseArguments([], {
+      ...environment,
+      SEGMENT_DURATION_SECONDS: "1.5",
+    }).segmentDurationMs,
+    1_500,
   );
 });
 
@@ -57,6 +66,25 @@ test("supports disabling WebRTC for deterministic HTTP fallback", () => {
   assert.throws(
     () => parseArguments(["--webrtc-enabled", "sometimes"], environment),
     /WebRTC enabled must be true or false/,
+  );
+});
+
+test("supports disabling deadline-aware scheduling", () => {
+  assert.equal(
+    parseArguments([], {
+      ...environment,
+      DEADLINE_SCHEDULING_ENABLED: "false",
+      SEGMENT_DURATION_SECONDS: "2",
+    }).deadlineSchedulingEnabled,
+    false,
+  );
+  assert.throws(
+    () =>
+      parseArguments([], {
+        ...environment,
+        SEGMENT_DURATION_SECONDS: "0",
+      }),
+    /Segment duration must be a positive number/,
   );
 });
 

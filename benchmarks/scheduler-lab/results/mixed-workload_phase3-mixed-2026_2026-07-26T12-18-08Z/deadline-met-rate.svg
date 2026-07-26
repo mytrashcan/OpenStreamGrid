@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="330" viewBox="0 0 900 330" role="img" aria-labelledby="title desc">
+  <title id="title">Deadline met rate</title>
+  <desc id="desc">Horizontal bars compare four scheduler policies from zero to one hundred percent.</desc>
+  <rect width="900" height="330" fill="white"/>
+  <text x="12" y="34" font-size="22" font-weight="600">Deadline met rate</text>
+  <text x="12" y="92" font-size="16">Node-legacy</text>
+  <rect x="220" y="70" width="620" height="28" fill="#e5e7eb" rx="4"/>
+  <rect x="220" y="70" width="527" height="28" fill="#2563eb" rx="4"/>
+  <text x="755" y="90" font-size="14">85%</text>
+  <text x="12" y="150" font-size="16">Node-deadline-aware</text>
+  <rect x="220" y="128" width="620" height="28" fill="#e5e7eb" rx="4"/>
+  <rect x="220" y="128" width="620" height="28" fill="#2563eb" rx="4"/>
+  <text x="795" y="148" font-size="14">100%</text>
+  <text x="12" y="208" font-size="16">Browser-legacy</text>
+  <rect x="220" y="186" width="620" height="28" fill="#e5e7eb" rx="4"/>
+  <rect x="220" y="186" width="523.9" height="28" fill="#2563eb" rx="4"/>
+  <text x="751.9" y="206" font-size="14">84.5%</text>
+  <text x="12" y="266" font-size="16">Browser-deadline-aware</text>
+  <rect x="220" y="244" width="620" height="28" fill="#e5e7eb" rx="4"/>
+  <rect x="220" y="244" width="620" height="28" fill="#2563eb" rx="4"/>
+  <text x="795" y="264" font-size="14">100%</text>
+  <text x="220" y="316" font-size="12">0%</text>
+  <text x="810" y="316" font-size="12">100%</text>
+</svg>

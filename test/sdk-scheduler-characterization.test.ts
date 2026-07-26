@@ -54,6 +54,8 @@ type BrowserPeerFetchResult = {
 type BrowserSchedulerHarness = {
   fetchFromPeers(
     candidates: PeerCandidate[],
+    segmentName: string,
+    segmentUrl: string,
     signal: AbortSignal,
   ): Promise<BrowserPeerFetchResult | null>;
   fetchFromPeer(
@@ -103,7 +105,7 @@ test("uses ascending latency as the equal-trust browser tie breaker", () => {
 test("probes at most three browser peers in parallel", async () => {
   const scheduler = schedulerHarness(makePlugin());
   const attempted: string[] = [];
-  scheduler.fetchFromPeer = async (candidate) => {
+  scheduler.fetchFromPeer = async (candidate, _timeoutMs, _signal) => {
     attempted.push(candidate.peer.id);
     throw new Error("unavailable");
   };
@@ -115,6 +117,8 @@ test("probes at most three browser peers in parallel", async () => {
       makeCandidate("third", 0.8, 30),
       makeCandidate("fourth", 0.7, 40),
     ],
+    "segment.ts",
+    "https://origin.example/hls/low/segment.ts",
     new AbortController().signal,
   );
 
@@ -155,6 +159,8 @@ test("returns the first successful browser probe and aborts the rest", async () 
       makeCandidate("winner", 0.9, 20),
       makeCandidate("still-pending", 0.8, 30),
     ],
+    "segment.ts",
+    "https://origin.example/hls/low/segment.ts",
     new AbortController().signal,
   );
   await new Promise((resolve) => setImmediate(resolve));
@@ -181,6 +187,8 @@ test("returns null when all browser probes fail", async () => {
         makeCandidate("second", 0.9, 20),
         makeCandidate("third", 0.8, 30),
       ],
+      "segment.ts",
+      "https://origin.example/hls/low/segment.ts",
       new AbortController().signal,
     ),
     null,
@@ -209,6 +217,8 @@ test("cancels all browser probes when the caller aborts", async () => {
       makeCandidate("second", 0.9, 20),
       makeCandidate("third", 0.8, 30),
     ],
+    "segment.ts",
+    "https://origin.example/hls/low/segment.ts",
     controller.signal,
   );
   await new Promise((resolve) => setImmediate(resolve));

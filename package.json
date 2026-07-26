@@ -14,6 +14,7 @@
     "benchmark": "bash scripts/benchmark.sh",
     "benchmark:compare": "node scripts/benchmark-compare.mjs",
     "benchmark:report": "node scripts/benchmark-report.mjs",
+    "benchmark:scheduler": "node scripts/benchmark-scheduler.mjs",
     "benchmark:suite": "node scripts/benchmark-suite.mjs",
     "benchmark:update-readme": "node scripts/benchmark-update-readme.mjs",
     "build": "npm run build --workspaces --if-present && npm --prefix sdk run build",

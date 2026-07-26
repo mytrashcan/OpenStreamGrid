@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "name": "critical",
+  "description": "Critical playback deadlines that leave 500 ms of slack.",
+  "seed": "phase3-critical-2026",
+  "requestCount": 240,
+  "slackMs": 500,
+  "deadlineKind": "synthetic",
+  "originLatencyMs": 300,
+  "originJitterMs": 100,
+  "peerLatencyMs": 850,
+  "peerLatencyJitterMs": 350,
+  "peerSuccessRate": 0.9,
+  "peerCount": 5,
+  "maximumParallelism": 3,
+  "peerTimeoutMs": 3000
+}

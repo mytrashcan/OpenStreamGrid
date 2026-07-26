@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "name": "relaxed",
+  "description": "Relaxed playback deadlines with reliable peers.",
+  "seed": "phase3-relaxed-2026",
+  "requestCount": 240,
+  "slackMs": 6000,
+  "deadlineKind": "player-derived",
+  "originLatencyMs": 700,
+  "originJitterMs": 120,
+  "peerLatencyMs": 850,
+  "peerLatencyJitterMs": 250,
+  "peerSuccessRate": 0.98,
+  "peerCount": 5,
+  "maximumParallelism": 3,
+  "peerTimeoutMs": 3000
+}

@@ -30,9 +30,17 @@ export class TrafficStats {
     this.values.p2pFailures += 1;
   }
 
-  recordOriginDownload(bytes: number): void {
+  recordOriginRequest(): void {
     this.values.originRequests += 1;
+  }
+
+  recordOriginBytes(bytes: number): void {
     this.values.bytesDownloadedOrigin += bytes;
+  }
+
+  recordOriginDownload(bytes: number): void {
+    this.recordOriginRequest();
+    this.recordOriginBytes(bytes);
   }
 
   recordUpload(bytes: number): void {

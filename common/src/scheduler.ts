@@ -17,7 +17,9 @@ export interface SchedulerPlanValidationFailure {
     | "segment_unavailable"
     | "parallelism_exceeded"
     | "invalid_rank"
-    | "non_finite_score";
+    | "non_finite_score"
+    | "invalid_deadline"
+    | "invalid_execution_hints";
   message: string;
 }
 
@@ -26,10 +28,24 @@ export interface BatchSegmentRequest {
   segmentsAhead?: number;
 }
 
+export interface BatchSyntheticDeadlineConfig {
+  kind: "synthetic";
+  segmentDurationMs: number;
+}
+
 export interface BatchAssignment {
   segmentId: string;
   peerId?: string;
   mode: "origin" | "single-peer";
+}
+
+export interface BatchPlanningResult {
+  assignments: readonly BatchAssignment[];
+  warnings: readonly {
+    segmentId: string;
+    code: string;
+    message: string;
+  }[];
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -48,6 +64,35 @@ const failure = (
   message: string,
 ): SchedulerPlanValidationFailure => ({ code, message });
 
+const supportedDeadlineKinds = new Set([
+  "player-derived",
+  "playlist-derived",
+  "synthetic",
+  "unknown",
+]);
+
+const supportedExecutionStrategies = new Set([
+  "legacy-p2p-first",
+  "origin-only",
+  "hedged-origin",
+]);
+
+const validateOptionalNonNegativeFiniteNumber = (
+  value: unknown,
+  fieldName: string,
+  code: SchedulerPlanValidationFailure["code"],
+  failures: SchedulerPlanValidationFailure[],
+): value is number | undefined => {
+  if (value === undefined) return true;
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return true;
+  }
+  failures.push(
+    failure(code, `${fieldName} must be a finite, non-negative number`),
+  );
+  return false;
+};
+
 /**
  * Validates an untrusted scheduler plan against the context it was given.
  *
@@ -64,6 +109,47 @@ export function validateSchedulerPlan(
   }
 
   const failures: SchedulerPlanValidationFailure[] = [];
+  const deadline = context.deadline;
+  if (deadline !== undefined) {
+    if (!isRecord(deadline)) {
+      failures.push(
+        failure("invalid_deadline", "Segment deadline must be an object"),
+      );
+    } else {
+      if (
+        typeof deadline.kind !== "string" ||
+        !supportedDeadlineKinds.has(deadline.kind)
+      ) {
+        failures.push(
+          failure(
+            "invalid_deadline",
+            "Segment deadline kind is not supported",
+          ),
+        );
+      }
+      if (
+        typeof deadline.slackMs !== "number" ||
+        !Number.isFinite(deadline.slackMs)
+      ) {
+        failures.push(
+          failure("invalid_deadline", "Segment deadline slackMs must be finite"),
+        );
+      }
+      validateOptionalNonNegativeFiniteNumber(
+        deadline.segmentDurationMs,
+        "Segment deadline segmentDurationMs",
+        "invalid_deadline",
+        failures,
+      );
+      validateOptionalNonNegativeFiniteNumber(
+        deadline.bufferAheadMs,
+        "Segment deadline bufferAheadMs",
+        "invalid_deadline",
+        failures,
+      );
+    }
+  }
+
   const mode = plan.mode;
   const validMode =
     mode === "origin" ||
@@ -241,6 +327,99 @@ export function validateSchedulerPlan(
     );
   }
 
+  const execution = plan.execution;
+  if (execution !== undefined) {
+    if (!isRecord(execution)) {
+      failures.push(
+        failure(
+          "invalid_execution_hints",
+          "Scheduler plan execution hints must be an object",
+        ),
+      );
+      return failures;
+    }
+
+    const strategy = execution.strategy;
+    if (
+      typeof strategy !== "string" ||
+      !supportedExecutionStrategies.has(strategy)
+    ) {
+      failures.push(
+        failure(
+          "invalid_execution_hints",
+          "Scheduler plan execution strategy is not supported",
+        ),
+      );
+    }
+
+    const peerAttemptBudgetMs = execution.peerAttemptBudgetMs;
+    const originHedgeDelayMs = execution.originHedgeDelayMs;
+    const executionDeadlineSlackMs = execution.deadlineSlackMs;
+    validateOptionalNonNegativeFiniteNumber(
+      peerAttemptBudgetMs,
+      "Scheduler plan peerAttemptBudgetMs",
+      "invalid_execution_hints",
+      failures,
+    );
+    const validOriginHedgeDelay =
+      validateOptionalNonNegativeFiniteNumber(
+        originHedgeDelayMs,
+        "Scheduler plan originHedgeDelayMs",
+        "invalid_execution_hints",
+        failures,
+      );
+    const validDeadlineSlack =
+      validateOptionalNonNegativeFiniteNumber(
+        executionDeadlineSlackMs,
+        "Scheduler plan deadlineSlackMs",
+        "invalid_execution_hints",
+        failures,
+      );
+
+    if (
+      peerAttemptBudgetMs !== undefined &&
+      peerIds.length === 0
+    ) {
+      failures.push(
+        failure(
+          "invalid_execution_hints",
+          "Scheduler plan cannot set a P2P attempt budget without selected peers",
+        ),
+      );
+    }
+    if (
+      originHedgeDelayMs !== undefined &&
+      (strategy === "origin-only" || mode === "origin")
+    ) {
+      failures.push(
+        failure(
+          "invalid_execution_hints",
+          "Scheduler plan cannot hedge an Origin-only execution",
+        ),
+      );
+    }
+
+    const deadlineSlackMs =
+      validDeadlineSlack && executionDeadlineSlackMs !== undefined
+        ? executionDeadlineSlackMs
+        : deadline?.slackMs;
+    if (
+      validOriginHedgeDelay &&
+      typeof originHedgeDelayMs === "number" &&
+      typeof deadlineSlackMs === "number" &&
+      Number.isFinite(deadlineSlackMs) &&
+      originHedgeDelayMs > deadlineSlackMs
+    ) {
+      failures.push(
+        failure(
+          "invalid_execution_hints",
+          "Scheduler plan Origin hedge delay cannot exceed deadline slack",
+        ),
+      );
+    }
+
+  }
+
   return failures;
 }
 
@@ -292,7 +471,8 @@ export function planBatch(
   candidates: readonly SchedulingPeer[],
   selfPeerId: string,
   maximumParallelism: number,
-): BatchAssignment[] {
+  deadlineConfig?: BatchSyntheticDeadlineConfig,
+): BatchPlanningResult {
   if (
     !Number.isSafeInteger(maximumParallelism) ||
     maximumParallelism <= 0
@@ -304,6 +484,7 @@ export function planBatch(
     ...new Map(requests.map((request) => [request.segmentId, request])).values(),
   ].reverse();
   const assignments: BatchAssignment[] = [];
+  const warnings: BatchPlanningResult["warnings"][number][] = [];
 
   for (
     let offset = 0;
@@ -322,11 +503,32 @@ export function planBatch(
         ...(request.segmentsAhead === undefined
           ? {}
           : { segmentsAhead: request.segmentsAhead }),
+        ...(deadlineConfig === undefined ||
+        request.segmentsAhead === undefined
+          ? {}
+          : {
+              deadline: {
+                kind: deadlineConfig.kind,
+                slackMs:
+                  request.segmentsAhead * deadlineConfig.segmentDurationMs,
+                segmentDurationMs: deadlineConfig.segmentDurationMs,
+              },
+            }),
         candidates: availableCandidates,
         selfPeerId,
         maximumParallelism,
       };
-      const { plan } = planSegmentSafely(scheduler, context);
+      const { plan, warnings: segmentWarnings } = planSegmentSafely(
+        scheduler,
+        context,
+      );
+      warnings.push(
+        ...segmentWarnings.map((warning) => ({
+          segmentId: request.segmentId,
+          code: warning.code,
+          message: warning.message,
+        })),
+      );
       const peerId = plan.mode === "origin" ? undefined : plan.peerIds[0];
       if (peerId === undefined) {
         assignments.push({
@@ -345,5 +547,5 @@ export function planBatch(
     }
   }
 
-  return assignments;
+  return { assignments, warnings };
 }

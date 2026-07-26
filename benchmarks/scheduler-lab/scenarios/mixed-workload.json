@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "name": "mixed-workload",
+  "description": "A deterministic mixture of relaxed, tight, critical, and unknown playback deadlines.",
+  "seed": "phase3-mixed-2026",
+  "requestCount": 400,
+  "originLatencyMs": 350,
+  "originJitterMs": 120,
+  "peerLatencyMs": 1050,
+  "peerLatencyJitterMs": 650,
+  "peerSuccessRate": 0.78,
+  "peerCount": 6,
+  "maximumParallelism": 3,
+  "peerTimeoutMs": 3000,
+  "deadlineMix": [
+    {
+      "kind": "player-derived",
+      "slackMs": 6000,
+      "weight": 3
+    },
+    {
+      "kind": "playlist-derived",
+      "slackMs": 2000,
+      "weight": 3
+    },
+    {
+      "kind": "synthetic",
+      "slackMs": 500,
+      "weight": 2
+    },
+    {
+      "kind": "unknown",
+      "slackMs": 2500,
+      "weight": 2
+    }
+  ]
+}

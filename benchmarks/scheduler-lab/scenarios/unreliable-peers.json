@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "name": "unreliable-peers",
+  "description": "Relaxed deadlines with peers that succeed half the time.",
+  "seed": "phase3-unreliable-peers-2026",
+  "requestCount": 240,
+  "slackMs": 4000,
+  "deadlineKind": "playlist-derived",
+  "originLatencyMs": 700,
+  "originJitterMs": 150,
+  "peerLatencyMs": 900,
+  "peerLatencyJitterMs": 400,
+  "peerSuccessRate": 0.5,
+  "peerCount": 5,
+  "maximumParallelism": 3,
+  "peerTimeoutMs": 3000
+}

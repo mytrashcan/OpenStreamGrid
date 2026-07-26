@@ -21,6 +21,7 @@ x-peer-environment: &peer-environment
   CACHE_TTL_MS: "300000"
   MAX_UPLOAD_SPEED: 4Mbps
   MAX_CONNECTIONS: "3"
+  SEGMENT_DURATION_SECONDS: "${SEGMENT_DURATION_SECONDS:-2}"
 
 services:
   tracker:

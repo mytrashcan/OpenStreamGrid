@@ -24,6 +24,7 @@ import {
   validatePeerHttpBaseUrl,
   type SchedulerDecision,
   type SchedulingPeer,
+  type SegmentDeadline,
   type SegmentScheduler,
   type SegmentSchedulingContext,
   type SegmentSchedulingPlan,
@@ -31,6 +32,7 @@ import {
 import type {
   default as Hls,
   HlsConfig,
+  FragmentLoaderContext,
   Loader,
   LoaderCallbacks,
   LoaderConfiguration,
@@ -38,10 +40,10 @@ import type {
   LoaderStats,
 } from "hls.js";
 import { SegmentCache } from "./cache.js";
+import { DeadlineAwareScheduler } from "./deadline-aware-scheduler.js";
 import {
   compareTrustAndLatency,
   MAX_PARALLEL_PEER_PROBES,
-  TrustLatencyProbeScheduler,
 } from "./trust-latency-probe-scheduler.js";
 import { OriginHashVerifier } from "./verifier.js";
 import { BrowserWebRtcPeer } from "./webrtc-peer.js";
@@ -55,6 +57,8 @@ import type {
 
 const DEFAULT_MAX_CACHE_BYTES = 100 * 1024 * 1024;
 const DEFAULT_PEER_TIMEOUT_MS = 3_000;
+const DEFAULT_ORIGIN_LATENCY_ESTIMATE_MS = 500;
+const ORIGIN_LATENCY_EMA_ALPHA = 0.3;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const logger = createLogger("sdk");
 
@@ -67,9 +71,67 @@ interface PeerFetchResult {
   peerId: string;
 }
 
+type SegmentLoadResult =
+  | { source: "p2p"; data: Uint8Array; peerId: string }
+  | { source: "origin"; data: Uint8Array };
+
+type HedgedLoadAttempt =
+  | { source: SegmentLoadResult["source"]; status: "fulfilled"; result: SegmentLoadResult }
+  | { source: SegmentLoadResult["source"]; status: "rejected"; error: unknown };
+
+interface PlannedPeerFetch {
+  plan: SegmentSchedulingPlan;
+  candidates: PeerCandidate[];
+}
+
 export interface PeerCandidate {
   peer: PeerInfo;
   segmentId: string;
+}
+
+/**
+ * Derives a wall-clock scheduling deadline from documented Hls.js fragment
+ * timing and the currently attached media element.
+ */
+export function deriveBrowserDeadline(
+  context: LoaderContext,
+  plugin: OpenStreamGridHlsPlugin,
+): SegmentDeadline | undefined {
+  if (!plugin.isDeadlineSchedulingEnabled()) return undefined;
+  const media = plugin.deadlineMediaElement();
+  const fragment = (context as Partial<FragmentLoaderContext>).frag;
+  if (!media || !fragment || media.seeking) {
+    if (media?.seeking) plugin.resetDeadlineContinuity();
+    return undefined;
+  }
+
+  const fragmentStartSec = fragment.start;
+  const fragmentDurationSec = fragment.duration;
+  const currentTime = media.currentTime;
+  if (
+    !Number.isFinite(fragmentStartSec) ||
+    !Number.isFinite(fragmentDurationSec) ||
+    fragmentDurationSec <= 0 ||
+    !Number.isFinite(currentTime)
+  ) {
+    return undefined;
+  }
+  if (!plugin.acceptDeadlineContinuity(fragment.cc)) return undefined;
+
+  const configuredPlaybackRate = media.playbackRate;
+  const playbackRate =
+    Number.isFinite(configuredPlaybackRate) && configuredPlaybackRate > 0
+      ? Math.max(0.1, configuredPlaybackRate)
+      : 1;
+  const fragmentEndTime = fragmentStartSec + fragmentDurationSec;
+  const slackSeconds = (fragmentEndTime - currentTime) / playbackRate;
+  const segmentDurationMs = Math.round(fragmentDurationSec * 1_000);
+  return {
+    kind: "player-derived",
+    slackMs:
+      slackSeconds > 0 ? Math.round(slackSeconds * 1_000) : 0,
+    segmentDurationMs,
+  };
 }
 
 export function sortBrowserCandidates(
@@ -184,7 +246,13 @@ class OpenStreamGridLoader implements Loader<LoaderContext> {
     signal: AbortSignal,
   ): Promise<void> {
     try {
-      const result = await this.plugin.loadSegment(segmentName, url, signal);
+      const deadline = deriveBrowserDeadline(context, this.plugin);
+      const result = await this.plugin.loadSegment(
+        segmentName,
+        url,
+        signal,
+        deadline,
+      );
       if (this.aborted || this.timedOut) return;
       this.stats.loading.end = performance.now();
       this.stats.loading.first = this.stats.loading.end;
@@ -296,6 +364,7 @@ export class OpenStreamGridHlsPlugin {
   private readonly broadcastId: string;
   private readonly trackerUrl: string;
   private readonly peerParticipation: boolean;
+  private readonly deadlineSchedulingEnabled: boolean;
   private readonly scheduler: SegmentScheduler;
   private readonly webRtcOptions: Pick<
     HlsjsPluginConfig,
@@ -307,6 +376,7 @@ export class OpenStreamGridHlsPlugin {
   private readonly onEvent: ((event: SdkEvent) => void) | undefined;
   private readonly inFlightSegments = new Map<string, InFlightSegment>();
   private readonly cacheKeysBySegmentId = new Map<string, string>();
+  private originLatencyEstimateMs = DEFAULT_ORIGIN_LATENCY_ESTIMATE_MS;
   private webRtcPeer: BrowserWebRtcPeer | undefined;
   private registered = false;
   private peerSessionToken: string | undefined;
@@ -315,6 +385,7 @@ export class OpenStreamGridHlsPlugin {
   private attachedHls: Hls | undefined;
   private originalLoader: HlsConfig["loader"] | undefined;
   private installedLoader: HlsConfig["loader"] | undefined;
+  private deadlineContinuityCounter: number | undefined;
 
   constructor(config: HlsjsPluginConfig) {
     if (config.peerId !== undefined && config.peerId.trim() === "") {
@@ -324,7 +395,23 @@ export class OpenStreamGridHlsPlugin {
     this.broadcastId = config.broadcastId;
     this.trackerUrl = config.trackerUrl;
     this.peerParticipation = config.peerParticipation !== false;
-    this.scheduler = config.scheduler ?? new TrustLatencyProbeScheduler();
+    this.deadlineSchedulingEnabled =
+      config.deadlineSchedulingEnabled !== false;
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const plugin = this;
+    this.scheduler =
+      config.scheduler ??
+      new DeadlineAwareScheduler({
+        originLatencyEstimator: {
+          get estimateMs(): number {
+            return plugin.originLatencyEstimateMs;
+          },
+          reset(): void {
+            plugin.originLatencyEstimateMs =
+              DEFAULT_ORIGIN_LATENCY_ESTIMATE_MS;
+          },
+        },
+      });
     this.webRtcOptions = {
       ...(config.iceServers ? { iceServers: config.iceServers } : {}),
       ...(config.maxUploadConnections !== undefined
@@ -444,6 +531,30 @@ export class OpenStreamGridHlsPlugin {
     this.attachedHls = undefined;
     this.originalLoader = undefined;
     this.installedLoader = undefined;
+    this.deadlineContinuityCounter = undefined;
+  }
+
+  /** @internal Playback element used by the Hls.js loader deadline adapter. */
+  deadlineMediaElement(): HTMLMediaElement | null {
+    return this.attachedHls?.media ?? null;
+  }
+
+  /** @internal Whether playback deadline derivation is enabled. */
+  isDeadlineSchedulingEnabled(): boolean {
+    return this.deadlineSchedulingEnabled;
+  }
+
+  /** @internal Rejects the first timing sample after an HLS discontinuity. */
+  acceptDeadlineContinuity(continuityCounter: number): boolean {
+    if (!Number.isFinite(continuityCounter)) return false;
+    const previous = this.deadlineContinuityCounter;
+    this.deadlineContinuityCounter = continuityCounter;
+    return previous === undefined || previous === continuityCounter;
+  }
+
+  /** @internal Clears fragment continuity state after a playback seek. */
+  resetDeadlineContinuity(): void {
+    this.deadlineContinuityCounter = undefined;
   }
 
   /**
@@ -458,6 +569,7 @@ export class OpenStreamGridHlsPlugin {
     segmentName: string,
     segmentUrl: string,
     signal: AbortSignal,
+    deadline?: SegmentDeadline,
   ): Promise<{ data: Uint8Array }> {
     if (signal.aborted) throw this.abortReason(signal);
     const cacheKey = this.segmentCacheKey(segmentUrl);
@@ -469,7 +581,12 @@ export class OpenStreamGridHlsPlugin {
 
     let request = this.inFlightSegments.get(cacheKey);
     if (!request) {
-      request = this.startSharedSegment(cacheKey, segmentName, segmentUrl);
+      request = this.startSharedSegment(
+        cacheKey,
+        segmentName,
+        segmentUrl,
+        deadline,
+      );
     }
     return this.waitForSharedSegment(request, signal);
   }
@@ -478,6 +595,7 @@ export class OpenStreamGridHlsPlugin {
     cacheKey: string,
     segmentName: string,
     segmentUrl: string,
+    deadline: SegmentDeadline | undefined,
   ): InFlightSegment {
     const controller = new AbortController();
     let request: InFlightSegment;
@@ -485,6 +603,7 @@ export class OpenStreamGridHlsPlugin {
       segmentName,
       segmentUrl,
       controller.signal,
+      deadline,
     ).finally(() => {
       request.settled = true;
       if (this.inFlightSegments.get(cacheKey) === request) {
@@ -500,17 +619,15 @@ export class OpenStreamGridHlsPlugin {
     segmentName: string,
     segmentUrl: string,
     signal: AbortSignal,
+    deadline: SegmentDeadline | undefined,
   ): Promise<{ data: Uint8Array }> {
     this.emit({ type: "cache_miss", segment: segmentName });
 
     const segmentId = this.segmentPeerId(segmentUrl);
     const candidates = this.peerCandidates(segmentId, segmentName);
-    if (candidates.length > 0) {
-      try {
-        const result = await this.fetchFromPeers(
-          candidates,
-          signal,
-          (decision) => {
+    const planned =
+      candidates.length > 0
+        ? this.planPeerFetch(candidates, deadline, (decision) => {
             this.emit({
               type: "scheduler_decision",
               policy: decision.policy,
@@ -519,38 +636,44 @@ export class OpenStreamGridHlsPlugin {
               candidateCount: decision.candidateCount,
               selectedPeerCount: decision.selectedPeerCount,
             });
-          },
+          })
+        : undefined;
+
+    if (
+      planned &&
+      planned.candidates.length > 0 &&
+      planned.plan.execution?.strategy === "hedged-origin"
+    ) {
+      const result = await this.hedgedLoad(
+        planned.candidates,
+        segmentName,
+        segmentUrl,
+        planned.plan.execution.originHedgeDelayMs ?? 0,
+        signal,
+      );
+      return this.completeSegmentLoad(
+        result,
+        segmentName,
+        segmentUrl,
+        segmentId,
+      );
+    }
+
+    if (planned && planned.candidates.length > 0) {
+      try {
+        const result = await this.fetchFromPeers(
+          planned.candidates,
+          segmentName,
+          segmentUrl,
+          signal,
         );
         if (result && !signal.aborted) {
-          if (this.verifier) {
-            const verification = await this.verifier.verifyUrl(
-              segmentUrl,
-              result.data,
-            );
-            if (!verification.valid) {
-              this.stats.integrityFailures++;
-              this.emit({
-                type: "integrity_fail",
-                segment: segmentName,
-                message: `Expected ${verification.expectedHash}, got ${verification.actualHash}`,
-              });
-              throw new Error("Segment integrity check failed");
-            }
-            this.emit({ type: "integrity_ok", segment: segmentName });
-          }
-
-          this.stats.bytesDownloadedP2P += result.data.byteLength;
-          this.stats.p2pSuccesses++;
-
-          this.cacheSegment(cacheKeyFrom(segmentUrl), segmentId, result.data);
-
-          this.emit({
-            type: "peer_fetched",
-            segment: segmentName,
-            peerId: result.peerId,
-          });
-
-          return { data: result.data };
+          return this.completeSegmentLoad(
+            { ...result, source: "p2p" },
+            segmentName,
+            segmentUrl,
+            segmentId,
+          );
         }
       } catch {
         this.stats.p2pFailures++;
@@ -563,35 +686,17 @@ export class OpenStreamGridHlsPlugin {
       }
     }
 
-    const originData = await this.fetchFromOrigin(segmentUrl, signal);
-    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-
-    this.stats.bytesDownloadedOrigin += originData.byteLength;
-    this.stats.originRequests++;
-
-    if (this.verifier) {
-      const verification = await this.verifier.verifyUrl(segmentUrl, originData);
-      if (!verification.valid) {
-        this.stats.integrityFailures++;
-        this.emit({
-          type: "integrity_fail",
-          segment: segmentName,
-          message: `Expected ${verification.expectedHash}, got ${verification.actualHash}`,
-        });
-        throw new Error("Origin segment integrity check failed");
-      }
-      this.emit({ type: "integrity_ok", segment: segmentName });
-    }
-
-    this.cacheSegment(cacheKeyFrom(segmentUrl), segmentId, originData);
-
-    this.emit({
-      type: "origin_fallback",
-      segment: segmentName,
-      message: "Served from origin",
-    });
-
-    return { data: originData };
+    const originResult = await this.fetchVerifiedOrigin(
+      segmentName,
+      segmentUrl,
+      signal,
+    );
+    return this.completeSegmentLoad(
+      originResult,
+      segmentName,
+      segmentUrl,
+      segmentId,
+    );
   }
 
   private waitForSharedSegment(
@@ -639,49 +744,13 @@ export class OpenStreamGridHlsPlugin {
    */
   private async fetchFromPeers(
     candidates: PeerCandidate[],
+    segmentName: string,
+    segmentUrl: string,
     signal: AbortSignal,
-    onDecision?: (decision: SchedulerDecision) => void,
   ): Promise<PeerFetchResult | null> {
-    const context = this.schedulingContext(candidates);
-    try {
-      this.scheduler.reconcilePeers?.(context.candidates);
-    } catch (error) {
-      this.emit({
-        type: "scheduler_warning",
-        policy: this.scheduler.policyName,
-        code: "invalid_plan",
-        message: `Scheduler reconciliation failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-        segment: context.segmentId,
-      });
-      return null;
-    }
-    const { plan, warnings } = planSegmentSafely(this.scheduler, context);
-    for (const warning of warnings) {
-      this.emit({
-        type: "scheduler_warning",
-        policy: this.scheduler.policyName,
-        code: warning.code,
-        message: warning.message,
-        segment: context.segmentId,
-      });
-    }
-    onDecision?.(this.schedulerDecision(plan, candidates.length));
-    if (plan.mode !== "origin" && plan.peerIds.length > 0) {
-      this.stats.p2pRequests++;
-    }
-    const candidatesById = new Map(
-      candidates.map((candidate) => [candidate.peer.id, candidate]),
-    );
-    const plannedPeerIds =
-      plan.mode === "single-peer" || plan.mode === "parallel-peers"
-        ? plan.peerIds
-        : [];
-    const topPeers = plannedPeerIds
-      .slice(0, MAX_PARALLEL_PEER_PROBES)
-      .map((peerId) => candidatesById.get(peerId))
-      .filter((candidate): candidate is PeerCandidate => candidate !== undefined);
+    if (candidates.length === 0) return null;
+    this.stats.p2pRequests++;
+    const topPeers = candidates.slice(0, MAX_PARALLEL_PEER_PROBES);
     const controller = new AbortController();
     const onAbort = (): void => controller.abort(signal.reason);
     signal.addEventListener("abort", onAbort, { once: true });
@@ -693,6 +762,8 @@ export class OpenStreamGridHlsPlugin {
           this.fetchPeerAttempt(
             index,
             candidate,
+            segmentName,
+            segmentUrl,
             controller.signal,
           ),
         ]),
@@ -709,8 +780,54 @@ export class OpenStreamGridHlsPlugin {
     }
   }
 
+  private planPeerFetch(
+    candidates: PeerCandidate[],
+    deadline: SegmentDeadline | undefined,
+    onDecision?: (decision: SchedulerDecision) => void,
+  ): PlannedPeerFetch | undefined {
+    const context = this.schedulingContext(candidates, deadline);
+    try {
+      this.scheduler.reconcilePeers?.(context.candidates);
+    } catch (error) {
+      this.emit({
+        type: "scheduler_warning",
+        policy: this.scheduler.policyName,
+        code: "invalid_plan",
+        message: `Scheduler reconciliation failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        segment: context.segmentId,
+      });
+      return undefined;
+    }
+    const { plan, warnings } = planSegmentSafely(this.scheduler, context);
+    for (const warning of warnings) {
+      this.emit({
+        type: "scheduler_warning",
+        policy: this.scheduler.policyName,
+        code: warning.code,
+        message: warning.message,
+        segment: context.segmentId,
+      });
+    }
+    onDecision?.(this.schedulerDecision(plan, candidates.length));
+    const candidatesById = new Map(
+      candidates.map((candidate) => [candidate.peer.id, candidate]),
+    );
+    const plannedPeerIds =
+      plan.mode === "single-peer" || plan.mode === "parallel-peers"
+        ? plan.peerIds
+        : [];
+    const topPeers = plannedPeerIds
+      .slice(0, MAX_PARALLEL_PEER_PROBES)
+      .map((peerId) => candidatesById.get(peerId))
+      .filter((candidate): candidate is PeerCandidate => candidate !== undefined);
+    return { plan, candidates: topPeers };
+  }
+
   private schedulingContext(
     candidates: readonly PeerCandidate[],
+    deadline: SegmentDeadline | undefined,
   ): SegmentSchedulingContext {
     const schedulingPeers: SchedulingPeer[] = candidates.map(
       ({ peer, segmentId }, originalIndex) => ({
@@ -727,6 +844,7 @@ export class OpenStreamGridHlsPlugin {
     );
     return {
       segmentId: candidates[0]?.segmentId ?? "",
+      ...(deadline === undefined ? {} : { deadline }),
       candidates: schedulingPeers,
       selfPeerId: this.peerId,
       maximumParallelism: MAX_PARALLEL_PEER_PROBES,
@@ -750,6 +868,8 @@ export class OpenStreamGridHlsPlugin {
   private async fetchPeerAttempt(
     index: number,
     candidate: PeerCandidate,
+    segmentName: string,
+    segmentUrl: string,
     signal: AbortSignal,
   ): Promise<PeerFetchAttempt> {
     try {
@@ -758,6 +878,7 @@ export class OpenStreamGridHlsPlugin {
         this.peerTimeoutMs,
         signal,
       );
+      await this.verifySegment(segmentName, segmentUrl, data, "peer");
       return { index, peerId: candidate.peer.id, data };
     } catch {
       return { index };
@@ -839,12 +960,195 @@ export class OpenStreamGridHlsPlugin {
     url: string,
     signal: AbortSignal,
   ): Promise<Uint8Array> {
+    this.stats.originRequests++;
     const response = await fetch(url, { signal, method: "GET" });
     if (!response.ok) {
       throw new Error(`Origin returned HTTP ${response.status}`);
     }
     const buffer = await response.arrayBuffer();
     return new Uint8Array(buffer);
+  }
+
+  private async fetchVerifiedOrigin(
+    segmentName: string,
+    segmentUrl: string,
+    signal: AbortSignal,
+  ): Promise<SegmentLoadResult> {
+    const startedAt = performance.now();
+    const data = await this.fetchFromOrigin(segmentUrl, signal);
+    await this.verifySegment(segmentName, segmentUrl, data, "origin");
+    this.observeOriginLatency(performance.now() - startedAt);
+    return { source: "origin", data };
+  }
+
+  private async verifySegment(
+    segmentName: string,
+    segmentUrl: string,
+    data: Uint8Array,
+    source: "peer" | "origin",
+  ): Promise<void> {
+    if (!this.verifier) return;
+    const verification = await this.verifier.verifyUrl(segmentUrl, data);
+    if (verification.valid) return;
+    this.stats.integrityFailures++;
+    this.emit({
+      type: "integrity_fail",
+      segment: segmentName,
+      message: `Expected ${verification.expectedHash}, got ${verification.actualHash}`,
+    });
+    throw new Error(
+      source === "origin"
+        ? "Origin segment integrity check failed"
+        : "Segment integrity check failed",
+    );
+  }
+
+  private completeSegmentLoad(
+    result: SegmentLoadResult,
+    segmentName: string,
+    segmentUrl: string,
+    segmentId: string,
+  ): { data: Uint8Array } {
+    if (this.verifier) {
+      this.emit({ type: "integrity_ok", segment: segmentName });
+    }
+    if (result.source === "p2p") {
+      this.stats.bytesDownloadedP2P += result.data.byteLength;
+      this.stats.p2pSuccesses++;
+      this.emit({
+        type: "peer_fetched",
+        segment: segmentName,
+        peerId: result.peerId,
+      });
+    } else {
+      this.stats.bytesDownloadedOrigin += result.data.byteLength;
+      this.emit({
+        type: "origin_fallback",
+        segment: segmentName,
+        message: "Served from origin",
+      });
+    }
+    this.cacheSegment(cacheKeyFrom(segmentUrl), segmentId, result.data);
+    return { data: result.data };
+  }
+
+  private async hedgedLoad(
+    candidates: PeerCandidate[],
+    segmentName: string,
+    segmentUrl: string,
+    hedgeDelayMs: number,
+    signal: AbortSignal,
+  ): Promise<SegmentLoadResult> {
+    const peerController = new AbortController();
+    const originController = new AbortController();
+    const abortBoth = (): void => {
+      peerController.abort(this.abortReason(signal));
+      originController.abort(this.abortReason(signal));
+    };
+    signal.addEventListener("abort", abortBoth, { once: true });
+    if (signal.aborted) abortBoth();
+
+    const peerAttempt = this.captureHedgedLoad("p2p", async () => {
+      const result = await this.fetchFromPeers(
+        candidates,
+        segmentName,
+        segmentUrl,
+        peerController.signal,
+      );
+      if (!result) throw new Error("P2P probes failed");
+      return { ...result, source: "p2p" };
+    });
+    const originAttempt = this.captureHedgedLoad("origin", async () => {
+      await this.waitForHedge(hedgeDelayMs, originController.signal);
+      return this.fetchVerifiedOrigin(
+        segmentName,
+        segmentUrl,
+        originController.signal,
+      );
+    });
+    const pending = new Map([
+      ["p2p", peerAttempt],
+      ["origin", originAttempt],
+    ]);
+    const failures: unknown[] = [];
+    let peerFailed = false;
+
+    try {
+      while (pending.size > 0) {
+        const attempt = await Promise.race(pending.values());
+        pending.delete(attempt.source);
+        if (signal.aborted) throw this.abortReason(signal);
+        if (attempt.status === "rejected") {
+          failures.push(attempt.error);
+          if (attempt.source === "p2p") {
+            peerFailed = true;
+            this.stats.p2pFailures++;
+            this.stats.fallbacks++;
+          }
+          continue;
+        }
+
+        if (attempt.source === "p2p") {
+          originController.abort(
+            new DOMException("P2P hedge won", "AbortError"),
+          );
+        } else {
+          peerController.abort(
+            new DOMException("Origin hedge won", "AbortError"),
+          );
+          if (!peerFailed) this.stats.fallbacks++;
+        }
+        return attempt.result;
+      }
+      throw new Error(
+        `P2P and Origin failed for '${segmentName}': ${failures
+          .map((error) =>
+            error instanceof Error ? error.message : String(error),
+          )
+          .join("; ")}`,
+      );
+    } finally {
+      peerController.abort(
+        new DOMException("Hedged load settled", "AbortError"),
+      );
+      originController.abort(
+        new DOMException("Hedged load settled", "AbortError"),
+      );
+      signal.removeEventListener("abort", abortBoth);
+    }
+  }
+
+  private async captureHedgedLoad(
+    source: SegmentLoadResult["source"],
+    load: () => Promise<SegmentLoadResult>,
+  ): Promise<HedgedLoadAttempt> {
+    try {
+      return { source, status: "fulfilled", result: await load() };
+    } catch (error) {
+      return { source, status: "rejected", error };
+    }
+  }
+
+  private waitForHedge(delayMs: number, signal: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const finish = (callback: () => void): void => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", onAbort);
+        callback();
+      };
+      const onAbort = (): void =>
+        finish(() => reject(this.abortReason(signal)));
+      const timer = setTimeout(() => finish(resolve), delayMs);
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) onAbort();
+    });
+  }
+
+  private observeOriginLatency(observedMs: number): void {
+    if (!Number.isFinite(observedMs) || observedMs < 0) return;
+    this.originLatencyEstimateMs =
+      ORIGIN_LATENCY_EMA_ALPHA * observedMs +
+      (1 - ORIGIN_LATENCY_EMA_ALPHA) * this.originLatencyEstimateMs;
   }
 
   private emit(event: SdkEvent): void {

@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="330" viewBox="0 0 900 330" role="img" aria-labelledby="title desc">
+  <title id="title">Peer winning-source rate</title>
+  <desc id="desc">Horizontal bars compare four scheduler policies from zero to one hundred percent.</desc>
+  <rect width="900" height="330" fill="white"/>
+  <text x="12" y="34" font-size="22" font-weight="600">Peer winning-source rate</text>
+  <text x="12" y="92" font-size="16">Node-legacy</text>
+  <rect x="220" y="70" width="620" height="28" fill="#e5e7eb" rx="4"/>
+  <rect x="220" y="70" width="480.5" height="28" fill="#059669" rx="4"/>
+  <text x="708.5" y="90" font-size="14">77.5%</text>
+  <text x="12" y="150" font-size="16">Node-deadline-aware</text>
+  <rect x="220" y="128" width="620" height="28" fill="#e5e7eb" rx="4"/>
+  <rect x="220" y="128" width="395.25" height="28" fill="#059669" rx="4"/>
+  <text x="623.25" y="148" font-size="14">63.75%</text>
+  <text x="12" y="208" font-size="16">Browser-legacy</text>
+  <rect x="220" y="186" width="620" height="28" fill="#e5e7eb" rx="4"/>
+  <rect x="220" y="186" width="612.25" height="28" fill="#059669" rx="4"/>
+  <text x="795" y="206" font-size="14">98.75%</text>
+  <text x="12" y="266" font-size="16">Browser-deadline-aware</text>
+  <rect x="220" y="244" width="620" height="28" fill="#e5e7eb" rx="4"/>
+  <rect x="220" y="244" width="505.3" height="28" fill="#059669" rx="4"/>
+  <text x="733.3" y="264" font-size="14">81.5%</text>
+  <text x="220" y="316" font-size="12">0%</text>
+  <text x="810" y="316" font-size="12">100%</text>
+</svg>
