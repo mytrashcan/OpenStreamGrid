@@ -659,13 +659,14 @@ export class OpenStreamGridHlsPlugin {
   ): Promise<PeerFetchResult | null> {
     if (candidates.length === 0) return null;
     this.stats.p2pRequests++;
+    const topPeers = candidates.slice(0, MAX_PARALLEL_PEER_PROBES);
     const controller = new AbortController();
     const onAbort = (): void => controller.abort(signal.reason);
     signal.addEventListener("abort", onAbort, { once: true });
     if (signal.aborted) onAbort();
     try {
       const pending = new Map(
-        candidates.map((candidate, index) => [
+        topPeers.map((candidate, index) => [
           index,
           this.fetchPeerAttempt(
             index,
