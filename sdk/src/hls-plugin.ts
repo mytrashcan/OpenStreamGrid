@@ -24,6 +24,7 @@ import {
   validatePeerHttpBaseUrl,
   type SchedulerDecision,
   type SchedulingPeer,
+  type SegmentDeadline,
   type SegmentScheduler,
   type SegmentSchedulingContext,
   type SegmentSchedulingPlan,
@@ -31,6 +32,7 @@ import {
 import type {
   default as Hls,
   HlsConfig,
+  FragmentLoaderContext,
   Loader,
   LoaderCallbacks,
   LoaderConfiguration,
@@ -85,6 +87,51 @@ interface PlannedPeerFetch {
 export interface PeerCandidate {
   peer: PeerInfo;
   segmentId: string;
+}
+
+/**
+ * Derives a wall-clock scheduling deadline from documented Hls.js fragment
+ * timing and the currently attached media element.
+ */
+export function deriveBrowserDeadline(
+  context: LoaderContext,
+  plugin: OpenStreamGridHlsPlugin,
+): SegmentDeadline | undefined {
+  if (!plugin.isDeadlineSchedulingEnabled()) return undefined;
+  const media = plugin.deadlineMediaElement();
+  const fragment = (context as Partial<FragmentLoaderContext>).frag;
+  if (!media || !fragment || media.seeking) {
+    if (media?.seeking) plugin.resetDeadlineContinuity();
+    return undefined;
+  }
+
+  const fragmentStartSec = fragment.start;
+  const fragmentDurationSec = fragment.duration;
+  const currentTime = media.currentTime;
+  if (
+    !Number.isFinite(fragmentStartSec) ||
+    !Number.isFinite(fragmentDurationSec) ||
+    fragmentDurationSec <= 0 ||
+    !Number.isFinite(currentTime)
+  ) {
+    return undefined;
+  }
+  if (!plugin.acceptDeadlineContinuity(fragment.cc)) return undefined;
+
+  const configuredPlaybackRate = media.playbackRate;
+  const playbackRate =
+    Number.isFinite(configuredPlaybackRate) && configuredPlaybackRate > 0
+      ? Math.max(0.1, configuredPlaybackRate)
+      : 1;
+  const fragmentEndTime = fragmentStartSec + fragmentDurationSec;
+  const slackSeconds = (fragmentEndTime - currentTime) / playbackRate;
+  const segmentDurationMs = Math.round(fragmentDurationSec * 1_000);
+  return {
+    kind: "player-derived",
+    slackMs:
+      slackSeconds > 0 ? Math.round(slackSeconds * 1_000) : 0,
+    segmentDurationMs,
+  };
 }
 
 export function sortBrowserCandidates(
@@ -199,7 +246,13 @@ class OpenStreamGridLoader implements Loader<LoaderContext> {
     signal: AbortSignal,
   ): Promise<void> {
     try {
-      const result = await this.plugin.loadSegment(segmentName, url, signal);
+      const deadline = deriveBrowserDeadline(context, this.plugin);
+      const result = await this.plugin.loadSegment(
+        segmentName,
+        url,
+        signal,
+        deadline,
+      );
       if (this.aborted || this.timedOut) return;
       this.stats.loading.end = performance.now();
       this.stats.loading.first = this.stats.loading.end;
@@ -311,6 +364,7 @@ export class OpenStreamGridHlsPlugin {
   private readonly broadcastId: string;
   private readonly trackerUrl: string;
   private readonly peerParticipation: boolean;
+  private readonly deadlineSchedulingEnabled: boolean;
   private readonly scheduler: SegmentScheduler;
   private readonly webRtcOptions: Pick<
     HlsjsPluginConfig,
@@ -331,6 +385,7 @@ export class OpenStreamGridHlsPlugin {
   private attachedHls: Hls | undefined;
   private originalLoader: HlsConfig["loader"] | undefined;
   private installedLoader: HlsConfig["loader"] | undefined;
+  private deadlineContinuityCounter: number | undefined;
 
   constructor(config: HlsjsPluginConfig) {
     if (config.peerId !== undefined && config.peerId.trim() === "") {
@@ -340,6 +395,8 @@ export class OpenStreamGridHlsPlugin {
     this.broadcastId = config.broadcastId;
     this.trackerUrl = config.trackerUrl;
     this.peerParticipation = config.peerParticipation !== false;
+    this.deadlineSchedulingEnabled =
+      config.deadlineSchedulingEnabled !== false;
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const plugin = this;
     this.scheduler =
@@ -474,6 +531,30 @@ export class OpenStreamGridHlsPlugin {
     this.attachedHls = undefined;
     this.originalLoader = undefined;
     this.installedLoader = undefined;
+    this.deadlineContinuityCounter = undefined;
+  }
+
+  /** @internal Playback element used by the Hls.js loader deadline adapter. */
+  deadlineMediaElement(): HTMLMediaElement | null {
+    return this.attachedHls?.media ?? null;
+  }
+
+  /** @internal Whether playback deadline derivation is enabled. */
+  isDeadlineSchedulingEnabled(): boolean {
+    return this.deadlineSchedulingEnabled;
+  }
+
+  /** @internal Rejects the first timing sample after an HLS discontinuity. */
+  acceptDeadlineContinuity(continuityCounter: number): boolean {
+    if (!Number.isFinite(continuityCounter)) return false;
+    const previous = this.deadlineContinuityCounter;
+    this.deadlineContinuityCounter = continuityCounter;
+    return previous === undefined || previous === continuityCounter;
+  }
+
+  /** @internal Clears fragment continuity state after a playback seek. */
+  resetDeadlineContinuity(): void {
+    this.deadlineContinuityCounter = undefined;
   }
 
   /**
@@ -488,6 +569,7 @@ export class OpenStreamGridHlsPlugin {
     segmentName: string,
     segmentUrl: string,
     signal: AbortSignal,
+    deadline?: SegmentDeadline,
   ): Promise<{ data: Uint8Array }> {
     if (signal.aborted) throw this.abortReason(signal);
     const cacheKey = this.segmentCacheKey(segmentUrl);
@@ -499,7 +581,12 @@ export class OpenStreamGridHlsPlugin {
 
     let request = this.inFlightSegments.get(cacheKey);
     if (!request) {
-      request = this.startSharedSegment(cacheKey, segmentName, segmentUrl);
+      request = this.startSharedSegment(
+        cacheKey,
+        segmentName,
+        segmentUrl,
+        deadline,
+      );
     }
     return this.waitForSharedSegment(request, signal);
   }
@@ -508,6 +595,7 @@ export class OpenStreamGridHlsPlugin {
     cacheKey: string,
     segmentName: string,
     segmentUrl: string,
+    deadline: SegmentDeadline | undefined,
   ): InFlightSegment {
     const controller = new AbortController();
     let request: InFlightSegment;
@@ -515,6 +603,7 @@ export class OpenStreamGridHlsPlugin {
       segmentName,
       segmentUrl,
       controller.signal,
+      deadline,
     ).finally(() => {
       request.settled = true;
       if (this.inFlightSegments.get(cacheKey) === request) {
@@ -530,6 +619,7 @@ export class OpenStreamGridHlsPlugin {
     segmentName: string,
     segmentUrl: string,
     signal: AbortSignal,
+    deadline: SegmentDeadline | undefined,
   ): Promise<{ data: Uint8Array }> {
     this.emit({ type: "cache_miss", segment: segmentName });
 
@@ -537,7 +627,7 @@ export class OpenStreamGridHlsPlugin {
     const candidates = this.peerCandidates(segmentId, segmentName);
     const planned =
       candidates.length > 0
-        ? this.planPeerFetch(candidates, (decision) => {
+        ? this.planPeerFetch(candidates, deadline, (decision) => {
             this.emit({
               type: "scheduler_decision",
               policy: decision.policy,
@@ -692,9 +782,10 @@ export class OpenStreamGridHlsPlugin {
 
   private planPeerFetch(
     candidates: PeerCandidate[],
+    deadline: SegmentDeadline | undefined,
     onDecision?: (decision: SchedulerDecision) => void,
   ): PlannedPeerFetch | undefined {
-    const context = this.schedulingContext(candidates);
+    const context = this.schedulingContext(candidates, deadline);
     try {
       this.scheduler.reconcilePeers?.(context.candidates);
     } catch (error) {
@@ -736,6 +827,7 @@ export class OpenStreamGridHlsPlugin {
 
   private schedulingContext(
     candidates: readonly PeerCandidate[],
+    deadline: SegmentDeadline | undefined,
   ): SegmentSchedulingContext {
     const schedulingPeers: SchedulingPeer[] = candidates.map(
       ({ peer, segmentId }, originalIndex) => ({
@@ -752,6 +844,7 @@ export class OpenStreamGridHlsPlugin {
     );
     return {
       segmentId: candidates[0]?.segmentId ?? "",
+      ...(deadline === undefined ? {} : { deadline }),
       candidates: schedulingPeers,
       selfPeerId: this.peerId,
       maximumParallelism: MAX_PARALLEL_PEER_PROBES,

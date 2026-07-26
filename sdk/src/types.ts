@@ -64,6 +64,8 @@ export interface HlsjsPluginConfig {
   verifySegments?: boolean;
   /** Segment scheduling policy (default: TrustLatencyProbeScheduler). */
   scheduler?: SegmentScheduler;
+  /** Derive scheduling deadlines from Hls.js playback state (default: true). */
+  deadlineSchedulingEnabled?: boolean;
   /** Callback for stats / debug events. */
   onEvent?: (event: SdkEvent) => void;
   /** Callback when the plugin is ready (first WS connection established). */
