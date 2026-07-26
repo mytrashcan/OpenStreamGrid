@@ -20,6 +20,7 @@
 
 import {
   createLogger,
+  planSegmentSafely,
   validatePeerHttpBaseUrl,
   type SchedulerDecision,
   type SchedulingPeer,
@@ -420,6 +421,14 @@ export class OpenStreamGridHlsPlugin {
     this.wsClient.stop();
     this.webRtcPeer?.stop();
     this.webRtcPeer = undefined;
+    try {
+      this.scheduler.reset?.();
+    } catch (error) {
+      logger.warn("scheduler_reset_failed", {
+        policy: this.scheduler.policyName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     if (this.registrationRetry) clearTimeout(this.registrationRetry);
     if (this.sessionRefresh) clearTimeout(this.sessionRefresh);
     this.registrationRetry = undefined;
@@ -497,7 +506,6 @@ export class OpenStreamGridHlsPlugin {
     const segmentId = this.segmentPeerId(segmentUrl);
     const candidates = this.peerCandidates(segmentId, segmentName);
     if (candidates.length > 0) {
-      this.stats.p2pRequests++;
       try {
         const result = await this.fetchFromPeers(
           candidates,
@@ -635,9 +643,34 @@ export class OpenStreamGridHlsPlugin {
     onDecision?: (decision: SchedulerDecision) => void,
   ): Promise<PeerFetchResult | null> {
     const context = this.schedulingContext(candidates);
-    this.scheduler.reconcilePeers?.(context.candidates);
-    const plan = this.scheduler.planSegment(context);
+    try {
+      this.scheduler.reconcilePeers?.(context.candidates);
+    } catch (error) {
+      this.emit({
+        type: "scheduler_warning",
+        policy: this.scheduler.policyName,
+        code: "invalid_plan",
+        message: `Scheduler reconciliation failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        segment: context.segmentId,
+      });
+      return null;
+    }
+    const { plan, warnings } = planSegmentSafely(this.scheduler, context);
+    for (const warning of warnings) {
+      this.emit({
+        type: "scheduler_warning",
+        policy: this.scheduler.policyName,
+        code: warning.code,
+        message: warning.message,
+        segment: context.segmentId,
+      });
+    }
     onDecision?.(this.schedulerDecision(plan, candidates.length));
+    if (plan.mode !== "origin" && plan.peerIds.length > 0) {
+      this.stats.p2pRequests++;
+    }
     const candidatesById = new Map(
       candidates.map((candidate) => [candidate.peer.id, candidate]),
     );
@@ -680,13 +713,15 @@ export class OpenStreamGridHlsPlugin {
     candidates: readonly PeerCandidate[],
   ): SegmentSchedulingContext {
     const schedulingPeers: SchedulingPeer[] = candidates.map(
-      ({ peer }, originalIndex) => ({
+      ({ peer, segmentId }, originalIndex) => ({
         id: peer.id,
         latencyMs: peer.latencyMs,
         successRate: peer.successRate,
         uploadBandwidthBps: peer.uploadBandwidthBps ?? 0,
         trustScore: peer.trustScore,
-        segments: peer.segments,
+        segments: peer.segments.includes(segmentId)
+          ? peer.segments
+          : [...peer.segments, segmentId],
         originalIndex,
       }),
     );

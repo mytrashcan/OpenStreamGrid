@@ -99,6 +99,13 @@ export type SdkEvent =
       reason: string;
       candidateCount: number;
       selectedPeerCount: number;
+    }
+  | {
+      type: "scheduler_warning";
+      policy: string;
+      code: string;
+      message: string;
+      segment?: string;
     };
 
 /** Message types for tracker WebSocket communication. */
