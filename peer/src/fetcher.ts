@@ -76,9 +76,11 @@ export interface SegmentFetchResult {
 }
 
 interface InFlightSegment {
-  controller: AbortController;
+  internalController: AbortController;
   peerId?: string;
   promise: Promise<SegmentFetchResult>;
+  consumerControllers: Set<AbortController>;
+  settled: boolean;
 }
 
 type HedgedAttempt =
@@ -263,13 +265,13 @@ export class HybridSegmentFetcher {
         }
 
         const existing = this.inFlightSegments.get(segmentName);
-        if (existing) return existing.promise;
+        if (existing) return this.waitForSegment(existing);
 
         const peer =
           assignment.peerId === undefined
             ? undefined
             : peersById.get(assignment.peerId);
-        return this.startSegmentFetch(segmentName, peer);
+        return this.waitForSegment(this.startSegmentFetch(segmentName, peer));
       });
 
       const settled = await Promise.allSettled(tasks);
@@ -298,7 +300,14 @@ export class HybridSegmentFetcher {
   /** Aborts outstanding peer and Origin requests during application shutdown. */
   stop(): void {
     if (this.shutdownController.signal.aborted) return;
-    this.shutdownController.abort(new Error("Segment fetcher stopped"));
+    const reason = new Error("Segment fetcher stopped");
+    this.shutdownController.abort(reason);
+    for (const request of this.inFlightSegments.values()) {
+      for (const controller of request.consumerControllers) {
+        controller.abort(reason);
+      }
+      request.internalController.abort(reason);
+    }
     try {
       this.scheduler.reset?.();
     } catch (error) {
@@ -312,22 +321,27 @@ export class HybridSegmentFetcher {
   private startSegmentFetch(
     segmentName: string,
     peer: Peer | undefined,
-  ): Promise<SegmentFetchResult> {
-    const controller = new AbortController();
+  ): InFlightSegment {
+    const internalController = new AbortController();
+    let request: InFlightSegment;
     const promise = this.fetchAssignedSegment(
       segmentName,
       peer,
-      controller.signal,
+      internalController.signal,
     ).finally(() => {
+      request.settled = true;
       const current = this.inFlightSegments.get(segmentName);
       if (current?.promise === promise) this.inFlightSegments.delete(segmentName);
     });
-    this.inFlightSegments.set(segmentName, {
-      controller,
+    request = {
+      internalController,
       ...(peer ? { peerId: peer.id } : {}),
       promise,
-    });
-    return promise;
+      consumerControllers: new Set(),
+      settled: false,
+    };
+    this.inFlightSegments.set(segmentName, request);
+    return request;
   }
 
   private async fetchAssignedSegment(
@@ -608,18 +622,24 @@ export class HybridSegmentFetcher {
     segmentName: string,
     segmentsAhead: number,
   ): InFlightSegment {
-    const controller = new AbortController();
+    const internalController = new AbortController();
     let request: InFlightSegment;
     const promise = this.fetchUncachedSegment(
       segmentName,
       segmentsAhead,
-      controller.signal,
+      internalController.signal,
     ).finally(() => {
+      request.settled = true;
       if (this.inFlightSegments.get(segmentName) === request) {
         this.inFlightSegments.delete(segmentName);
       }
     });
-    request = { controller, promise };
+    request = {
+      internalController,
+      promise,
+      consumerControllers: new Set(),
+      settled: false,
+    };
     this.inFlightSegments.set(segmentName, request);
     return request;
   }
@@ -628,16 +648,44 @@ export class HybridSegmentFetcher {
     request: InFlightSegment,
     signal?: AbortSignal,
   ): Promise<SegmentFetchResult> {
-    if (!signal) return request.promise;
-    if (signal.aborted) throw this.abortReason(signal);
-    const onAbort = (): void => request.controller.abort(this.abortReason(signal));
-    signal.addEventListener("abort", onAbort, { once: true });
-    try {
-      if (signal.aborted) onAbort();
-      return await request.promise;
-    } finally {
-      signal.removeEventListener("abort", onAbort);
-    }
+    if (signal?.aborted) throw this.abortReason(signal);
+    const consumerController = new AbortController();
+    request.consumerControllers.add(consumerController);
+    const onSignalAbort = (): void =>
+      consumerController.abort(this.abortReason(signal));
+    signal?.addEventListener("abort", onSignalAbort, { once: true });
+
+    return new Promise((resolve, reject) => {
+      let finished = false;
+      const finish = (callback: () => void): void => {
+        if (finished) return;
+        finished = true;
+        signal?.removeEventListener("abort", onSignalAbort);
+        consumerController.signal.removeEventListener("abort", onConsumerAbort);
+        request.consumerControllers.delete(consumerController);
+        callback();
+        if (
+          request.consumerControllers.size === 0 &&
+          !request.settled &&
+          consumerController.signal.aborted
+        ) {
+          request.internalController.abort(
+            consumerController.signal.reason ??
+              new Error("All segment consumers aborted"),
+          );
+        }
+      };
+      const onConsumerAbort = (): void =>
+        finish(() => reject(this.abortReason(consumerController.signal)));
+      consumerController.signal.addEventListener("abort", onConsumerAbort, {
+        once: true,
+      });
+      request.promise.then(
+        (result) => finish(() => resolve(result)),
+        (error: unknown) => finish(() => reject(error)),
+      );
+      if (signal?.aborted) onSignalAbort();
+    });
   }
 
   private async hedgedFetch(

@@ -360,6 +360,99 @@ test("coalesces concurrent requests for the same segment", async () => {
   assert.equal(requests, 1);
 });
 
+test("keeps a coalesced request alive when one consumer aborts", async () => {
+  let release: (() => void) | undefined;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let underlyingAborted = false;
+  const fetcher = new HybridSegmentFetcher({
+    selfPeerId: "self",
+    originBaseUrl: new URL("http://origin:8080/hls/"),
+    cache: new SegmentCache(1_000),
+    directory: { async listPeers() { return []; }, async reportFailure() {} },
+    verifier,
+    stats: new TrafficStats(),
+    fetchImpl: async (_input, init) => {
+      init?.signal?.addEventListener(
+        "abort",
+        () => {
+          underlyingAborted = true;
+        },
+        { once: true },
+      );
+      await blocked;
+      return new Response("shared-segment");
+    },
+  });
+  const firstController = new AbortController();
+  const secondController = new AbortController();
+
+  const first = fetcher.fetchSegment(
+    "segment.ts",
+    0,
+    firstController.signal,
+  );
+  const second = fetcher.fetchSegment(
+    "segment.ts",
+    0,
+    secondController.signal,
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  firstController.abort(new Error("first consumer cancelled"));
+
+  await assert.rejects(first, /first consumer cancelled/);
+  assert.equal(underlyingAborted, false);
+  release?.();
+  assert.equal((await second).data.toString(), "shared-segment");
+});
+
+test("aborts coalesced work after all consumers abort", async () => {
+  let underlyingAborted: (() => void) | undefined;
+  const aborted = new Promise<void>((resolve) => {
+    underlyingAborted = resolve;
+  });
+  const fetcher = new HybridSegmentFetcher({
+    selfPeerId: "self",
+    originBaseUrl: new URL("http://origin:8080/hls/"),
+    cache: new SegmentCache(1_000),
+    directory: { async listPeers() { return []; }, async reportFailure() {} },
+    verifier,
+    stats: new TrafficStats(),
+    fetchImpl: async (_input, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => {
+            underlyingAborted?.();
+            reject(init.signal?.reason);
+          },
+          { once: true },
+        );
+      }),
+  });
+  const firstController = new AbortController();
+  const secondController = new AbortController();
+
+  const first = fetcher.fetchSegment(
+    "segment.ts",
+    0,
+    firstController.signal,
+  );
+  const second = fetcher.fetchSegment(
+    "segment.ts",
+    0,
+    secondController.signal,
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  firstController.abort(new Error("first consumer cancelled"));
+  await assert.rejects(first, /first consumer cancelled/);
+
+  secondController.abort(new Error("second consumer cancelled"));
+  await assert.rejects(second, /second consumer cancelled/);
+  await aborted;
+});
+
 test("returns cached data and handles empty parallel input", async () => {
   const cache = new SegmentCache(1_000);
   cache.set("cached.ts", Buffer.from("cached-data"));
