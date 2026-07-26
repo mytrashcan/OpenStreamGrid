@@ -112,6 +112,22 @@ deployment. The origin can generate multiple test channels and three HLS
 renditions per channel. Production media origins can register their own
 playlist URLs through the same API.
 
+## Scheduling
+
+OpenStreamGrid uses the shared `SegmentScheduler` contract with runtime-specific
+default policies. Node peers use `WeightedScoreScheduler`, which combines
+latency, success rate, upload bandwidth, and trust from longer-lived peer
+observations. The browser SDK uses `TrustLatencyProbeScheduler`, which ranks the
+tracker snapshot by trust and then latency before probing up to three peers in
+parallel. The policies differ because browser playback sessions have less
+persistent peer-quality history than Node peers.
+
+Applications can inject a custom scheduler through the Node fetcher or the
+browser SDK's `scheduler` option. Browser decisions are observable through the
+`scheduler_decision` SDK event. Regardless of policy, the delivery layer treats
+Origin/CDN fallback as authoritative whenever P2P is unavailable or a plan
+chooses Origin.
+
 ## Features
 
 - Hybrid HTTP/WebRTC segment delivery with immediate origin fallback.

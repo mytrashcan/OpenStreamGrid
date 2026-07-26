@@ -3,6 +3,10 @@ import {
   validatePeerHttpBaseUrl,
   type Peer,
   type PeerFailureReport,
+  type SchedulerDecision,
+  type SchedulingPeer,
+  type SegmentScheduler,
+  type SegmentSchedulingContext,
 } from "@openstreamgrid/common";
 import type { SegmentCache } from "./cache.js";
 import type { TrafficStats } from "./stats.js";
@@ -12,70 +16,34 @@ import type {
 } from "./verifier.js";
 import type { TransportManager } from "./transport-manager.js";
 import { keepAliveFetch } from "./http-client.js";
+import {
+  MAX_PARALLEL_DOWNLOADS_VALUE,
+  schedulerDecisionFor,
+  planSegmentSafely,
+  URGENT_THRESHOLD_SEGMENTS_VALUE,
+  WeightedScoreScheduler,
+} from "./weighted-score-scheduler.js";
 
 const DEFAULT_P2P_TIMEOUT_MS = 2_000;
-const DEFAULT_URGENT_THRESHOLD_SEGMENTS = 2;
-const DEFAULT_MAX_PARALLEL_DOWNLOADS = 3;
 const DEFAULT_ORIGIN_TIMEOUT_MS = 10_000;
-const MINIMUM_TRUST_SCORE = 0.3;
-const METRIC_EMA_ALPHA = 0.3;
 const MAX_TRACKED_SEGMENT_SOURCES = 2_000;
-
-const LATENCY_WEIGHT = 0.3;
-const SUCCESS_RATE_WEIGHT = 0.3;
-const UPLOAD_BANDWIDTH_WEIGHT = 0.2;
-const TRUST_SCORE_WEIGHT = 0.2;
-
-export const MINIMUM_TRUST_SCORE_VALUE = MINIMUM_TRUST_SCORE;
-export const METRIC_EMA_ALPHA_VALUE = METRIC_EMA_ALPHA;
-export const LATENCY_WEIGHT_VALUE = LATENCY_WEIGHT;
-export const SUCCESS_RATE_WEIGHT_VALUE = SUCCESS_RATE_WEIGHT;
-export const UPLOAD_BANDWIDTH_WEIGHT_VALUE = UPLOAD_BANDWIDTH_WEIGHT;
-export const TRUST_SCORE_WEIGHT_VALUE = TRUST_SCORE_WEIGHT;
-export const URGENT_THRESHOLD_SEGMENTS_VALUE =
-  DEFAULT_URGENT_THRESHOLD_SEGMENTS;
-export const MAX_PARALLEL_DOWNLOADS_VALUE = DEFAULT_MAX_PARALLEL_DOWNLOADS;
 
 const logger = createLogger("peer");
 
-const clamp = (value: number, minimum: number, maximum: number): number =>
-  Math.min(maximum, Math.max(minimum, value));
-
-export { clamp };
-
-/** Quality measurements used to rank a potential segment source. */
-export interface PeerQualityMetrics {
-  latencyMs: number;
-  successRate: number;
-  uploadBandwidthBps: number;
-  trustScore: number;
-}
-
-/** Updates a metric using the selector's exponential moving average. */
-export const exponentialMovingAverage = (
-  previous: number,
-  observed: number,
-): number => METRIC_EMA_ALPHA * observed + (1 - METRIC_EMA_ALPHA) * previous;
-
-/** Produces a normalized weighted quality score for a peer. */
-export const calculatePeerScore = (
-  metrics: PeerQualityMetrics,
-  maximumUploadBandwidthBps: number,
-): number => {
-  const latencyScore = 1 - Math.min(Math.max(metrics.latencyMs, 0) / 1_000, 1);
-  const successRateScore = clamp(metrics.successRate, 0, 1);
-  const uploadBandwidthScore =
-    maximumUploadBandwidthBps <= 0
-      ? 0
-      : clamp(metrics.uploadBandwidthBps / maximumUploadBandwidthBps, 0, 1);
-  const trustScore = clamp(metrics.trustScore, 0, 1);
-  return (
-    LATENCY_WEIGHT * latencyScore +
-    SUCCESS_RATE_WEIGHT * successRateScore +
-    UPLOAD_BANDWIDTH_WEIGHT * uploadBandwidthScore +
-    TRUST_SCORE_WEIGHT * trustScore
-  );
-};
+export {
+  calculatePeerScore,
+  clamp,
+  exponentialMovingAverage,
+  LATENCY_WEIGHT_VALUE,
+  MAX_PARALLEL_DOWNLOADS_VALUE,
+  METRIC_EMA_ALPHA_VALUE,
+  MINIMUM_TRUST_SCORE_VALUE,
+  SUCCESS_RATE_WEIGHT_VALUE,
+  TRUST_SCORE_WEIGHT_VALUE,
+  UPLOAD_BANDWIDTH_WEIGHT_VALUE,
+  URGENT_THRESHOLD_SEGMENTS_VALUE,
+} from "./weighted-score-scheduler.js";
+export type { PeerQualityMetrics } from "./weighted-score-scheduler.js";
 
 /** Peer discovery and failure-reporting operations required by the fetcher. */
 export interface PeerDirectory {
@@ -83,7 +51,7 @@ export interface PeerDirectory {
   reportFailure(peerId: string, reason: PeerFailureReport["reason"]): Promise<void>;
 }
 
-interface FetcherOptions {
+export interface FetcherOptions {
   selfPeerId: string;
   originBaseUrl: URL;
   cache: SegmentCache;
@@ -95,6 +63,8 @@ interface FetcherOptions {
   urgentThresholdSegments?: number;
   maxParallel?: number;
   transportManager?: TransportManager;
+  scheduler?: SegmentScheduler;
+  onSchedulerDecision?: (decision: SchedulerDecision) => void;
 }
 
 /** Segment bytes and the delivery path that supplied them. */
@@ -118,7 +88,7 @@ export class HybridSegmentFetcher {
   private readonly p2pTimeoutMs: number;
   private readonly urgentThresholdSegments: number;
   private readonly maxParallel: number;
-  private readonly peerMetrics = new Map<string, PeerQualityMetrics>();
+  private readonly scheduler: SegmentScheduler;
   private readonly inFlightSegments = new Map<
     string,
     { peerId?: string; promise: Promise<SegmentFetchResult> }
@@ -133,11 +103,16 @@ export class HybridSegmentFetcher {
     this.fetchImpl = options.fetchImpl ?? keepAliveFetch;
     this.p2pTimeoutMs = options.p2pTimeoutMs ?? DEFAULT_P2P_TIMEOUT_MS;
     this.urgentThresholdSegments =
-      options.urgentThresholdSegments ?? DEFAULT_URGENT_THRESHOLD_SEGMENTS;
-    this.maxParallel = options.maxParallel ?? DEFAULT_MAX_PARALLEL_DOWNLOADS;
+      options.urgentThresholdSegments ?? URGENT_THRESHOLD_SEGMENTS_VALUE;
+    this.maxParallel = options.maxParallel ?? MAX_PARALLEL_DOWNLOADS_VALUE;
     if (!Number.isSafeInteger(this.maxParallel) || this.maxParallel <= 0) {
       throw new Error("Maximum parallel downloads must be a positive integer");
     }
+    this.scheduler =
+      options.scheduler ??
+      new WeightedScoreScheduler({
+        urgentThresholdSegments: this.urgentThresholdSegments,
+      });
   }
 
   async fetchSegment(
@@ -176,6 +151,8 @@ export class HybridSegmentFetcher {
       try {
         peers = this.rankPeers(
           await this.options.directory.listPeers(segmentName),
+          segmentName,
+          segmentsAhead,
         );
       } catch (error) {
         this.options.stats.recordFallback();
@@ -186,7 +163,12 @@ export class HybridSegmentFetcher {
         const startedAt = performance.now();
         try {
           const data = await this.fetchFromPeer(peer, segmentName);
-          this.observePeer(peer, performance.now() - startedAt, true, data.byteLength);
+          this.scheduler.observePeer?.({
+            peerId: peer.id,
+            succeeded: true,
+            latencyMs: performance.now() - startedAt,
+            bytes: data.byteLength,
+          });
           this.cache(segmentName, data);
           this.setLastSource(segmentName, "p2p");
           return { data, source: "p2p" };
@@ -195,13 +177,13 @@ export class HybridSegmentFetcher {
             error instanceof PeerFetchError
               ? error
               : new PeerFetchError("Peer request failed", "connection");
-          this.observePeer(
-            peer,
-            performance.now() - startedAt,
-            false,
-            0,
-            failure.reason,
-          );
+          this.scheduler.observePeer?.({
+            peerId: peer.id,
+            succeeded: false,
+            latencyMs: performance.now() - startedAt,
+            bytes: 0,
+            failureReason: failure.reason,
+          });
           this.options.stats.recordP2PFailure();
           this.options.stats.recordFallback();
           void this.options.directory
@@ -318,7 +300,12 @@ export class HybridSegmentFetcher {
       const startedAt = performance.now();
       try {
         const data = await this.fetchFromPeer(peer, segmentName);
-        this.observePeer(peer, performance.now() - startedAt, true, data.byteLength);
+        this.scheduler.observePeer?.({
+          peerId: peer.id,
+          succeeded: true,
+          latencyMs: performance.now() - startedAt,
+          bytes: data.byteLength,
+        });
         this.cache(segmentName, data);
         return { data, source: "p2p" };
       } catch (error) {
@@ -326,13 +313,13 @@ export class HybridSegmentFetcher {
           error instanceof PeerFetchError
             ? error
             : new PeerFetchError("Peer request failed", "connection");
-        this.observePeer(
-          peer,
-          performance.now() - startedAt,
-          false,
-          0,
-          failure.reason,
-        );
+        this.scheduler.observePeer?.({
+          peerId: peer.id,
+          succeeded: false,
+          latencyMs: performance.now() - startedAt,
+          bytes: 0,
+          failureReason: failure.reason,
+        });
         this.options.stats.recordP2PFailure();
         this.options.stats.recordFallback();
         void this.options.directory
@@ -350,89 +337,57 @@ export class HybridSegmentFetcher {
     return { data, source: "origin" };
   }
 
-  private rankPeers(peers: Peer[]): Peer[] {
-    const currentPeerIds = new Set(peers.map((peer) => peer.id));
-    for (const peerId of this.peerMetrics.keys()) {
-      if (!currentPeerIds.has(peerId)) this.peerMetrics.delete(peerId);
-    }
-    const candidates = peers
-      .filter(
-        (peer) =>
-          peer.id !== this.options.selfPeerId &&
-          peer.trustScore >= MINIMUM_TRUST_SCORE,
-      )
-      .map((peer) => ({ peer, metrics: this.metricsFor(peer) }))
-      .filter(({ metrics }) => metrics.trustScore >= MINIMUM_TRUST_SCORE);
-    const maximumUploadBandwidthBps = Math.max(
-      0,
-      ...candidates.map(({ metrics }) => metrics.uploadBandwidthBps),
+  private rankPeers(
+    peers: Peer[],
+    segmentName = "",
+    segmentsAhead?: number,
+  ): Peer[] {
+    const candidates: SchedulingPeer[] = peers.map((peer, originalIndex) => ({
+      id: peer.id,
+      latencyMs: peer.latencyMs,
+      successRate: peer.successRate,
+      uploadBandwidthBps: peer.uploadBandwidthBps ?? 0,
+      trustScore: peer.trustScore,
+      segments: peer.segments,
+      originalIndex,
+    }));
+    const context: SegmentSchedulingContext = {
+      segmentId: segmentName,
+      ...(segmentsAhead === undefined ? {} : { segmentsAhead }),
+      candidates,
+      selfPeerId: this.options.selfPeerId,
+      maximumParallelism: this.maxParallel,
+    };
+    const plan = planSegmentSafely(
+      this.scheduler,
+      context,
+      (event, warningContext) => logger.warn(event, warningContext),
     );
-    return candidates
-      .map(({ peer, metrics }) => ({
-        peer,
-        score: calculatePeerScore(metrics, maximumUploadBandwidthBps),
-      }))
-      .sort((left, right) => right.score - left.score)
-      .map(({ peer }) => peer);
+    this.recordSchedulerDecision(schedulerDecisionFor(plan, candidates.length));
+    if (plan.mode === "origin") return [];
+
+    const peersById = new Map(peers.map((peer) => [peer.id, peer]));
+    const orderedPeerIds = [
+      ...plan.peerIds,
+      ...plan.rankedPeers
+        .map(({ peerId }) => peerId)
+        .filter((peerId) => !plan.peerIds.includes(peerId)),
+    ];
+    return orderedPeerIds.flatMap((peerId) => {
+      const peer = peersById.get(peerId);
+      return peer ? [peer] : [];
+    });
   }
 
-  private metricsFor(peer: Peer): PeerQualityMetrics {
-    const observed: PeerQualityMetrics = {
-      latencyMs: Math.max(0, peer.latencyMs),
-      successRate: clamp(peer.successRate, 0, 1),
-      uploadBandwidthBps: Math.max(0, peer.uploadBandwidthBps ?? 0),
-      trustScore: clamp(peer.trustScore, 0, 1),
-    };
-    const previous = this.peerMetrics.get(peer.id);
-    if (!previous) {
-      this.peerMetrics.set(peer.id, observed);
-      return observed;
+  private recordSchedulerDecision(decision: SchedulerDecision): void {
+    try {
+      this.options.onSchedulerDecision?.(decision);
+    } catch (error) {
+      logger.warn("scheduler_decision_callback_failed", {
+        policy: decision.policy,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
-    const smoothed = this.smoothMetrics(previous, observed);
-    this.peerMetrics.set(peer.id, smoothed);
-    return smoothed;
-  }
-
-  private observePeer(
-    peer: Peer,
-    latencyMs: number,
-    succeeded: boolean,
-    bytes: number,
-    failureReason?: PeerFailureReport["reason"],
-  ): void {
-    const previous = this.peerMetrics.get(peer.id) ?? this.metricsFor(peer);
-    const elapsedSeconds = Math.max(latencyMs, 1) / 1_000;
-    const observed: PeerQualityMetrics = {
-      latencyMs,
-      successRate: succeeded ? 1 : 0,
-      uploadBandwidthBps: succeeded ? (bytes * 8) / elapsedSeconds : 0,
-      trustScore: failureReason === "integrity" ? 0 : peer.trustScore,
-    };
-    this.peerMetrics.set(peer.id, this.smoothMetrics(previous, observed));
-  }
-
-  private smoothMetrics(
-    previous: PeerQualityMetrics,
-    observed: PeerQualityMetrics,
-  ): PeerQualityMetrics {
-    return {
-      latencyMs: exponentialMovingAverage(
-        previous.latencyMs,
-        observed.latencyMs,
-      ),
-      successRate: exponentialMovingAverage(
-        previous.successRate,
-        observed.successRate,
-      ),
-      uploadBandwidthBps: exponentialMovingAverage(
-        previous.uploadBandwidthBps,
-        observed.uploadBandwidthBps,
-      ),
-      trustScore: exponentialMovingAverage(
-        previous.trustScore,
-        observed.trustScore,
-      ),
-    };
   }
 
   private async fetchFromPeer(peer: Peer, segmentName: string): Promise<Buffer> {

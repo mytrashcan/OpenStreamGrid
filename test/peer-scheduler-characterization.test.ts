@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Peer } from "@openstreamgrid/common";
-import { SegmentCache } from "../peer/src/cache.js";
+import type {
+  Peer,
+  SegmentSchedulingContext,
+} from "@openstreamgrid/common";
 import {
   calculatePeerScore,
   clamp,
   exponentialMovingAverage,
-  HybridSegmentFetcher,
   LATENCY_WEIGHT_VALUE,
   MAX_PARALLEL_DOWNLOADS_VALUE,
   METRIC_EMA_ALPHA_VALUE,
@@ -15,10 +16,8 @@ import {
   TRUST_SCORE_WEIGHT_VALUE,
   UPLOAD_BANDWIDTH_WEIGHT_VALUE,
   URGENT_THRESHOLD_SEGMENTS_VALUE,
-  type PeerDirectory,
-  type PeerQualityMetrics,
-} from "../peer/src/fetcher.js";
-import { TrafficStats } from "../peer/src/stats.js";
+  WeightedScoreScheduler,
+} from "../peer/src/weighted-score-scheduler.js";
 
 const approximatelyEqual = (actual: number, expected: number): void => {
   assert.ok(
@@ -40,36 +39,38 @@ const makePeer = (id: string, overrides: Partial<Peer> = {}): Peer => ({
   ...overrides,
 });
 
-const directory: PeerDirectory = {
-  async listPeers(): Promise<Peer[]> {
-    return [];
-  },
-  async reportFailure(): Promise<void> {},
-};
+const makeContext = (
+  candidates: readonly Peer[],
+  selfPeerId = "self",
+): SegmentSchedulingContext => ({
+  segmentId: "segment.ts",
+  segmentsAhead: 3,
+  candidates: candidates.map((peer, originalIndex) => ({
+    id: peer.id,
+    latencyMs: peer.latencyMs,
+    successRate: peer.successRate,
+    uploadBandwidthBps: peer.uploadBandwidthBps ?? 0,
+    trustScore: peer.trustScore,
+    segments: peer.segments,
+    originalIndex,
+  })),
+  selfPeerId,
+  maximumParallelism: 3,
+});
 
-const makeFetcher = (selfPeerId = "self"): HybridSegmentFetcher =>
-  new HybridSegmentFetcher({
-    selfPeerId,
-    originBaseUrl: new URL("http://origin:8080/hls/"),
-    cache: new SegmentCache(1_000),
-    directory,
-    verifier: {
-      async verify(): Promise<boolean> {
-        return true;
-      },
-    },
-    stats: new TrafficStats(),
+const rankedPeerIds = (
+  scheduler: WeightedScoreScheduler,
+  candidates: readonly Peer[],
+  selfPeerId = "self",
+): string[] =>
+  scheduler
+    .planSegment(makeContext(candidates, selfPeerId))
+    .rankedPeers.map(({ peerId }) => peerId);
+
+const makeScheduler = (): WeightedScoreScheduler =>
+  new WeightedScoreScheduler({
+    urgentThresholdSegments: URGENT_THRESHOLD_SEGMENTS_VALUE,
   });
-
-type FetcherSchedulerHarness = {
-  rankPeers(peers: Peer[]): Peer[];
-  metricsFor(peer: Peer): PeerQualityMetrics;
-};
-
-const schedulerHarness = (
-  fetcher: HybridSegmentFetcher,
-): FetcherSchedulerHarness =>
-  fetcher as unknown as FetcherSchedulerHarness;
 
 test("exports the legacy Node scheduler defaults", () => {
   assert.equal(MINIMUM_TRUST_SCORE_VALUE, 0.3);
@@ -209,10 +210,11 @@ test("assigns no bandwidth contribution when maximum bandwidth is zero", () => {
 test("preserves input order for equal Node peer scores", () => {
   const peers = [makePeer("peer-z"), makePeer("peer-a"), makePeer("peer-m")];
 
-  assert.deepEqual(
-    schedulerHarness(makeFetcher()).rankPeers(peers).map((peer) => peer.id),
-    ["peer-z", "peer-a", "peer-m"],
-  );
+  assert.deepEqual(rankedPeerIds(makeScheduler(), peers), [
+    "peer-z",
+    "peer-a",
+    "peer-m",
+  ]);
 });
 
 test("calculates EMA with the legacy default alpha", () => {
@@ -230,8 +232,10 @@ test("uses the raw metrics for a peer's initial observation", () => {
     uploadBandwidthBps: 750_000,
     trustScore: 0.9,
   });
+  const scheduler = makeScheduler();
+  scheduler.planSegment(makeContext([peer]));
 
-  assert.deepEqual(schedulerHarness(makeFetcher()).metricsFor(peer), {
+  assert.deepEqual(scheduler.getPeerMetrics(peer.id), {
     latencyMs: 125,
     successRate: 0.75,
     uploadBandwidthBps: 750_000,
@@ -257,19 +261,13 @@ test("excludes peers below the minimum trust score", () => {
     makePeer("at-threshold", { trustScore: MINIMUM_TRUST_SCORE_VALUE }),
   ];
 
-  assert.deepEqual(
-    schedulerHarness(makeFetcher()).rankPeers(peers).map((peer) => peer.id),
-    ["at-threshold"],
-  );
+  assert.deepEqual(rankedPeerIds(makeScheduler(), peers), ["at-threshold"]);
 });
 
 test("excludes the local peer from Node scheduling", () => {
   const peers = [makePeer("self"), makePeer("remote")];
 
-  assert.deepEqual(
-    schedulerHarness(makeFetcher("self")).rankPeers(peers).map((peer) => peer.id),
-    ["remote"],
-  );
+  assert.deepEqual(rankedPeerIds(makeScheduler(), peers, "self"), ["remote"]);
 });
 
 test("clamps values within explicit bounds", () => {

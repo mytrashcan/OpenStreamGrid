@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   OpenStreamGridHlsPlugin,
-  sortBrowserCandidates,
   type PeerCandidate,
 } from "../sdk/src/hls-plugin.js";
+import { TrustLatencyProbeScheduler } from "../sdk/src/trust-latency-probe-scheduler.js";
 
 const makeCandidate = (
   id: string,
@@ -28,6 +28,22 @@ const makePlugin = (): OpenStreamGridHlsPlugin =>
     broadcastId: "live",
     verifySegments: false,
     peerParticipation: false,
+  });
+
+const planCandidates = (candidates: readonly PeerCandidate[]) =>
+  new TrustLatencyProbeScheduler().planSegment({
+    segmentId: "segment.ts",
+    candidates: candidates.map(({ peer }, originalIndex) => ({
+      id: peer.id,
+      latencyMs: peer.latencyMs,
+      successRate: peer.successRate,
+      uploadBandwidthBps: peer.uploadBandwidthBps ?? 0,
+      trustScore: peer.trustScore,
+      segments: peer.segments,
+      originalIndex,
+    })),
+    selfPeerId: "self",
+    maximumParallelism: 3,
   });
 
 type BrowserPeerFetchResult = {
@@ -59,8 +75,9 @@ test("sorts browser candidates by trust score descending", () => {
     makeCandidate("high", 0.9, 100),
   ];
 
+  const plan = planCandidates(candidates);
   assert.deepEqual(
-    sortBrowserCandidates(candidates).map((candidate) => candidate.peer.id),
+    plan.rankedPeers.map(({ peerId }) => peerId),
     ["high", "medium", "low"],
   );
   assert.deepEqual(
@@ -76,8 +93,9 @@ test("uses ascending latency as the equal-trust browser tie breaker", () => {
     makeCandidate("medium", 0.8, 100),
   ];
 
+  const plan = planCandidates(candidates);
   assert.deepEqual(
-    sortBrowserCandidates(candidates).map((candidate) => candidate.peer.id),
+    plan.rankedPeers.map(({ peerId }) => peerId),
     ["fast", "medium", "slow"],
   );
 });

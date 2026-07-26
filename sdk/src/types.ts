@@ -3,6 +3,8 @@
  * Mirrors @openstreamgrid/common but avoids the Node dependency.
  */
 
+import type { SegmentScheduler } from "@openstreamgrid/common";
+
 /** A segment stored in the browser cache — uses Uint8Array instead of Node Buffer. */
 export interface CachedSegment {
   data: Uint8Array;
@@ -60,6 +62,8 @@ export interface HlsjsPluginConfig {
   peerConnectionFactory?: (configuration: RTCConfiguration) => RTCPeerConnection;
   /** Whether to enable SHA-256 segment verification (default: true). */
   verifySegments?: boolean;
+  /** Segment scheduling policy (default: TrustLatencyProbeScheduler). */
+  scheduler?: SegmentScheduler;
   /** Callback for stats / debug events. */
   onEvent?: (event: SdkEvent) => void;
   /** Callback when the plugin is ready (first WS connection established). */
@@ -67,26 +71,35 @@ export interface HlsjsPluginConfig {
 }
 
 /** Diagnostic event emitted by the browser SDK. */
-export interface SdkEvent {
-  type:
-    | "peer_fetched"
-    | "origin_fallback"
-    | "cache_hit"
-    | "cache_miss"
-    | "integrity_ok"
-    | "integrity_fail"
-    | "ws_connected"
-    | "ws_disconnected"
-    | "ws_error";
-  /** Segment name involved, if any. */
-  segment?: string;
-  /** Peer ID involved, if any. */
-  peerId?: string;
-  /** Duration in ms, if applicable. */
-  durationMs?: number;
-  /** Additional info. */
-  message?: string;
-}
+export type SdkEvent =
+  | {
+      type:
+        | "peer_fetched"
+        | "origin_fallback"
+        | "cache_hit"
+        | "cache_miss"
+        | "integrity_ok"
+        | "integrity_fail"
+        | "ws_connected"
+        | "ws_disconnected"
+        | "ws_error";
+      /** Segment name involved, if any. */
+      segment?: string;
+      /** Peer ID involved, if any. */
+      peerId?: string;
+      /** Duration in ms, if applicable. */
+      durationMs?: number;
+      /** Additional info. */
+      message?: string;
+    }
+  | {
+      type: "scheduler_decision";
+      policy: string;
+      mode: string;
+      reason: string;
+      candidateCount: number;
+      selectedPeerCount: number;
+    };
 
 /** Message types for tracker WebSocket communication. */
 /** Messages emitted by the browser SDK to the tracker. */

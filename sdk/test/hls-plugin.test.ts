@@ -45,9 +45,19 @@ test("uses absolute tracker peer addresses and reports the winning peer", async 
   assert.deepEqual(result.data, segmentData);
   assert.equal(requests[0], "http://peer-a.example:9090/segments/segment.ts");
   assert.equal(requests[1], "https://origin.example/hls/low/segment.ts.sha256");
-  assert.equal(
-    events.find((event) => event.type === "peer_fetched")?.peerId,
-    "peer-a",
+  const peerFetched = events.find((event) => event.type === "peer_fetched");
+  assert.ok(peerFetched && "peerId" in peerFetched);
+  assert.equal(peerFetched.peerId, "peer-a");
+  assert.deepEqual(
+    events.find((event) => event.type === "scheduler_decision"),
+    {
+      type: "scheduler_decision",
+      policy: "trust-latency-probe",
+      mode: "parallel-peers",
+      reason: "parallel_peer_probe",
+      candidateCount: 1,
+      selectedPeerCount: 1,
+    },
   );
   assert.equal(plugin.stats.p2pRequests, 1);
   assert.equal(plugin.stats.p2pSuccesses, 1);
@@ -76,6 +86,55 @@ test("verifies origin fallback data before caching it", async (context) => {
   );
   assert.equal(plugin.cache.size, 0);
   assert.equal(plugin.stats.integrityFailures, 1);
+});
+
+test("uses an injected scheduler while keeping Origin fallback authoritative", async (context) => {
+  const events: SdkEvent[] = [];
+  const requests: string[] = [];
+  context.mock.method(globalThis, "fetch", async (input: RequestInfo | URL) => {
+    requests.push(String(input));
+    return new Response(segmentData);
+  });
+  const plugin = new OpenStreamGridHlsPlugin({
+    trackerUrl: "ws://tracker.example/ws",
+    broadcastId: "live",
+    verifySegments: false,
+    peerParticipation: false,
+    scheduler: {
+      policyName: "origin-only",
+      planSegment: () => ({
+        policy: "origin-only",
+        mode: "origin",
+        peerIds: [],
+        rankedPeers: [],
+        reason: "urgent_origin",
+      }),
+    },
+    onEvent: (event) => events.push(event),
+  });
+  context.mock.method(plugin.wsClient, "getPeersWithSegment", () => [
+    peer("http://peer-a.example:9090"),
+  ]);
+
+  const result = await plugin.loadSegment(
+    "segment.ts",
+    "https://origin.example/hls/segment.ts",
+    new AbortController().signal,
+  );
+
+  assert.deepEqual(result.data, segmentData);
+  assert.deepEqual(requests, ["https://origin.example/hls/segment.ts"]);
+  assert.deepEqual(
+    events.find((event) => event.type === "scheduler_decision"),
+    {
+      type: "scheduler_decision",
+      policy: "origin-only",
+      mode: "origin",
+      reason: "urgent_origin",
+      candidateCount: 1,
+      selectedPeerCount: 0,
+    },
+  );
 });
 
 test("keeps rendition cache entries isolated by segment URL", async (context) => {

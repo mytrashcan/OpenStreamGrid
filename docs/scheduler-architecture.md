@@ -8,12 +8,11 @@ choosing between P2P and Origin delivery, ranking eligible peers, and assigning
 work in a batch without moving transport, cache, verification, or tracker
 responsibilities into the policy.
 
-Phase 2 preserves existing behavior because the current Node peer and browser
-SDK policies are already in production-facing paths. Changing their defaults
-while extracting them would make regressions difficult to distinguish from
-intentional improvements. Characterization tests therefore record the current
-behavior, including ordering and fallback details, before scheduler interfaces
-are introduced.
+Phase 2 preserves existing behavior because the Node peer and browser SDK
+policies are already in production-facing paths. Changing their defaults while
+extracting them would make regressions difficult to distinguish from intentional
+improvements. Characterization and decision-replay tests record ordering and
+fallback details around the shared scheduler interface.
 
 This phase is an extraction, not a scheduling improvement. It makes the current
 decisions explicit and testable while preserving public configuration,
@@ -61,8 +60,8 @@ Scheduler outputs are:
 - an ordered list of eligible peers;
 - a delivery plan of `origin`, `single-peer`, or `parallel-peers`;
 - batch assignments when more than one segment is planned; and
-- reason codes such as `urgent-origin`, `no-eligible-peers`,
-  `trusted-peer-selected`, and `parallel-browser-probe`.
+- reason codes such as `urgent_origin`, `no_eligible_candidates`,
+  `peer_selected`, and `parallel_peer_probe`.
 
 Reason codes describe policy decisions. Runtime failures remain structured
 execution results owned by the integration layer.
@@ -104,7 +103,9 @@ Batch requests preserve the current playlist behavior:
 
 ## Browser: Trust-Latency Probe Policy
 
-The browser SDK uses a simpler policy:
+The browser SDK implements this policy in
+`TrustLatencyProbeScheduler` with `policyName =
+"trust-latency-probe"`:
 
 1. Exclude the local browser peer while collecting candidates.
 2. Sort by trust score descending.
@@ -153,17 +154,21 @@ The browser scheduler has no persistent per-peer observation state. It consumes
 the tracker snapshot for each decision and updates only aggregate plugin
 traffic and failure counters after execution.
 
+Each browser plan also emits a `scheduler_decision` SDK event with its policy,
+mode, reason, candidate count, and selected-peer count. This exposes decisions
+without moving transport outcomes or peer observation state into the scheduler.
+
 ## State Ownership
 
-The Node `HybridSegmentFetcher` owns a per-instance
+The Node `WeightedScoreScheduler` owns a per-instance
 `Map<string, PeerQualityMetrics>`. Entries are initialized from tracker peer
 metadata, smoothed as new observations arrive, and removed when a peer
 disappears from the current candidate list.
 
 The browser `OpenStreamGridHlsPlugin` owns per-plugin aggregate statistics and
-in-flight request state. It does not own a per-peer observation map, and the
-browser scheduling policy must remain a pure decision over the current
-candidate snapshot.
+in-flight request state, and it holds an injected `SegmentScheduler`. The
+default browser scheduler does not own a per-peer observation map and remains a
+pure decision over the current candidate snapshot.
 
 ## Failure Handling
 
@@ -199,7 +204,6 @@ explicit behavior change is supported by tests and rollout evidence.
 
 Phase 2 does not include:
 
-- custom scheduler injection or a public scheduler plugin API;
 - deadline-aware scheduling beyond the existing `segmentsAhead` threshold;
 - multi-armed bandit, reinforcement-learning, or other adaptive exploration
   policies;
@@ -215,13 +219,15 @@ Phase 2 does not include:
 - benchmark implementation or benchmark-driven policy tuning; and
 - breaking existing scheduler-related configuration or public SDK behavior.
 
-These are possible Phase 3 extension points only after the extracted policies
-have stable interfaces and integration-boundary validation.
+Custom scheduler injection is available through the Node fetcher and browser
+SDK configuration. Alternative policies remain responsible for honoring the
+shared, I/O-free contract; execution and authoritative Origin fallback stay in
+the integration layer.
 
 ## Summary
 
 Phase 2 extracts the existing Node and browser scheduling policies without
-changing their decisions. Every default parameter remains preserved, the Node
-and browser policies remain intentionally distinct, and all existing
-configuration stays compatible. This characterization baseline is the safety
-net for introducing scheduler interfaces in the next chunk.
+changing their default decisions. Every default parameter remains preserved,
+the Node and browser policies remain intentionally distinct, custom schedulers
+can be injected through the shared contract, and decision replay guards both
+default policies against unintended drift.

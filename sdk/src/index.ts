@@ -13,6 +13,7 @@
  */
 
 export { OpenStreamGridHlsPlugin } from "./hls-plugin.js";
+export { TrustLatencyProbeScheduler } from "./trust-latency-probe-scheduler.js";
 export { SegmentCache } from "./cache.js";
 export { WsTrackerClient } from "./ws-client.js";
 export { BrowserWebRtcPeer } from "./webrtc-peer.js";
