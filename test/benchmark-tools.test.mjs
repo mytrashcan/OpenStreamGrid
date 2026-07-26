@@ -52,6 +52,7 @@ test("aggregateResults flattens every numeric metric and skips null metrics", ()
         cacheHitRatePercent: null,
         latencyMs: { p50: 10, p95: 20 },
       },
+      traffic: { p2pSuccesses: 4, originRequests: 6 },
     },
     {
       schemaVersion: 2,
@@ -63,6 +64,7 @@ test("aggregateResults flattens every numeric metric and skips null metrics", ()
         cacheHitRatePercent: null,
         latencyMs: { p50: 12, p95: 24 },
       },
+      traffic: { p2pSuccesses: 6, originRequests: 4 },
     },
   ];
 
@@ -77,6 +79,8 @@ test("aggregateResults flattens every numeric metric and skips null metrics", ()
   ]);
   assert.equal(aggregate.metrics["latencyMs.p50"].mean, 11);
   assert.equal(aggregate.metrics.p2pEfficiencyRatioPercent.mean, 45);
+  assert.equal(aggregate.traffic.p2pSuccesses.mean, 5);
+  assert.equal(aggregate.traffic.originRequests.mean, 5);
   assert.deepEqual(aggregate.perRun.randomSeed, {
     value: 42,
     note: "per-run",

@@ -107,16 +107,17 @@ const collectNumericMetrics = (value, prefix = "", output = new Map()) => {
   return output;
 };
 
-export const aggregateResults = (scenario, results, failedRuns, attemptedRuns) => {
-  const metricValues = new Map();
-  for (const result of results) {
-    collectNumericMetrics(result.metrics, "", metricValues);
-  }
-  const metrics = Object.fromEntries(
-    [...metricValues.entries()]
+const summarizeNumericFields = (values) => {
+  const collected = new Map();
+  for (const value of values) collectNumericMetrics(value, "", collected);
+  return Object.fromEntries(
+    [...collected.entries()]
       .sort(([left], [right]) => left.localeCompare(right))
-      .map(([name, values]) => [name, summarizeValues(values)]),
+      .map(([name, samples]) => [name, summarizeValues(samples)]),
   );
+};
+
+export const aggregateResults = (scenario, results, failedRuns, attemptedRuns) => {
   const first = results[0];
   return {
     schemaVersion: 2,
@@ -125,7 +126,8 @@ export const aggregateResults = (scenario, results, failedRuns, attemptedRuns) =
     provenance: first?.provenance ?? null,
     runs: attemptedRuns,
     failedRuns,
-    metrics,
+    metrics: summarizeNumericFields(results.map((result) => result.metrics)),
+    traffic: summarizeNumericFields(results.map((result) => result.traffic)),
     perRun: first
       ? {
           generatedAt: { value: first.generatedAt, note: "per-run" },

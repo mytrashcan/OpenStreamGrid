@@ -13,9 +13,9 @@
   "scripts": {
     "benchmark": "bash scripts/benchmark.sh",
     "benchmark:compare": "node scripts/benchmark-compare.mjs",
-    "benchmark:report": "echo 'Use: node scripts/benchmark-report.mjs <aggregate.json>'",
+    "benchmark:report": "node scripts/benchmark-report.mjs",
     "benchmark:suite": "node scripts/benchmark-suite.mjs",
-    "benchmark:update-readme": "echo 'Use: node scripts/benchmark-update-readme.mjs <aggregate.json>'",
+    "benchmark:update-readme": "node scripts/benchmark-update-readme.mjs",
     "build": "npm run build --workspaces --if-present && npm --prefix sdk run build",
     "lint": "eslint .",
     "test": "node --test test/*.test.mjs && npm run test --workspaces --if-present && npm --prefix sdk test",

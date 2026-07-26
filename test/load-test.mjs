@@ -5,6 +5,14 @@ import { createServer } from "node:http";
 import os from "node:os";
 import { resolve } from "node:path";
 
+import {
+  createSeededRandom,
+  jainFairnessIndex,
+  parseScenarioJson,
+  percentile,
+  shuffleWithRandom,
+} from "../scripts/benchmark-data.mjs";
+
 const environment = process.env;
 
 const DEFAULTS = {
@@ -124,59 +132,17 @@ const parseBoolean = (value, label) => {
   throw new Error(`${label} must be true or false`);
 };
 
-const scenarioFields = {
-  $schema: "string",
-  scenarioVersion: "integer",
-  name: "string",
-  description: "string",
-  peerCount: "integer",
-  durationSeconds: "number",
-  rampUpSeconds: "number",
-  churnProbability: "number",
-  p2pEnabled: "boolean",
-  quality: "string",
-  segmentDurationSeconds: "number",
-  uploadBandwidthLimit: "number",
-  concurrentUploadLimit: "integer",
-  p2pTimeoutMs: "integer",
-  randomSeed: "integer",
-  repetitionCount: "integer",
-  tags: "array",
-};
-
-const matchesScenarioType = (value, type) => {
-  if (type === "array") return Array.isArray(value);
-  if (type === "integer") return Number.isSafeInteger(value);
-  if (type === "number") return typeof value === "number" && Number.isFinite(value);
-  return typeof value === type;
-};
-
-const validateScenario = (scenario, scenarioFile) => {
-  if (scenario === null || typeof scenario !== "object" || Array.isArray(scenario)) {
-    throw new Error(`Scenario '${scenarioFile}' must contain a JSON object`);
-  }
-  for (const [field, type] of Object.entries(scenarioFields)) {
-    if (!Object.hasOwn(scenario, field)) {
-      throw new Error(`Scenario '${scenarioFile}' is missing required field '${field}'`);
-    }
-    if (!matchesScenarioType(scenario[field], type)) {
-      throw new Error(`Scenario field '${field}' must be of type ${type}`);
-    }
-  }
-  if (!scenario.tags.every((tag) => typeof tag === "string")) {
-    throw new Error("Scenario field 'tags' must contain only strings");
-  }
-};
-
 const readScenario = (scenarioFile) => {
-  let scenario;
   try {
-    scenario = JSON.parse(readFileSync(resolve(scenarioFile), "utf8"));
+    return parseScenarioJson(
+      readFileSync(resolve(scenarioFile), "utf8"),
+      `scenario '${scenarioFile}'`,
+    );
   } catch (error) {
-    throw new Error(`Unable to read scenario '${scenarioFile}': ${error.message}`);
+    throw new Error(
+      `Unable to read scenario '${scenarioFile}': ${error.message}`,
+    );
   }
-  validateScenario(scenario, scenarioFile);
-  return scenario;
 };
 
 const scenarioConfiguration = (scenario) =>
@@ -352,29 +318,12 @@ const parseArguments = (arguments_) => {
   return config;
 };
 
-function mulberry32(seed) {
-  return function() {
-    seed |= 0;
-    seed = seed + 0x6D2B79F5 | 0;
-    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
-    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
-    return ((t ^ t >>> 14) >>> 0) / 4294967296;
-  }
-}
-
 let random;
 
 const randomBetween = (minimum, maximum) =>
   minimum + random() * (maximum - minimum);
 
-const shuffle = (values) => {
-  const result = [...values];
-  for (let index = result.length - 1; index > 0; index -= 1) {
-    const other = Math.floor(random() * (index + 1));
-    [result[index], result[other]] = [result[other], result[index]];
-  }
-  return result;
-};
+const shuffle = (values) => shuffleWithRandom(values, random);
 
 const delay = (milliseconds, signal) =>
   new Promise((resolve) => {
@@ -1091,22 +1040,6 @@ class VirtualPeerUploadServer {
   }
 }
 
-const percentile = (values, quantile) => {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((left, right) => left - right);
-  return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * quantile) - 1)];
-};
-
-const jainFairnessIndex = (values) => {
-  const sum = values.reduce((total, value) => total + value, 0);
-  const sumOfSquares = values.reduce(
-    (total, value) => total + value * value,
-    0,
-  );
-  if (sumOfSquares === 0) return 1;
-  return (sum * sum) / (values.length * sumOfSquares);
-};
-
 const aggregate = (peers) => {
   const stats = emptyStats();
   const loadTestStats = {
@@ -1296,7 +1229,7 @@ const reportLoop = async (peers, config, startedAt, signal) => {
 const main = async () => {
   const config = parseArguments(process.argv.slice(2));
   if (!config) return;
-  random = mulberry32(config.seed);
+  random = createSeededRandom(config.seed);
 
   const controller = new AbortController();
   const stop = (signal) => {
