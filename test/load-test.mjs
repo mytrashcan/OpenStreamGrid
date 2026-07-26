@@ -397,6 +397,16 @@ const requestSignal = (signal, timeoutMs) =>
     ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
     : AbortSignal.timeout(timeoutMs);
 
+const isTimeoutError = (error) => {
+  const name = error instanceof Error ? error.name : "";
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    name === "AbortError" ||
+    message.includes("AbortError") ||
+    message.toLowerCase().includes("timeout")
+  );
+};
+
 const responseBody = async (response) => {
   const body = await response.text().catch(() => "");
   return body ? `: ${body.slice(0, 200)}` : "";
@@ -565,6 +575,13 @@ class VirtualPeer {
     this.lastHeartbeatAt = 0;
     this.lastStatsAt = 0;
     this.latencies = { p2p: [], origin: [] };
+    this.perPeerUploadedBytes = [];
+    this.loadTestStats = {
+      deadlineMissCount: 0,
+      requestTimeoutCount: 0,
+      httpFailureCount: 0,
+      stallProxyDurationMs: 0,
+    };
     this.events = {
       sessions: 0,
       churns: 0,
@@ -633,6 +650,7 @@ class VirtualPeer {
     }
     this.intentionalClose = false;
     this.peers.clear();
+    this.perPeerUploadedBytes.push(this.stats.bytesUploadedP2P);
   }
 
   connectWebSocket(signal) {
@@ -857,8 +875,10 @@ class VirtualPeer {
           this.recordLatency("p2p", performance.now() - startedAt);
           this.cacheSegment(segment.key, data);
           return;
-        } catch {
+        } catch (error) {
           this.stats.p2pFailures += 1;
+          this.loadTestStats.deadlineMissCount += 1;
+          if (isTimeoutError(error)) this.loadTestStats.requestTimeoutCount += 1;
         }
       }
     }
@@ -873,10 +893,17 @@ class VirtualPeer {
       });
       if (!response.ok) throw new Error(`Origin returned HTTP ${response.status}`);
       const data = Buffer.from(await response.arrayBuffer());
+      const originLatencyMs = performance.now() - startedAt;
       this.stats.bytesDownloadedOrigin += data.byteLength;
-      this.recordLatency("origin", performance.now() - startedAt);
+      this.recordLatency("origin", originLatencyMs);
+      if (attemptedPeer) {
+        this.loadTestStats.stallProxyDurationMs += originLatencyMs * 2;
+      }
       this.cacheSegment(segment.key, data);
     } catch (error) {
+      if (!signal.aborted && !isTimeoutError(error)) {
+        this.loadTestStats.httpFailureCount += 1;
+      }
       if (!signal.aborted) this.events.segmentFailures += 1;
     }
   }
@@ -1070,8 +1097,24 @@ const percentile = (values, quantile) => {
   return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * quantile) - 1)];
 };
 
+const jainFairnessIndex = (values) => {
+  const sum = values.reduce((total, value) => total + value, 0);
+  const sumOfSquares = values.reduce(
+    (total, value) => total + value * value,
+    0,
+  );
+  if (sumOfSquares === 0) return 1;
+  return (sum * sum) / (values.length * sumOfSquares);
+};
+
 const aggregate = (peers) => {
   const stats = emptyStats();
+  const loadTestStats = {
+    deadlineMissCount: 0,
+    requestTimeoutCount: 0,
+    httpFailureCount: 0,
+    stallProxyDurationMs: 0,
+  };
   const events = {
     sessions: 0,
     churns: 0,
@@ -1080,25 +1123,42 @@ const aggregate = (peers) => {
     websocketDisconnects: 0,
   };
   const latencies = [];
+  const uploadedBytesByPeer = [];
   for (const peer of peers) {
     for (const key of Object.keys(stats)) stats[key] += peer.stats[key];
+    for (const key of Object.keys(loadTestStats)) {
+      loadTestStats[key] += peer.loadTestStats[key];
+    }
     for (const key of Object.keys(events)) events[key] += peer.events[key];
     latencies.push(...peer.latencies.p2p, ...peer.latencies.origin);
+    uploadedBytesByPeer.push(
+      peer.active
+        ? peer.stats.bytesUploadedP2P
+        : (peer.perPeerUploadedBytes.at(-1) ?? peer.stats.bytesUploadedP2P),
+    );
   }
   const downloaded = stats.bytesDownloadedP2P + stats.bytesDownloadedOrigin;
   const completedRequests = stats.p2pSuccesses + stats.originRequests;
   return {
     stats,
+    loadTestStats,
     events,
     activePeers: peers.filter((peer) => peer.active).length,
     p2pSuccessPercent:
       stats.p2pRequests === 0 ? 0 : (stats.p2pSuccesses / stats.p2pRequests) * 100,
+    originFallbackPercent:
+      stats.p2pRequests === 0 ? 0 : (stats.fallbacks / stats.p2pRequests) * 100,
     p2pEfficiencyPercent:
       completedRequests === 0 ? 0 : (stats.p2pSuccesses / completedRequests) * 100,
     cdnSavingsPercent:
       downloaded === 0 ? 0 : (stats.bytesDownloadedP2P / downloaded) * 100,
+    deadlineMissPercent:
+      completedRequests === 0
+        ? 0
+        : (loadTestStats.deadlineMissCount / completedRequests) * 100,
     averageUploadBytesPerPeer:
       peers.length === 0 ? 0 : stats.bytesUploadedP2P / peers.length,
+    jainFairnessIndex: jainFairnessIndex(uploadedBytesByPeer),
     latency: {
       p50: percentile(latencies, 0.5),
       p95: percentile(latencies, 0.95),
@@ -1186,12 +1246,35 @@ const benchmarkResult = (result, config, startedAt) => ({
   metrics: {
     p2pEfficiencyRatioPercent: Number(result.p2pEfficiencyPercent.toFixed(3)),
     cdnTrafficReductionPercent: Number(result.cdnSavingsPercent.toFixed(3)),
+    p2pSuccessRatePercent: Number(result.p2pSuccessPercent.toFixed(3)),
+    originFallbackRatePercent: Number(result.originFallbackPercent.toFixed(3)),
+    // Cache lookups currently distinguish only misses; hits are not counted.
+    cacheHitRatePercent: null,
+    integrityFailureCount: result.stats.integrityFailures,
+    peerSessionCount: result.events.sessions,
+    bytesDownloadedP2P: result.stats.bytesDownloadedP2P,
+    bytesDownloadedOrigin: result.stats.bytesDownloadedOrigin,
+    bytesUploadedP2P: result.stats.bytesUploadedP2P,
+    averageUploadBytesPerPeer: Math.round(result.averageUploadBytesPerPeer),
+    fetchLatencyMs: {
+      p50: Number(result.latency.p50.toFixed(3)),
+      p95: Number(result.latency.p95.toFixed(3)),
+      p99: Number(result.latency.p99.toFixed(3)),
+    },
+    deadlineMissCount: result.loadTestStats.deadlineMissCount,
+    deadlineMissRatePercent: Number(result.deadlineMissPercent.toFixed(3)),
+    requestTimeoutCount: result.loadTestStats.requestTimeoutCount,
+    transportFailureCount: result.events.websocketDisconnects,
+    httpFailureCount: result.loadTestStats.httpFailureCount,
+    stallProxyDurationMs: Number(
+      result.loadTestStats.stallProxyDurationMs.toFixed(3),
+    ),
+    jainFairnessIndex: Number(result.jainFairnessIndex.toFixed(6)),
     latencyMs: {
       p50: Number(result.latency.p50.toFixed(3)),
       p95: Number(result.latency.p95.toFixed(3)),
       p99: Number(result.latency.p99.toFixed(3)),
     },
-    averageUploadBytesPerPeer: Math.round(result.averageUploadBytesPerPeer),
   },
   traffic: { ...result.stats },
   churn: {
