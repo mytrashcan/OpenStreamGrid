@@ -1,3 +1,62 @@
+# OpenStreamGrid 0.6.0 Release Notes
+
+OpenStreamGrid 0.6.0 completes a three-phase scheduling program that makes
+delivery decisions reproducible, extensible, and aware of playback deadlines.
+The release adds a controlled QoE benchmark foundation, extracts Node and
+browser scheduling behind shared contracts, and introduces deadline-aware
+Origin hedging while preserving verified Origin fallback as the final safety
+boundary.
+
+## Phase 1 — Reproducible Benchmarking and QoE Measurement
+
+- Added versioned benchmark scenarios, deterministic seeded execution, JSON
+  schema validation, and environment provenance for repeatable experiments.
+- Expanded measurement to include request outcomes, deadline misses, stall
+  proxies, latency percentiles, P2P efficiency, Origin fallback, and Jain's
+  fairness index.
+- Added repeated-run aggregation with confidence intervals, result comparison
+  with drift warnings, self-contained SVG reports, CI execution, and a documented
+  benchmark methodology.
+
+## Phase 2 — Pluggable Scheduling Core
+
+- Added shared `SegmentScheduler` contracts, scheduling plans, observations,
+  decision records, and exception-safe plan validation.
+- Extracted the existing Node weighted-score policy and browser trust/latency
+  probe policy into injectable schedulers without changing their default
+  selection behavior.
+- Added batch planning, decision replay, characterization coverage, structured
+  scheduler warnings, and lifecycle hooks while keeping malformed or failing
+  custom policies behind an immediate Origin fallback.
+
+## Phase 3 — Deadline-Aware Scheduling and Hedged Origin Requests
+
+- Added deadline-aware scheduler decorators for Node peers and the browser SDK.
+  Unknown deadlines retain legacy P2P-first behavior, relaxed deadlines allow
+  peer attempts, and critical deadlines select Origin immediately.
+- Derived synthetic Node deadlines and Hls.js playback deadlines, and added a
+  bounded Origin-latency estimator for deciding the latest safe fallback start.
+- Added first-success-wins hedged P2P/Origin execution with cancellation,
+  request coalescing, abort propagation, and explicit scheduler statistics.
+- Added a deterministic scheduler lab with critical, tight, relaxed,
+  slow-Origin, unreliable-peer, and mixed-workload scenarios. The committed
+  mixed-workload simulation reaches a 100% deadline-met rate for both
+  deadline-aware policies; this is a controlled scheduler result, not a
+  production capacity claim.
+
+## Validation
+
+- `npm run build`
+- `npm run typecheck`
+- `npm test` (226 tests)
+- `npm run lint`
+
+The release-preparation fix also excludes nested workspace `dist-test`
+artifacts through ESLint's flat configuration, preventing generated test output
+from being linted in CI.
+
+---
+
 # OpenStreamGrid 0.5.0 Release Notes
 
 OpenStreamGrid 0.5.0 hardens the peer-assisted MPEG-TS HLS middleware for

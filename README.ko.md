@@ -32,7 +32,7 @@ P2P 전송이 불가능하거나 재생 기한 안에 완료되지 않으면 즉
 명령 하나로 Tracker, 테스트 Origin, 피어 2개를 실행할 수 있습니다.
 
 ```bash
-git clone --branch v0.5.0 --depth 1 https://github.com/mytrashcan/OpenStreamGrid.git
+git clone --branch v0.6.0 --depth 1 https://github.com/mytrashcan/OpenStreamGrid.git
 cd OpenStreamGrid
 docker compose up --build --detach
 docker compose ps
@@ -52,10 +52,10 @@ Origin으로 폴백합니다. 종료할 때는 `docker compose down`을 실행�
 ## 릴리스 상태
 
 현재 안정 릴리스는
-[OpenStreamGrid v0.5.0](https://github.com/mytrashcan/OpenStreamGrid/releases/tag/v0.5.0)입니다.
-이 버전에는 서명된 피어 범위 세션, 인증된 피어 업로드, 네트워크 입력 한도,
-Origin과 Tracker 수명 주기 복구, 트랜잭션 기반 SQLite 마이그레이션, 안전한 Helm
-기본값이 포함됩니다. 재현 가능한 배포에는 릴리스 태그를 사용하고, 업그레이드
+[OpenStreamGrid v0.6.0](https://github.com/mytrashcan/OpenStreamGrid/releases/tag/v0.6.0)입니다.
+이 버전에는 재현 가능한 QoE 벤치마크, 교체 가능한 Node 및 브라우저 스케줄링
+정책, 재생 기한을 고려한 P2P/Origin 헤지가 포함됩니다. 검증된 Origin 폴백은
+최종 안전 경계로 유지됩니다. 재현 가능한 배포에는 릴리스 태그를 사용하고, 업그레이드
 전에는 [릴리스 노트](RELEASE_NOTES.md)를 확인하세요. 전체 변경 내역은
 [변경 이력](CHANGELOG.md)에 정리되어 있습니다.
 
@@ -63,9 +63,9 @@ Origin과 Tracker 수명 주기 복구, 트랜잭션 기반 SQLite 마이그레�
 
 | 구성 요소 | 이미지 |
 | --- | --- |
-| Tracker | `ghcr.io/mytrashcan/openstreamgrid-tracker:v0.5.0` |
-| Origin | `ghcr.io/mytrashcan/openstreamgrid-origin:v0.5.0` |
-| Node Peer | `ghcr.io/mytrashcan/openstreamgrid-peer:v0.5.0` |
+| Tracker | `ghcr.io/mytrashcan/openstreamgrid-tracker:v0.6.0` |
+| Origin | `ghcr.io/mytrashcan/openstreamgrid-origin:v0.6.0` |
+| Node Peer | `ghcr.io/mytrashcan/openstreamgrid-peer:v0.6.0` |
 
 운영 환경에서는 변경되지 않는 버전 태그를 사용하세요. `latest` 태그는 평가용으로
 제공합니다. 브라우저 SDK는 CI에서 빌드와 npm 게시 dry-run까지 검증하지만 아직

@@ -25,7 +25,7 @@ With [Docker Compose v2](https://docs.docker.com/compose/) installed, start the
 tracker, test origin, and two peers with one command:
 
 ```bash
-git clone --branch v0.5.0 --depth 1 https://github.com/mytrashcan/OpenStreamGrid.git
+git clone --branch v0.6.0 --depth 1 https://github.com/mytrashcan/OpenStreamGrid.git
 cd OpenStreamGrid
 docker compose up --build --detach
 docker compose ps
@@ -44,10 +44,10 @@ peer is unavailable or too slow. Stop the stack with `docker compose down`.
 
 ## Release Status
 
-[OpenStreamGrid v0.5.0](https://github.com/mytrashcan/OpenStreamGrid/releases/tag/v0.5.0)
-is the current stable release. It introduces signed, peer-scoped sessions,
-authenticated peer uploads, bounded network inputs, resilient origin and
-tracker lifecycles, transactional SQLite migrations, and safer Helm defaults.
+[OpenStreamGrid v0.6.0](https://github.com/mytrashcan/OpenStreamGrid/releases/tag/v0.6.0)
+is the current stable release. It adds reproducible QoE benchmarks, pluggable
+Node and browser scheduling policies, and deadline-aware P2P/Origin hedging
+while retaining verified Origin fallback as the final safety boundary.
 Use the release tag for reproducible deployments and review the
 [release notes](RELEASE_NOTES.md) before upgrading. See the
 [changelog](CHANGELOG.md) for the complete history.
@@ -56,9 +56,9 @@ Tagged container images are published to GHCR for production deployment:
 
 | Component | Image |
 | --- | --- |
-| Tracker | `ghcr.io/mytrashcan/openstreamgrid-tracker:v0.5.0` |
-| Origin | `ghcr.io/mytrashcan/openstreamgrid-origin:v0.5.0` |
-| Node peer | `ghcr.io/mytrashcan/openstreamgrid-peer:v0.5.0` |
+| Tracker | `ghcr.io/mytrashcan/openstreamgrid-tracker:v0.6.0` |
+| Origin | `ghcr.io/mytrashcan/openstreamgrid-origin:v0.6.0` |
+| Node peer | `ghcr.io/mytrashcan/openstreamgrid-peer:v0.6.0` |
 
 Use immutable version tags in deployments; `latest` is provided for evaluation.
 The browser SDK package is build- and publish-dry-run verified in CI but is not
