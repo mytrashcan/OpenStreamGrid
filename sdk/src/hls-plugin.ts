@@ -20,7 +20,13 @@
 
 import {
   createLogger,
+  planSegmentSafely,
   validatePeerHttpBaseUrl,
+  type SchedulerDecision,
+  type SchedulingPeer,
+  type SegmentScheduler,
+  type SegmentSchedulingContext,
+  type SegmentSchedulingPlan,
 } from "@openstreamgrid/common";
 import type {
   default as Hls,
@@ -32,6 +38,11 @@ import type {
   LoaderStats,
 } from "hls.js";
 import { SegmentCache } from "./cache.js";
+import {
+  compareTrustAndLatency,
+  MAX_PARALLEL_PEER_PROBES,
+  TrustLatencyProbeScheduler,
+} from "./trust-latency-probe-scheduler.js";
 import { OriginHashVerifier } from "./verifier.js";
 import { BrowserWebRtcPeer } from "./webrtc-peer.js";
 import { WsTrackerClient } from "./ws-client.js";
@@ -45,7 +56,6 @@ import type {
 const DEFAULT_MAX_CACHE_BYTES = 100 * 1024 * 1024;
 const DEFAULT_PEER_TIMEOUT_MS = 3_000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
-const MAX_PARALLEL_PEER_PROBES = 3;
 const logger = createLogger("sdk");
 
 type PeerFetchAttempt =
@@ -57,9 +67,17 @@ interface PeerFetchResult {
   peerId: string;
 }
 
-interface PeerCandidate {
+export interface PeerCandidate {
   peer: PeerInfo;
   segmentId: string;
+}
+
+export function sortBrowserCandidates(
+  candidates: PeerCandidate[],
+): PeerCandidate[] {
+  return [...candidates].sort((left, right) =>
+    compareTrustAndLatency(left.peer, right.peer),
+  );
 }
 
 interface InFlightSegment {
@@ -278,6 +296,7 @@ export class OpenStreamGridHlsPlugin {
   private readonly broadcastId: string;
   private readonly trackerUrl: string;
   private readonly peerParticipation: boolean;
+  private readonly scheduler: SegmentScheduler;
   private readonly webRtcOptions: Pick<
     HlsjsPluginConfig,
     | "iceServers"
@@ -305,6 +324,7 @@ export class OpenStreamGridHlsPlugin {
     this.broadcastId = config.broadcastId;
     this.trackerUrl = config.trackerUrl;
     this.peerParticipation = config.peerParticipation !== false;
+    this.scheduler = config.scheduler ?? new TrustLatencyProbeScheduler();
     this.webRtcOptions = {
       ...(config.iceServers ? { iceServers: config.iceServers } : {}),
       ...(config.maxUploadConnections !== undefined
@@ -401,6 +421,14 @@ export class OpenStreamGridHlsPlugin {
     this.wsClient.stop();
     this.webRtcPeer?.stop();
     this.webRtcPeer = undefined;
+    try {
+      this.scheduler.reset?.();
+    } catch (error) {
+      logger.warn("scheduler_reset_failed", {
+        policy: this.scheduler.policyName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     if (this.registrationRetry) clearTimeout(this.registrationRetry);
     if (this.sessionRefresh) clearTimeout(this.sessionRefresh);
     this.registrationRetry = undefined;
@@ -478,11 +506,20 @@ export class OpenStreamGridHlsPlugin {
     const segmentId = this.segmentPeerId(segmentUrl);
     const candidates = this.peerCandidates(segmentId, segmentName);
     if (candidates.length > 0) {
-      this.stats.p2pRequests++;
       try {
         const result = await this.fetchFromPeers(
           candidates,
           signal,
+          (decision) => {
+            this.emit({
+              type: "scheduler_decision",
+              policy: decision.policy,
+              mode: decision.mode,
+              reason: decision.reason,
+              candidateCount: decision.candidateCount,
+              selectedPeerCount: decision.selectedPeerCount,
+            });
+          },
         );
         if (result && !signal.aborted) {
           if (this.verifier) {
@@ -603,15 +640,48 @@ export class OpenStreamGridHlsPlugin {
   private async fetchFromPeers(
     candidates: PeerCandidate[],
     signal: AbortSignal,
+    onDecision?: (decision: SchedulerDecision) => void,
   ): Promise<PeerFetchResult | null> {
-    const sorted = [...candidates].sort((a, b) => {
-      if (b.peer.trustScore !== a.peer.trustScore) {
-        return b.peer.trustScore - a.peer.trustScore;
-      }
-      return a.peer.latencyMs - b.peer.latencyMs;
-    });
-
-    const topPeers = sorted.slice(0, MAX_PARALLEL_PEER_PROBES);
+    const context = this.schedulingContext(candidates);
+    try {
+      this.scheduler.reconcilePeers?.(context.candidates);
+    } catch (error) {
+      this.emit({
+        type: "scheduler_warning",
+        policy: this.scheduler.policyName,
+        code: "invalid_plan",
+        message: `Scheduler reconciliation failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        segment: context.segmentId,
+      });
+      return null;
+    }
+    const { plan, warnings } = planSegmentSafely(this.scheduler, context);
+    for (const warning of warnings) {
+      this.emit({
+        type: "scheduler_warning",
+        policy: this.scheduler.policyName,
+        code: warning.code,
+        message: warning.message,
+        segment: context.segmentId,
+      });
+    }
+    onDecision?.(this.schedulerDecision(plan, candidates.length));
+    if (plan.mode !== "origin" && plan.peerIds.length > 0) {
+      this.stats.p2pRequests++;
+    }
+    const candidatesById = new Map(
+      candidates.map((candidate) => [candidate.peer.id, candidate]),
+    );
+    const plannedPeerIds =
+      plan.mode === "single-peer" || plan.mode === "parallel-peers"
+        ? plan.peerIds
+        : [];
+    const topPeers = plannedPeerIds
+      .slice(0, MAX_PARALLEL_PEER_PROBES)
+      .map((peerId) => candidatesById.get(peerId))
+      .filter((candidate): candidate is PeerCandidate => candidate !== undefined);
     const controller = new AbortController();
     const onAbort = (): void => controller.abort(signal.reason);
     signal.addEventListener("abort", onAbort, { once: true });
@@ -637,6 +707,44 @@ export class OpenStreamGridHlsPlugin {
       controller.abort();
       signal.removeEventListener("abort", onAbort);
     }
+  }
+
+  private schedulingContext(
+    candidates: readonly PeerCandidate[],
+  ): SegmentSchedulingContext {
+    const schedulingPeers: SchedulingPeer[] = candidates.map(
+      ({ peer, segmentId }, originalIndex) => ({
+        id: peer.id,
+        latencyMs: peer.latencyMs,
+        successRate: peer.successRate,
+        uploadBandwidthBps: peer.uploadBandwidthBps ?? 0,
+        trustScore: peer.trustScore,
+        segments: peer.segments.includes(segmentId)
+          ? peer.segments
+          : [...peer.segments, segmentId],
+        originalIndex,
+      }),
+    );
+    return {
+      segmentId: candidates[0]?.segmentId ?? "",
+      candidates: schedulingPeers,
+      selfPeerId: this.peerId,
+      maximumParallelism: MAX_PARALLEL_PEER_PROBES,
+    };
+  }
+
+  private schedulerDecision(
+    plan: SegmentSchedulingPlan,
+    candidateCount: number,
+  ): SchedulerDecision {
+    return {
+      policy: plan.policy,
+      mode: plan.mode,
+      reason: plan.reason,
+      candidateCount,
+      eligibleCount: plan.rankedPeers.length,
+      selectedPeerCount: plan.peerIds.length,
+    };
   }
 
   private async fetchPeerAttempt(

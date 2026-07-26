@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type {
+  SegmentScheduler,
+  SegmentSchedulingPlan,
+} from "@openstreamgrid/common";
 import type Hls from "hls.js";
 import { OpenStreamGridHlsPlugin } from "../src/hls-plugin.js";
 import type { PeerInfo, SdkEvent } from "../src/types.js";
@@ -45,9 +49,19 @@ test("uses absolute tracker peer addresses and reports the winning peer", async 
   assert.deepEqual(result.data, segmentData);
   assert.equal(requests[0], "http://peer-a.example:9090/segments/segment.ts");
   assert.equal(requests[1], "https://origin.example/hls/low/segment.ts.sha256");
-  assert.equal(
-    events.find((event) => event.type === "peer_fetched")?.peerId,
-    "peer-a",
+  const peerFetched = events.find((event) => event.type === "peer_fetched");
+  assert.ok(peerFetched && "peerId" in peerFetched);
+  assert.equal(peerFetched.peerId, "peer-a");
+  assert.deepEqual(
+    events.find((event) => event.type === "scheduler_decision"),
+    {
+      type: "scheduler_decision",
+      policy: "trust-latency-probe",
+      mode: "parallel-peers",
+      reason: "parallel_peer_probe",
+      candidateCount: 1,
+      selectedPeerCount: 1,
+    },
   );
   assert.equal(plugin.stats.p2pRequests, 1);
   assert.equal(plugin.stats.p2pSuccesses, 1);
@@ -76,6 +90,144 @@ test("verifies origin fallback data before caching it", async (context) => {
   );
   assert.equal(plugin.cache.size, 0);
   assert.equal(plugin.stats.integrityFailures, 1);
+});
+
+test("uses an injected scheduler while keeping Origin fallback authoritative", async (context) => {
+  const events: SdkEvent[] = [];
+  const requests: string[] = [];
+  context.mock.method(globalThis, "fetch", async (input: RequestInfo | URL) => {
+    requests.push(String(input));
+    return new Response(segmentData);
+  });
+  const plugin = new OpenStreamGridHlsPlugin({
+    trackerUrl: "ws://tracker.example/ws",
+    broadcastId: "live",
+    verifySegments: false,
+    peerParticipation: false,
+    scheduler: {
+      policyName: "origin-only",
+      planSegment: () => ({
+        policy: "origin-only",
+        mode: "origin",
+        peerIds: [],
+        rankedPeers: [],
+        reason: "urgent_origin",
+      }),
+    },
+    onEvent: (event) => events.push(event),
+  });
+  context.mock.method(plugin.wsClient, "getPeersWithSegment", () => [
+    peer("http://peer-a.example:9090"),
+  ]);
+
+  const result = await plugin.loadSegment(
+    "segment.ts",
+    "https://origin.example/hls/segment.ts",
+    new AbortController().signal,
+  );
+
+  assert.deepEqual(result.data, segmentData);
+  assert.deepEqual(requests, ["https://origin.example/hls/segment.ts"]);
+  assert.deepEqual(
+    events.find((event) => event.type === "scheduler_decision"),
+    {
+      type: "scheduler_decision",
+      policy: "origin-only",
+      mode: "origin",
+      reason: "urgent_origin",
+      candidateCount: 1,
+      selectedPeerCount: 0,
+    },
+  );
+  assert.equal(plugin.stats.p2pRequests, 0);
+});
+
+test("falls back to Origin when an injected scheduler throws", async (context) => {
+  const events: SdkEvent[] = [];
+  const requests: string[] = [];
+  context.mock.method(globalThis, "fetch", async (input: RequestInfo | URL) => {
+    requests.push(String(input));
+    return new Response(segmentData);
+  });
+  const plugin = new OpenStreamGridHlsPlugin({
+    trackerUrl: "ws://tracker.example/ws",
+    broadcastId: "live",
+    verifySegments: false,
+    peerParticipation: false,
+    scheduler: {
+      policyName: "throwing",
+      planSegment(): SegmentSchedulingPlan {
+        throw new Error("scheduler failed");
+      },
+    },
+    onEvent: (event) => events.push(event),
+  });
+  context.mock.method(plugin.wsClient, "getPeersWithSegment", () => [
+    peer("http://peer-a.example:9090"),
+  ]);
+
+  const result = await plugin.loadSegment(
+    "segment.ts",
+    "https://origin.example/hls/segment.ts",
+    new AbortController().signal,
+  );
+
+  assert.deepEqual(result.data, segmentData);
+  assert.deepEqual(requests, ["https://origin.example/hls/segment.ts"]);
+  assert.equal(plugin.stats.p2pRequests, 0);
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type === "scheduler_warning" &&
+        event.code === "invalid_plan" &&
+        /scheduler failed/.test(event.message),
+    ),
+  );
+});
+
+test("falls back to Origin when an injected scheduler returns an invalid plan", async (context) => {
+  const events: SdkEvent[] = [];
+  const requests: string[] = [];
+  context.mock.method(globalThis, "fetch", async (input: RequestInfo | URL) => {
+    requests.push(String(input));
+    return new Response(segmentData);
+  });
+  const plugin = new OpenStreamGridHlsPlugin({
+    trackerUrl: "ws://tracker.example/ws",
+    broadcastId: "live",
+    verifySegments: false,
+    peerParticipation: false,
+    scheduler: {
+      policyName: "invalid",
+      planSegment: () => ({
+        policy: "invalid",
+        mode: "single-peer",
+        peerIds: ["unknown-peer"],
+        rankedPeers: [],
+        reason: "peer_selected",
+      }),
+    },
+    onEvent: (event) => events.push(event),
+  });
+  context.mock.method(plugin.wsClient, "getPeersWithSegment", () => [
+    peer("http://peer-a.example:9090"),
+  ]);
+
+  const result = await plugin.loadSegment(
+    "segment.ts",
+    "https://origin.example/hls/segment.ts",
+    new AbortController().signal,
+  );
+
+  assert.deepEqual(result.data, segmentData);
+  assert.deepEqual(requests, ["https://origin.example/hls/segment.ts"]);
+  assert.equal(plugin.stats.p2pRequests, 0);
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type === "scheduler_warning" && event.code === "unknown_peer",
+    ),
+  );
 });
 
 test("keeps rendition cache entries isolated by segment URL", async (context) => {
@@ -126,6 +278,59 @@ test("restores the Hls.js loader when detached", (context) => {
   plugin.detach();
 
   assert.equal(hls.config.loader, OriginalLoader);
+});
+
+test("resets the injected scheduler when detached", () => {
+  let resets = 0;
+  const scheduler: SegmentScheduler = {
+    policyName: "resettable",
+    planSegment: () => ({
+      policy: "resettable",
+      mode: "origin",
+      peerIds: [],
+      rankedPeers: [],
+      reason: "urgent_origin",
+    }),
+    reset(): void {
+      resets += 1;
+    },
+  };
+  const plugin = new OpenStreamGridHlsPlugin({
+    trackerUrl: "ws://tracker.example/ws",
+    broadcastId: "live",
+    verifySegments: false,
+    peerParticipation: false,
+    scheduler,
+  });
+
+  plugin.detach();
+
+  assert.equal(resets, 1);
+});
+
+test("contains scheduler reset failures when detached", (context) => {
+  context.mock.method(console, "warn", () => {});
+  const plugin = new OpenStreamGridHlsPlugin({
+    trackerUrl: "ws://tracker.example/ws",
+    broadcastId: "live",
+    verifySegments: false,
+    peerParticipation: false,
+    scheduler: {
+      policyName: "throwing-reset",
+      planSegment: () => ({
+        policy: "throwing-reset",
+        mode: "origin",
+        peerIds: [],
+        rankedPeers: [],
+        reason: "urgent_origin",
+      }),
+      reset(): void {
+        throw new Error("reset failed");
+      },
+    },
+  });
+
+  assert.doesNotThrow(() => plugin.detach());
 });
 
 test("registers and unregisters a zero-install browser peer", async (context) => {

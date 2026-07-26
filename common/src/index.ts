@@ -72,6 +72,96 @@ export interface Peer extends PeerJoinRequest {
   trustScore: number;
 }
 
+/** A peer as seen by the scheduler — a read-only snapshot. */
+export interface SchedulingPeer {
+  readonly id: string;
+  readonly latencyMs: number;
+  readonly successRate: number;
+  readonly uploadBandwidthBps: number;
+  readonly trustScore: number;
+  readonly segments: readonly string[];
+  /** Original position in the tracker response, used for stable tie-breaking. */
+  readonly originalIndex?: number;
+}
+
+/** Context provided to the scheduler for one segment decision. */
+export interface SegmentSchedulingContext {
+  readonly segmentId: string;
+  readonly segmentsAhead?: number;
+  readonly candidates: readonly SchedulingPeer[];
+  readonly selfPeerId: string;
+  readonly maximumParallelism: number;
+}
+
+/** One ranked peer in a scheduling plan. */
+export interface RankedPeer {
+  readonly peerId: string;
+  readonly score?: number;
+  readonly rank: number;
+  readonly reasons: readonly string[];
+}
+
+/** Why the scheduler chose this plan. */
+export type SchedulingReason =
+  | "urgent_origin"
+  | "no_candidates"
+  | "no_eligible_candidates"
+  | "peer_selected"
+  | "parallel_peer_probe"
+  | "peer_failed"
+  | "origin_fallback";
+
+/** A scheduler's decision for how to fetch one segment. */
+export interface SegmentSchedulingPlan {
+  readonly policy: string;
+  readonly mode: "origin" | "single-peer" | "parallel-peers";
+  readonly peerIds: readonly string[];
+  readonly rankedPeers: readonly RankedPeer[];
+  readonly reason: SchedulingReason;
+}
+
+/** Observation from a single peer fetch attempt. */
+export interface PeerFetchObservation {
+  readonly peerId: string;
+  readonly succeeded: boolean;
+  readonly latencyMs: number;
+  readonly bytes: number;
+  readonly failureReason?: string;
+}
+
+/**
+ * Strategy interface for scheduling a segment fetch.
+ * Implementations must not perform any I/O.
+ */
+export interface SegmentScheduler {
+  readonly policyName: string;
+  planSegment(context: SegmentSchedulingContext): SegmentSchedulingPlan;
+  observePeer?(observation: PeerFetchObservation): void;
+  reconcilePeers?(peers: readonly SchedulingPeer[]): void;
+  reset?(): void;
+}
+
+export {
+  planBatch,
+  planSegmentSafely,
+  validateSchedulerPlan,
+} from "./scheduler.js";
+export type {
+  BatchAssignment,
+  BatchSegmentRequest,
+  SchedulerPlanValidationFailure,
+} from "./scheduler.js";
+
+/** Observable dimensions recorded for one scheduler decision. */
+export interface SchedulerDecision {
+  readonly policy: string;
+  readonly mode: SegmentSchedulingPlan["mode"];
+  readonly reason: SchedulingReason;
+  readonly candidateCount: number;
+  readonly eligibleCount: number;
+  readonly selectedPeerCount: number;
+}
+
 /** Segment inventory update sent by a peer. */
 export interface SegmentPossessionReport {
   segments: string[];

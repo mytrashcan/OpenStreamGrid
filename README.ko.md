@@ -110,6 +110,20 @@ npm run build --prefix sdk
 - **브라우저 SDK**는 Hls.js 로더와 결합해 브라우저에서도 하이브리드 전송을
   사용할 수 있게 합니다.
 
+## 스케줄링
+
+OpenStreamGrid는 공통 `SegmentScheduler` 계약과 실행 환경별 기본 정책을
+사용합니다. Node Peer의 `WeightedScoreScheduler`는 장기간 수집한 지연 시간,
+성공률, 업로드 대역폭, 신뢰 점수를 조합합니다. 브라우저 SDK의
+`TrustLatencyProbeScheduler`는 Tracker의 현재 스냅샷을 신뢰 점수, 지연 시간
+순으로 정렬한 뒤 최대 세 Peer를 병렬 탐색합니다. 브라우저 재생 세션은 Node
+Peer보다 지속적인 품질 이력이 적기 때문에 두 정책을 의도적으로 구분합니다.
+
+애플리케이션은 Node fetcher 또는 브라우저 SDK의 `scheduler` 옵션으로 사용자
+정의 스케줄러를 주입할 수 있습니다. 브라우저 결정은 `scheduler_decision` SDK
+이벤트로 관찰할 수 있습니다. 어떤 정책을 사용하더라도 P2P를 사용할 수 없거나
+계획이 Origin을 선택하면 전송 계층의 Origin/CDN 폴백이 최종 기준입니다.
+
 ## 주요 기능
 
 - HTTP/WebRTC 기반 P2P 전송과 즉시 Origin 폴백

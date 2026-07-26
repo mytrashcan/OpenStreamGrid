@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Peer, PeerFailureReport } from "@openstreamgrid/common";
+import type {
+  Peer,
+  PeerFailureReport,
+  SchedulerDecision,
+} from "@openstreamgrid/common";
 import { SegmentCache } from "../src/cache.js";
 import {
   calculatePeerScore,
@@ -46,6 +50,7 @@ const verifier: SegmentIntegrityVerifier = {
 
 test("uses a ranked peer for non-urgent segments", async () => {
   const stats = new TrafficStats();
+  const decisions: SchedulerDecision[] = [];
   const fetchImpl: FetchFunction = async (input) => {
     assert.match(String(input), /^http:\/\/peer-a:9090\/segments\//);
     return new Response("from-peer");
@@ -58,12 +63,23 @@ test("uses a ranked peer for non-urgent segments", async () => {
     verifier,
     stats,
     fetchImpl,
+    onSchedulerDecision: (decision) => decisions.push(decision),
   });
 
   const result = await fetcher.fetchSegment("segment.ts", 3);
   assert.equal(result.source, "p2p");
   assert.equal(result.data.toString(), "from-peer");
   assert.equal(stats.snapshot().p2pSuccesses, 1);
+  assert.deepEqual(decisions, [
+    {
+      policy: "weighted-score",
+      mode: "single-peer",
+      reason: "peer_selected",
+      candidateCount: 1,
+      eligibleCount: 1,
+      selectedPeerCount: 1,
+    },
+  ]);
 });
 
 test("falls back to origin when the selected peer is unreachable", async () => {
