@@ -1,0 +1,23 @@
+{
+  "$schema": "../schema/benchmark-scenario.schema.json",
+  "scenarioVersion": 1,
+  "name": "ci-smoke",
+  "description": "Short deterministic scenario for validating benchmark wiring in continuous integration.",
+  "peerCount": 3,
+  "durationSeconds": 30,
+  "rampUpSeconds": 5,
+  "churnProbability": 0,
+  "p2pEnabled": true,
+  "quality": "low",
+  "segmentDurationSeconds": 2,
+  "uploadBandwidthLimit": 4,
+  "concurrentUploadLimit": 3,
+  "p2pTimeoutMs": 2000,
+  "randomSeed": 20260726,
+  "repetitionCount": 1,
+  "tags": [
+    "ci",
+    "smoke",
+    "p2p"
+  ]
+}

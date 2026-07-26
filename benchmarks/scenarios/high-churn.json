@@ -1,0 +1,23 @@
+{
+  "$schema": "../schema/benchmark-scenario.schema.json",
+  "scenarioVersion": 1,
+  "name": "high-churn",
+  "description": "Uses a 50% per-check churn probability to stress peer-list updates, session recovery, and reliable Origin fallback.",
+  "peerCount": 10,
+  "durationSeconds": 60,
+  "rampUpSeconds": 5,
+  "churnProbability": 0.5,
+  "p2pEnabled": true,
+  "quality": "low",
+  "segmentDurationSeconds": 2,
+  "uploadBandwidthLimit": 4,
+  "concurrentUploadLimit": 3,
+  "p2pTimeoutMs": 2000,
+  "randomSeed": 12345,
+  "repetitionCount": 1,
+  "tags": [
+    "high-churn",
+    "fallback",
+    "resilience"
+  ]
+}

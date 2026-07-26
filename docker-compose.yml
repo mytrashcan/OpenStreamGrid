@@ -68,6 +68,7 @@ services:
       MULTI_STREAM_COUNT: "1"
       PUBLIC_ORIGIN_URL: http://origin:8080
       HLS_DIRECTORY: /tmp/openstreamgrid-hls
+      SEGMENT_DURATION_SECONDS: "${SEGMENT_DURATION_SECONDS:-2}"
     depends_on:
       tracker:
         condition: service_healthy
@@ -165,6 +166,7 @@ services:
       ORIGIN_URL: http://origin:8080/hls
       ADVERTISE_URL: http://load-test:9090
       UPLOAD_PORT: "9090"
+      BENCHMARK_SCENARIO_FILE: "${BENCHMARK_SCENARIO_FILE:-}"
     depends_on:
       tracker:
         condition: service_healthy

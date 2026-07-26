@@ -1,0 +1,23 @@
+{
+  "$schema": "../schema/benchmark-scenario.schema.json",
+  "scenarioVersion": 1,
+  "name": "no-churn",
+  "description": "Steady-state comparison that keeps all peers online to isolate P2P delivery without membership changes.",
+  "peerCount": 10,
+  "durationSeconds": 60,
+  "rampUpSeconds": 5,
+  "churnProbability": 0,
+  "p2pEnabled": true,
+  "quality": "low",
+  "segmentDurationSeconds": 2,
+  "uploadBandwidthLimit": 4,
+  "concurrentUploadLimit": 3,
+  "p2pTimeoutMs": 2000,
+  "randomSeed": 12345,
+  "repetitionCount": 1,
+  "tags": [
+    "steady-state",
+    "local",
+    "p2p"
+  ]
+}

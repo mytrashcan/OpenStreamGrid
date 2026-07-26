@@ -1,0 +1,23 @@
+{
+  "$schema": "../schema/benchmark-scenario.schema.json",
+  "scenarioVersion": 1,
+  "name": "origin-only",
+  "description": "Origin-only control run with P2P segment fetching disabled and otherwise baseline-equivalent settings.",
+  "peerCount": 10,
+  "durationSeconds": 60,
+  "rampUpSeconds": 5,
+  "churnProbability": 0.15,
+  "p2pEnabled": false,
+  "quality": "low",
+  "segmentDurationSeconds": 2,
+  "uploadBandwidthLimit": 4,
+  "concurrentUploadLimit": 3,
+  "p2pTimeoutMs": 2000,
+  "randomSeed": 12345,
+  "repetitionCount": 1,
+  "tags": [
+    "control",
+    "origin-only",
+    "no-p2p"
+  ]
+}

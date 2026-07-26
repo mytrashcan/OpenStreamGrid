@@ -1,0 +1,23 @@
+{
+  "$schema": "../schema/benchmark-scenario.schema.json",
+  "scenarioVersion": 1,
+  "name": "baseline",
+  "description": "Standard deterministic local benchmark with moderate peer churn and P2P delivery enabled.",
+  "peerCount": 10,
+  "durationSeconds": 60,
+  "rampUpSeconds": 5,
+  "churnProbability": 0.15,
+  "p2pEnabled": true,
+  "quality": "low",
+  "segmentDurationSeconds": 2,
+  "uploadBandwidthLimit": 4,
+  "concurrentUploadLimit": 3,
+  "p2pTimeoutMs": 2000,
+  "randomSeed": 12345,
+  "repetitionCount": 1,
+  "tags": [
+    "baseline",
+    "local",
+    "p2p"
+  ]
+}

@@ -1,0 +1,138 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openstreamgrid.dev/schemas/benchmark-scenario.schema.json",
+  "title": "OpenStreamGrid Benchmark Scenario",
+  "description": "A versioned, deterministic input configuration for an OpenStreamGrid benchmark run.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "scenarioVersion",
+    "name",
+    "description",
+    "peerCount",
+    "durationSeconds",
+    "rampUpSeconds",
+    "churnProbability",
+    "p2pEnabled",
+    "quality",
+    "segmentDurationSeconds",
+    "uploadBandwidthLimit",
+    "concurrentUploadLimit",
+    "p2pTimeoutMs",
+    "randomSeed",
+    "repetitionCount",
+    "tags"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Path from the scenario file to this JSON Schema.",
+      "pattern": "benchmark-scenario\\.schema\\.json$"
+    },
+    "scenarioVersion": {
+      "type": "integer",
+      "const": 1,
+      "description": "Scenario document format version."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "Stable kebab-case scenario identifier."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "description": "Human-readable purpose and distinguishing conditions."
+    },
+    "peerCount": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10000,
+      "description": "Number of virtual peers created for the run."
+    },
+    "durationSeconds": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 86400,
+      "description": "Measurement duration in seconds."
+    },
+    "rampUpSeconds": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 86400,
+      "description": "Time in seconds over which initial peer joins are spread."
+    },
+    "churnProbability": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Probability that a peer leaves at each churn check."
+    },
+    "p2pEnabled": {
+      "type": "boolean",
+      "description": "Whether peers may request segments from other peers."
+    },
+    "quality": {
+      "type": "string",
+      "enum": [
+        "low",
+        "med",
+        "high"
+      ],
+      "description": "Preferred HLS rendition."
+    },
+    "segmentDurationSeconds": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 60,
+      "description": "Target duration of Origin HLS segments in seconds."
+    },
+    "uploadBandwidthLimit": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 100000,
+      "description": "Per-peer P2P upload bandwidth limit in megabits per second."
+    },
+    "concurrentUploadLimit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10000,
+      "description": "Maximum concurrent P2P uploads served by each peer."
+    },
+    "p2pTimeoutMs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 600000,
+      "description": "Peer request deadline in milliseconds before Origin fallback."
+    },
+    "randomSeed": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295,
+      "description": "Unsigned 32-bit seed used for all simulated random choices."
+    },
+    "repetitionCount": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000,
+      "description": "Intended number of repeated runs for this scenario."
+    },
+    "tags": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "uniqueItems": true,
+      "description": "Searchable labels describing the scenario.",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 40,
+        "pattern": "^[a-z0-9][a-z0-9-]*$"
+      }
+    }
+  }
+}
