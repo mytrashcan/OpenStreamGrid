@@ -216,6 +216,95 @@ test("reports every independently detectable plan failure", () => {
   }
 });
 
+test("validates deadline provenance and timing values", () => {
+  const invalidContexts: SegmentSchedulingContext[] = [
+    {
+      ...context,
+      deadline: {
+        kind: "unsupported" as never,
+        slackMs: 1_000,
+      },
+    },
+    {
+      ...context,
+      deadline: {
+        kind: "player-derived",
+        slackMs: Number.NaN,
+        segmentDurationMs: -1,
+        bufferAheadMs: Number.POSITIVE_INFINITY,
+      },
+    },
+  ];
+
+  assert.ok(
+    validateSchedulerPlan(validPlan(), scheduler, invalidContexts[0] ?? context)
+      .some(({ code }) => code === "invalid_deadline"),
+  );
+  assert.equal(
+    validateSchedulerPlan(validPlan(), scheduler, invalidContexts[1] ?? context)
+      .filter(({ code }) => code === "invalid_deadline").length,
+    3,
+  );
+});
+
+test("validates deadline-aware execution hints", () => {
+  const plans = [
+    validPlan({
+      execution: {
+        strategy: "unsupported",
+      } as unknown as NonNullable<SegmentSchedulingPlan["execution"]>,
+    }),
+    validPlan({
+      execution: {
+        strategy: "hedged-origin",
+        peerAttemptBudgetMs: Number.NaN,
+        originHedgeDelayMs: -1,
+        deadlineSlackMs: Number.POSITIVE_INFINITY,
+      },
+    }),
+    validPlan({
+      mode: "origin",
+      peerIds: [],
+      rankedPeers: [],
+      execution: {
+        strategy: "origin-only",
+        peerAttemptBudgetMs: 100,
+        originHedgeDelayMs: 50,
+        deadlineSlackMs: 40,
+      },
+    }),
+    validPlan({
+      execution: {
+        strategy: "hedged-origin",
+        peerAttemptBudgetMs: 100,
+        originHedgeDelayMs: 101,
+        deadlineSlackMs: 100,
+      },
+    }),
+  ];
+
+  assert.equal(
+    codesFor(plans[0]).filter((code) => code === "invalid_execution_hints")
+      .length,
+    1,
+  );
+  assert.equal(
+    codesFor(plans[1]).filter((code) => code === "invalid_execution_hints")
+      .length,
+    3,
+  );
+  assert.equal(
+    codesFor(plans[2]).filter((code) => code === "invalid_execution_hints")
+      .length,
+    3,
+  );
+  assert.equal(
+    codesFor(plans[3]).filter((code) => code === "invalid_execution_hints")
+      .length,
+    1,
+  );
+});
+
 test("contains scheduler exceptions behind an Origin fallback", () => {
   const throwingScheduler: SegmentScheduler = {
     policyName: "throwing",

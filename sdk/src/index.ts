@@ -13,6 +13,7 @@
  */
 
 export { OpenStreamGridHlsPlugin } from "./hls-plugin.js";
+export { DeadlineAwareScheduler } from "./deadline-aware-scheduler.js";
 export { TrustLatencyProbeScheduler } from "./trust-latency-probe-scheduler.js";
 export { SegmentCache } from "./cache.js";
 export { WsTrackerClient } from "./ws-client.js";
@@ -36,3 +37,7 @@ export type {
   WsServerMessage,
 } from "./types.js";
 export type { BrowserWebRtcPeerOptions } from "./webrtc-peer.js";
+export type {
+  DeadlineAwareSchedulerOptions,
+  OriginLatencyEstimate,
+} from "./deadline-aware-scheduler.js";

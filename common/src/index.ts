@@ -84,10 +84,26 @@ export interface SchedulingPeer {
   readonly originalIndex?: number;
 }
 
+/** Provenance and timing information for a segment playback deadline. */
+export type DeadlineKind =
+  | "player-derived"
+  | "playlist-derived"
+  | "synthetic"
+  | "unknown";
+
+/** Time remaining before a segment is expected to be required for playback. */
+export interface SegmentDeadline {
+  readonly kind: DeadlineKind;
+  readonly slackMs: number;
+  readonly segmentDurationMs?: number;
+  readonly bufferAheadMs?: number;
+}
+
 /** Context provided to the scheduler for one segment decision. */
 export interface SegmentSchedulingContext {
   readonly segmentId: string;
   readonly segmentsAhead?: number;
+  readonly deadline?: SegmentDeadline;
   readonly candidates: readonly SchedulingPeer[];
   readonly selfPeerId: string;
   readonly maximumParallelism: number;
@@ -109,7 +125,22 @@ export type SchedulingReason =
   | "peer_selected"
   | "parallel_peer_probe"
   | "peer_failed"
-  | "origin_fallback";
+  | "origin_fallback"
+  | "deadline_origin"
+  | "deadline_hedged"
+  | "deadline_relaxed_p2p"
+  | "deadline_unknown_legacy";
+
+/** Runtime behavior requested by a scheduler without performing transport I/O. */
+export interface SegmentExecutionHints {
+  readonly strategy:
+    | "legacy-p2p-first"
+    | "origin-only"
+    | "hedged-origin";
+  readonly peerAttemptBudgetMs?: number;
+  readonly originHedgeDelayMs?: number;
+  readonly deadlineSlackMs?: number;
+}
 
 /** A scheduler's decision for how to fetch one segment. */
 export interface SegmentSchedulingPlan {
@@ -118,6 +149,7 @@ export interface SegmentSchedulingPlan {
   readonly peerIds: readonly string[];
   readonly rankedPeers: readonly RankedPeer[];
   readonly reason: SchedulingReason;
+  readonly execution?: SegmentExecutionHints;
 }
 
 /** Observation from a single peer fetch attempt. */
