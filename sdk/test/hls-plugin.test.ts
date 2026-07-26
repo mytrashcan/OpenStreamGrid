@@ -56,9 +56,9 @@ test("uses absolute tracker peer addresses and reports the winning peer", async 
     events.find((event) => event.type === "scheduler_decision"),
     {
       type: "scheduler_decision",
-      policy: "trust-latency-probe",
+      policy: "deadline-aware",
       mode: "parallel-peers",
-      reason: "parallel_peer_probe",
+      reason: "deadline_unknown_legacy",
       candidateCount: 1,
       selectedPeerCount: 1,
     },
