@@ -1,31 +1,48 @@
 #!/usr/bin/env node
 
+import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
+import os from "node:os";
+import { resolve } from "node:path";
+
+import {
+  createSeededRandom,
+  jainFairnessIndex,
+  parseScenarioJson,
+  percentile,
+  shuffleWithRandom,
+} from "../scripts/benchmark-data.mjs";
 
 const environment = process.env;
 
 const DEFAULTS = {
-  trackerUrl: environment.TRACKER_URL ?? "http://127.0.0.1:7070",
-  originUrl: environment.ORIGIN_URL ?? "http://127.0.0.1:8080/hls",
-  broadcastId: environment.BROADCAST_ID ?? "live",
-  advertiseUrl: environment.ADVERTISE_URL ?? "",
-  peers: Number(environment.PEERS ?? 10),
-  rampUpSeconds: Number(environment.RAMP_UP ?? 5),
-  durationSeconds: Number(environment.DURATION ?? 60),
-  churn: Number(environment.CHURN ?? 0),
-  intervalMinSeconds: Number(environment.INTERVAL_MIN ?? 1),
-  intervalMaxSeconds: Number(environment.INTERVAL_MAX ?? 3),
-  reportIntervalSeconds: Number(environment.REPORT_INTERVAL ?? 10),
-  uploadBandwidthMbps: Number(environment.UPLOAD_BANDWIDTH_MBPS ?? 4),
-  uploadPort: Number(environment.UPLOAD_PORT ?? 9090),
-  maxUploadConnections: Number(environment.MAX_UPLOAD_CONNECTIONS ?? 3),
-  cacheSegments: Number(environment.CACHE_SEGMENTS ?? 24),
-  p2pTimeoutMs: Number(environment.P2P_TIMEOUT_MS ?? 2_000),
-  maxPeerAttempts: Number(environment.MAX_PEER_ATTEMPTS ?? 2),
-  quality: environment.QUALITY ?? "low",
-  p2pEnabled: !["0", "false", "no"].includes(
-    (environment.P2P_ENABLED ?? "true").toLowerCase(),
-  ),
+  trackerUrl: "http://127.0.0.1:7070",
+  originUrl: "http://127.0.0.1:8080/hls",
+  broadcastId: "live",
+  advertiseUrl: "",
+  peers: 10,
+  rampUpSeconds: 5,
+  durationSeconds: 60,
+  churn: 0,
+  intervalMinSeconds: 1,
+  intervalMaxSeconds: 3,
+  reportIntervalSeconds: 10,
+  uploadBandwidthMbps: 4,
+  uploadPort: 9090,
+  maxUploadConnections: 3,
+  cacheSegments: 24,
+  p2pTimeoutMs: 2_000,
+  maxPeerAttempts: 2,
+  quality: "low",
+  p2pEnabled: true,
+  segmentDurationSeconds: 2,
+  seed: undefined,
+  scenarioFile: null,
+  scenarioName: null,
+  scenarioVersion: null,
+  scenarioDescription: null,
+  repetitionCount: 1,
+  tags: [],
 };
 
 const HELP = `OpenStreamGrid virtual-peer load test
@@ -53,7 +70,13 @@ Options:
   --max-peer-attempts N             Peers tried before Origin fallback
   --quality NAME                    Preferred HLS variant (default: low)
   --p2p-enabled BOOLEAN             Enable or disable P2P fetches
+  --segment-duration SECONDS        Origin HLS target segment duration
+  --seed INTEGER                    Seed for deterministic random decisions
+  --scenario FILE                   Versioned benchmark scenario JSON
   --help                            Show this help
+
+Precedence:
+  scenario file < environment variables < CLI options
 `;
 
 const optionNames = new Map([
@@ -76,6 +99,9 @@ const optionNames = new Map([
   ["max-peer-attempts", "maxPeerAttempts"],
   ["quality", "quality"],
   ["p2p-enabled", "p2pEnabled"],
+  ["segment-duration", "segmentDurationSeconds"],
+  ["seed", "seed"],
+  ["scenario", "scenarioFile"],
 ]);
 
 const integerOptions = new Set([
@@ -85,6 +111,7 @@ const integerOptions = new Set([
   "cacheSegments",
   "p2pTimeoutMs",
   "maxPeerAttempts",
+  "seed",
 ]);
 
 const numericOptions = new Set([
@@ -96,6 +123,7 @@ const numericOptions = new Set([
   "intervalMaxSeconds",
   "reportIntervalSeconds",
   "uploadBandwidthMbps",
+  "segmentDurationSeconds",
 ]);
 
 const parseBoolean = (value, label) => {
@@ -104,14 +132,111 @@ const parseBoolean = (value, label) => {
   throw new Error(`${label} must be true or false`);
 };
 
+const readScenario = (scenarioFile) => {
+  try {
+    return parseScenarioJson(
+      readFileSync(resolve(scenarioFile), "utf8"),
+      `scenario '${scenarioFile}'`,
+    );
+  } catch (error) {
+    throw new Error(
+      `Unable to read scenario '${scenarioFile}': ${error.message}`,
+    );
+  }
+};
+
+const scenarioConfiguration = (scenario) =>
+  scenario
+    ? {
+        peers: scenario.peerCount,
+        durationSeconds: scenario.durationSeconds,
+        rampUpSeconds: scenario.rampUpSeconds,
+        churn: scenario.churnProbability,
+        p2pEnabled: scenario.p2pEnabled,
+        quality: scenario.quality,
+        segmentDurationSeconds: scenario.segmentDurationSeconds,
+        uploadBandwidthMbps: scenario.uploadBandwidthLimit,
+        maxUploadConnections: scenario.concurrentUploadLimit,
+        p2pTimeoutMs: scenario.p2pTimeoutMs,
+        seed: scenario.randomSeed,
+        scenarioName: scenario.name,
+        scenarioVersion: scenario.scenarioVersion,
+        scenarioDescription: scenario.description,
+        repetitionCount: scenario.repetitionCount,
+        tags: [...scenario.tags],
+      }
+    : {};
+
+const environmentConfiguration = () => {
+  const config = {};
+  const numeric = {
+    PEERS: "peers",
+    RAMP_UP: "rampUpSeconds",
+    DURATION: "durationSeconds",
+    CHURN: "churn",
+    INTERVAL_MIN: "intervalMinSeconds",
+    INTERVAL_MAX: "intervalMaxSeconds",
+    REPORT_INTERVAL: "reportIntervalSeconds",
+    UPLOAD_BANDWIDTH_MBPS: "uploadBandwidthMbps",
+    UPLOAD_PORT: "uploadPort",
+    MAX_UPLOAD_CONNECTIONS: "maxUploadConnections",
+    CACHE_SEGMENTS: "cacheSegments",
+    P2P_TIMEOUT_MS: "p2pTimeoutMs",
+    MAX_PEER_ATTEMPTS: "maxPeerAttempts",
+    SEGMENT_DURATION_SECONDS: "segmentDurationSeconds",
+    SEED: "seed",
+  };
+  const strings = {
+    TRACKER_URL: "trackerUrl",
+    ORIGIN_URL: "originUrl",
+    BROADCAST_ID: "broadcastId",
+    ADVERTISE_URL: "advertiseUrl",
+    QUALITY: "quality",
+  };
+  for (const [name, property] of Object.entries(numeric)) {
+    if (environment[name] !== undefined) config[property] = Number(environment[name]);
+  }
+  for (const [name, property] of Object.entries(strings)) {
+    if (environment[name] !== undefined) config[property] = environment[name];
+  }
+  if (environment.P2P_ENABLED !== undefined) {
+    config.p2pEnabled = parseBoolean(environment.P2P_ENABLED, "P2P_ENABLED");
+  }
+  return config;
+};
+
+const scenarioFileFromArguments = (arguments_) => {
+  let scenarioFile = environment.BENCHMARK_SCENARIO_FILE || null;
+  for (let index = 0; index < arguments_.length; index += 1) {
+    if (arguments_[index] !== "--scenario") continue;
+    const value = arguments_[index + 1];
+    if (value === undefined || value.startsWith("--")) {
+      throw new Error("Option '--scenario' requires a value");
+    }
+    scenarioFile = value;
+    index += 1;
+  }
+  return scenarioFile;
+};
+
+const defaultSeed = () =>
+  (Date.now() ^ (Math.random() * 0xFFFFFFFF)) >>> 0;
+
 const parseArguments = (arguments_) => {
-  const config = { ...DEFAULTS };
+  if (arguments_.includes("--help")) {
+    console.log(HELP);
+    return undefined;
+  }
+  const scenarioFile = scenarioFileFromArguments(arguments_);
+  const scenario = scenarioFile ? readScenario(scenarioFile) : null;
+  const config = {
+    ...DEFAULTS,
+    ...scenarioConfiguration(scenario),
+    ...environmentConfiguration(),
+    scenarioFile,
+  };
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index];
-    if (argument === "--help") {
-      console.log(HELP);
-      return undefined;
-    }
     if (!argument?.startsWith("--")) {
       throw new Error(`Unexpected argument '${argument ?? ""}'`);
     }
@@ -122,7 +247,9 @@ const parseArguments = (arguments_) => {
     if (value === undefined || value.startsWith("--")) {
       throw new Error(`Option '--${option}' requires a value`);
     }
-    if (property === "p2pEnabled") {
+    if (property === "scenarioFile") {
+      continue;
+    } else if (property === "p2pEnabled") {
       config[property] = parseBoolean(value, argument);
     } else if (numericOptions.has(property)) {
       config[property] = Number(value);
@@ -143,16 +270,25 @@ const parseArguments = (arguments_) => {
     "cacheSegments",
     "p2pTimeoutMs",
     "maxPeerAttempts",
+    "segmentDurationSeconds",
   ];
   for (const property of positive) {
     if (!Number.isFinite(config[property]) || config[property] <= 0) {
       throw new Error(`${property} must be a positive number`);
     }
   }
+  if (config.seed === undefined) config.seed = defaultSeed();
   for (const property of integerOptions) {
     if (!Number.isSafeInteger(config[property])) {
       throw new Error(`${property} must be an integer`);
     }
+  }
+  if (
+    !Number.isSafeInteger(config.seed) ||
+    config.seed < 0 ||
+    config.seed > 0xFFFFFFFF
+  ) {
+    throw new Error("seed must be an unsigned 32-bit integer");
   }
   if (!Number.isFinite(config.rampUpSeconds) || config.rampUpSeconds < 0) {
     throw new Error("rampUpSeconds must be zero or a positive number");
@@ -182,17 +318,12 @@ const parseArguments = (arguments_) => {
   return config;
 };
 
-const randomBetween = (minimum, maximum) =>
-  minimum + Math.random() * (maximum - minimum);
+let random;
 
-const shuffle = (values) => {
-  const result = [...values];
-  for (let index = result.length - 1; index > 0; index -= 1) {
-    const other = Math.floor(Math.random() * (index + 1));
-    [result[index], result[other]] = [result[other], result[index]];
-  }
-  return result;
-};
+const randomBetween = (minimum, maximum) =>
+  minimum + random() * (maximum - minimum);
+
+const shuffle = (values) => shuffleWithRandom(values, random);
 
 const delay = (milliseconds, signal) =>
   new Promise((resolve) => {
@@ -214,6 +345,16 @@ const requestSignal = (signal, timeoutMs) =>
   signal
     ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
     : AbortSignal.timeout(timeoutMs);
+
+const isTimeoutError = (error) => {
+  const name = error instanceof Error ? error.name : "";
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    name === "AbortError" ||
+    message.includes("AbortError") ||
+    message.toLowerCase().includes("timeout")
+  );
+};
 
 const responseBody = async (response) => {
   const body = await response.text().catch(() => "");
@@ -383,6 +524,13 @@ class VirtualPeer {
     this.lastHeartbeatAt = 0;
     this.lastStatsAt = 0;
     this.latencies = { p2p: [], origin: [] };
+    this.perPeerUploadedBytes = [];
+    this.loadTestStats = {
+      deadlineMissCount: 0,
+      requestTimeoutCount: 0,
+      httpFailureCount: 0,
+      stallProxyDurationMs: 0,
+    };
     this.events = {
       sessions: 0,
       churns: 0,
@@ -451,6 +599,7 @@ class VirtualPeer {
     }
     this.intentionalClose = false;
     this.peers.clear();
+    this.perPeerUploadedBytes.push(this.stats.bytesUploadedP2P);
   }
 
   connectWebSocket(signal) {
@@ -612,7 +761,7 @@ class VirtualPeer {
   async waitForChurn(signal) {
     while (!signal.aborted) {
       await delay(randomBetween(5_000, 10_000), signal);
-      if (!signal.aborted && Math.random() < this.options.config.churn) return true;
+      if (!signal.aborted && random() < this.options.config.churn) return true;
     }
     return false;
   }
@@ -675,8 +824,10 @@ class VirtualPeer {
           this.recordLatency("p2p", performance.now() - startedAt);
           this.cacheSegment(segment.key, data);
           return;
-        } catch {
+        } catch (error) {
           this.stats.p2pFailures += 1;
+          this.loadTestStats.deadlineMissCount += 1;
+          if (isTimeoutError(error)) this.loadTestStats.requestTimeoutCount += 1;
         }
       }
     }
@@ -691,10 +842,17 @@ class VirtualPeer {
       });
       if (!response.ok) throw new Error(`Origin returned HTTP ${response.status}`);
       const data = Buffer.from(await response.arrayBuffer());
+      const originLatencyMs = performance.now() - startedAt;
       this.stats.bytesDownloadedOrigin += data.byteLength;
-      this.recordLatency("origin", performance.now() - startedAt);
+      this.recordLatency("origin", originLatencyMs);
+      if (attemptedPeer) {
+        this.loadTestStats.stallProxyDurationMs += originLatencyMs * 2;
+      }
       this.cacheSegment(segment.key, data);
     } catch (error) {
+      if (!signal.aborted && !isTimeoutError(error)) {
+        this.loadTestStats.httpFailureCount += 1;
+      }
       if (!signal.aborted) this.events.segmentFailures += 1;
     }
   }
@@ -882,14 +1040,14 @@ class VirtualPeerUploadServer {
   }
 }
 
-const percentile = (values, quantile) => {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((left, right) => left - right);
-  return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * quantile) - 1)];
-};
-
 const aggregate = (peers) => {
   const stats = emptyStats();
+  const loadTestStats = {
+    deadlineMissCount: 0,
+    requestTimeoutCount: 0,
+    httpFailureCount: 0,
+    stallProxyDurationMs: 0,
+  };
   const events = {
     sessions: 0,
     churns: 0,
@@ -898,25 +1056,42 @@ const aggregate = (peers) => {
     websocketDisconnects: 0,
   };
   const latencies = [];
+  const uploadedBytesByPeer = [];
   for (const peer of peers) {
     for (const key of Object.keys(stats)) stats[key] += peer.stats[key];
+    for (const key of Object.keys(loadTestStats)) {
+      loadTestStats[key] += peer.loadTestStats[key];
+    }
     for (const key of Object.keys(events)) events[key] += peer.events[key];
     latencies.push(...peer.latencies.p2p, ...peer.latencies.origin);
+    uploadedBytesByPeer.push(
+      peer.active
+        ? peer.stats.bytesUploadedP2P
+        : (peer.perPeerUploadedBytes.at(-1) ?? peer.stats.bytesUploadedP2P),
+    );
   }
   const downloaded = stats.bytesDownloadedP2P + stats.bytesDownloadedOrigin;
   const completedRequests = stats.p2pSuccesses + stats.originRequests;
   return {
     stats,
+    loadTestStats,
     events,
     activePeers: peers.filter((peer) => peer.active).length,
     p2pSuccessPercent:
       stats.p2pRequests === 0 ? 0 : (stats.p2pSuccesses / stats.p2pRequests) * 100,
+    originFallbackPercent:
+      stats.p2pRequests === 0 ? 0 : (stats.fallbacks / stats.p2pRequests) * 100,
     p2pEfficiencyPercent:
       completedRequests === 0 ? 0 : (stats.p2pSuccesses / completedRequests) * 100,
     cdnSavingsPercent:
       downloaded === 0 ? 0 : (stats.bytesDownloadedP2P / downloaded) * 100,
+    deadlineMissPercent:
+      completedRequests === 0
+        ? 0
+        : (loadTestStats.deadlineMissCount / completedRequests) * 100,
     averageUploadBytesPerPeer:
       peers.length === 0 ? 0 : stats.bytesUploadedP2P / peers.length,
+    jainFairnessIndex: jainFairnessIndex(uploadedBytesByPeer),
     latency: {
       p50: percentile(latencies, 0.5),
       p95: percentile(latencies, 0.95),
@@ -953,10 +1128,41 @@ const printReport = (peers, totalPeers, startedAt, final = false) => {
   return result;
 };
 
+const commandArgument = (value) =>
+  /^[A-Za-z0-9_./:=+-]+$/u.test(value)
+    ? value
+    : `'${value.replaceAll("'", "'\\''")}'`;
+
+const provenanceCommand = () =>
+  ["node", "test/load-test.mjs", ...process.argv.slice(2)]
+    .map(commandArgument)
+    .join(" ");
+
 const benchmarkResult = (result, config, startedAt) => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   generatedAt: new Date().toISOString(),
+  provenance: {
+    command: provenanceCommand(),
+    executedAt: new Date(startedAt).toISOString(),
+    nodeVersion: process.version,
+    platform: process.platform,
+    arch: process.arch,
+    cpus: os.cpus().length,
+    totalMemoryMb: Math.round(os.totalmem() / (1024 * 1024)),
+    randomSeed: config.seed,
+    scenarioFile: config.scenarioFile,
+    productionComparable: false,
+  },
   scenario: {
+    ...(config.scenarioName
+      ? {
+          name: config.scenarioName,
+          scenarioVersion: config.scenarioVersion,
+          description: config.scenarioDescription,
+          repetitionCount: config.repetitionCount,
+          tags: [...config.tags],
+        }
+      : {}),
     peerCount: config.peers,
     configuredDurationSeconds: config.durationSeconds,
     elapsedSeconds: Number(((Date.now() - startedAt) / 1_000).toFixed(3)),
@@ -964,16 +1170,44 @@ const benchmarkResult = (result, config, startedAt) => ({
     churnProbability: config.churn,
     p2pEnabled: config.p2pEnabled,
     quality: config.quality,
+    segmentDurationSeconds: config.segmentDurationSeconds,
+    uploadBandwidthLimit: config.uploadBandwidthMbps,
+    concurrentUploadLimit: config.maxUploadConnections,
+    p2pTimeoutMs: config.p2pTimeoutMs,
+    randomSeed: config.seed,
   },
   metrics: {
     p2pEfficiencyRatioPercent: Number(result.p2pEfficiencyPercent.toFixed(3)),
     cdnTrafficReductionPercent: Number(result.cdnSavingsPercent.toFixed(3)),
+    p2pSuccessRatePercent: Number(result.p2pSuccessPercent.toFixed(3)),
+    originFallbackRatePercent: Number(result.originFallbackPercent.toFixed(3)),
+    // Cache lookups currently distinguish only misses; hits are not counted.
+    cacheHitRatePercent: null,
+    integrityFailureCount: result.stats.integrityFailures,
+    peerSessionCount: result.events.sessions,
+    bytesDownloadedP2P: result.stats.bytesDownloadedP2P,
+    bytesDownloadedOrigin: result.stats.bytesDownloadedOrigin,
+    bytesUploadedP2P: result.stats.bytesUploadedP2P,
+    averageUploadBytesPerPeer: Math.round(result.averageUploadBytesPerPeer),
+    fetchLatencyMs: {
+      p50: Number(result.latency.p50.toFixed(3)),
+      p95: Number(result.latency.p95.toFixed(3)),
+      p99: Number(result.latency.p99.toFixed(3)),
+    },
+    deadlineMissCount: result.loadTestStats.deadlineMissCount,
+    deadlineMissRatePercent: Number(result.deadlineMissPercent.toFixed(3)),
+    requestTimeoutCount: result.loadTestStats.requestTimeoutCount,
+    transportFailureCount: result.events.websocketDisconnects,
+    httpFailureCount: result.loadTestStats.httpFailureCount,
+    stallProxyDurationMs: Number(
+      result.loadTestStats.stallProxyDurationMs.toFixed(3),
+    ),
+    jainFairnessIndex: Number(result.jainFairnessIndex.toFixed(6)),
     latencyMs: {
       p50: Number(result.latency.p50.toFixed(3)),
       p95: Number(result.latency.p95.toFixed(3)),
       p99: Number(result.latency.p99.toFixed(3)),
     },
-    averageUploadBytesPerPeer: Math.round(result.averageUploadBytesPerPeer),
   },
   traffic: { ...result.stats },
   churn: {
@@ -995,6 +1229,7 @@ const reportLoop = async (peers, config, startedAt, signal) => {
 const main = async () => {
   const config = parseArguments(process.argv.slice(2));
   if (!config) return;
+  random = createSeededRandom(config.seed);
 
   const controller = new AbortController();
   const stop = (signal) => {
@@ -1033,6 +1268,7 @@ const main = async () => {
   console.log(
     `[LoadTest] starting peers=${config.peers} duration=${config.durationSeconds}s` +
       ` ramp_up=${config.rampUpSeconds}s churn=${config.churn}` +
+      ` seed=${config.seed}` +
       ` playlist=${mediaPlaylistUrl.href}` +
       ` p2p=${config.p2pEnabled ? "enabled" : "disabled"}`,
   );
