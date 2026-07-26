@@ -47,6 +47,8 @@ interface PeerConfiguration {
   maxParallelDownloads: number;
   playlistPollMs: number;
   p2pTimeoutMs: number;
+  segmentDurationMs?: number;
+  deadlineSchedulingEnabled: boolean;
   webRtcEnabled: boolean;
   iceServers: RTCIceServer[];
 }
@@ -155,6 +157,10 @@ class PeerApplication {
       maxParallel: configuration.maxParallelDownloads,
       p2pTimeoutMs: configuration.p2pTimeoutMs,
       transportManager: this.transportManager,
+      deadlineSchedulingEnabled: configuration.deadlineSchedulingEnabled,
+      ...(configuration.segmentDurationMs === undefined
+        ? {}
+        : { segmentDurationMs: configuration.segmentDurationMs }),
     });
   }
 
@@ -311,6 +317,14 @@ const parsePositiveInteger = (value: string, label: string): number => {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new Error(`${label} must be a positive integer`);
+  }
+  return parsed;
+};
+
+const parsePositiveNumber = (value: string, label: string): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive number`);
   }
   return parsed;
 };
@@ -529,6 +543,9 @@ export const parseArguments = (
     values.get("tracker-api-key") ?? environment.TRACKER_API_KEY,
     "Tracker API key",
   );
+  const segmentDurationSeconds = optionalValue(
+    environment.SEGMENT_DURATION_SECONDS,
+  );
 
   return {
     trackerUrl: trackerUrl.href,
@@ -585,6 +602,19 @@ export const parseArguments = (
     p2pTimeoutMs: parsePositiveInteger(
       environment.P2P_TIMEOUT_MS ?? String(DEFAULT_P2P_TIMEOUT_MS),
       "P2P timeout",
+    ),
+    ...(segmentDurationSeconds === undefined
+      ? {}
+      : {
+          segmentDurationMs:
+            parsePositiveNumber(
+              segmentDurationSeconds,
+              "Segment duration",
+            ) * 1_000,
+        }),
+    deadlineSchedulingEnabled: parseBoolean(
+      environment.DEADLINE_SCHEDULING_ENABLED ?? "true",
+      "Deadline scheduling enabled",
     ),
     webRtcEnabled: parseBoolean(
       values.get("webrtc-enabled") ?? environment.WEBRTC_ENABLED ?? "true",

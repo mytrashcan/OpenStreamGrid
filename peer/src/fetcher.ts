@@ -3,16 +3,19 @@ import {
   planBatch,
   planSegmentSafely,
   validatePeerHttpBaseUrl,
+  type DeadlineKind,
   type Peer,
   type PeerFailureReport,
   type SchedulerDecision,
   type SchedulingPeer,
+  type SegmentDeadline,
   type SegmentScheduler,
   type SegmentSchedulingContext,
   type SegmentSchedulingPlan,
 } from "@openstreamgrid/common";
 import type { SegmentCache } from "./cache.js";
-import type { OriginLatencyEstimator } from "./origin-latency-estimator.js";
+import { DeadlineAwareScheduler } from "./deadline-aware-scheduler.js";
+import { OriginLatencyEstimator } from "./origin-latency-estimator.js";
 import type { TrafficStats } from "./stats.js";
 import type {
   FetchFunction,
@@ -65,14 +68,32 @@ export interface FetcherOptions {
   maxParallel?: number;
   transportManager?: TransportManager;
   scheduler?: SegmentScheduler;
+  segmentDurationMs?: number;
+  deadlineSchedulingEnabled?: boolean;
   originLatencyEstimator?: OriginLatencyEstimator;
+  deadlineSafetyMarginMs?: number;
+  deadlineMaximumPeerProbeWindowMs?: number;
+  deadlineMaximumHedgeDelayMs?: number;
   onSchedulerDecision?: (decision: SchedulerDecision) => void;
+  onSchedulerOutcome?: (outcome: SchedulerOutcome) => void;
 }
 
 /** Segment bytes and the delivery path that supplied them. */
 export interface SegmentFetchResult {
   data: Buffer;
   source: "cache" | "p2p" | "origin";
+}
+
+export interface SchedulerOutcome {
+  policy: string;
+  deadlineKind: DeadlineKind;
+  plannedStrategy: NonNullable<
+    SegmentSchedulingPlan["execution"]
+  >["strategy"];
+  plannedMode: SegmentSchedulingPlan["mode"];
+  finalSource: SegmentFetchResult["source"] | "none";
+  hedgeStarted: boolean;
+  outcome: "success" | "failure" | "aborted";
 }
 
 interface InFlightSegment {
@@ -97,6 +118,11 @@ type HedgedAttempt =
       elapsedMs: number;
     };
 
+interface HedgedFetchResult extends SegmentFetchResult {
+  source: "p2p" | "origin";
+  hedgeStarted: boolean;
+}
+
 class PeerFetchError extends Error {
   constructor(
     message: string,
@@ -112,6 +138,8 @@ export class HybridSegmentFetcher {
   private readonly p2pTimeoutMs: number;
   private readonly maxParallel: number;
   private readonly scheduler: SegmentScheduler;
+  private readonly segmentDurationMs: number | undefined;
+  private readonly originLatencyEstimator: OriginLatencyEstimator | undefined;
   private readonly inFlightSegments = new Map<string, InFlightSegment>();
   private readonly lastSources = new Map<
     string,
@@ -126,7 +154,46 @@ export class HybridSegmentFetcher {
     if (!Number.isSafeInteger(this.maxParallel) || this.maxParallel <= 0) {
       throw new Error("Maximum parallel downloads must be a positive integer");
     }
-    this.scheduler = options.scheduler ?? new WeightedScoreScheduler();
+    this.segmentDurationMs = options.segmentDurationMs;
+    if (
+      this.segmentDurationMs !== undefined &&
+      (!Number.isFinite(this.segmentDurationMs) || this.segmentDurationMs <= 0)
+    ) {
+      throw new Error("Segment duration must be a positive finite number");
+    }
+    const useDeadlineScheduler =
+      options.deadlineSchedulingEnabled === true &&
+      this.segmentDurationMs !== undefined;
+    if (options.scheduler) {
+      this.originLatencyEstimator = options.originLatencyEstimator;
+      this.scheduler = options.scheduler;
+    } else if (useDeadlineScheduler) {
+      const estimator =
+        options.originLatencyEstimator ?? new OriginLatencyEstimator();
+      this.originLatencyEstimator = estimator;
+      this.scheduler = new DeadlineAwareScheduler({
+        baseScheduler: new WeightedScoreScheduler(),
+        originLatencyEstimator: estimator,
+        ...(options.deadlineSafetyMarginMs === undefined
+          ? {}
+          : { safetyMarginMs: options.deadlineSafetyMarginMs }),
+        ...(options.deadlineMaximumPeerProbeWindowMs === undefined
+          ? {}
+          : {
+              maximumPeerProbeWindowMs:
+                options.deadlineMaximumPeerProbeWindowMs,
+            }),
+        ...(options.deadlineMaximumHedgeDelayMs === undefined
+          ? {}
+          : {
+              maximumHedgeDelayMs:
+                options.deadlineMaximumHedgeDelayMs,
+            }),
+      });
+    } else {
+      this.originLatencyEstimator = options.originLatencyEstimator;
+      this.scheduler = new WeightedScoreScheduler();
+    }
   }
 
   async fetchSegment(
@@ -159,6 +226,19 @@ export class HybridSegmentFetcher {
   ): Promise<SegmentFetchResult> {
     let peers: Peer[] = [];
     let plan: SegmentSchedulingPlan | undefined;
+    const complete = (
+      result: SegmentFetchResult,
+      hedgeStarted = false,
+    ): SegmentFetchResult => {
+      this.recordSchedulerOutcome(
+        plan,
+        segmentsAhead,
+        result.source,
+        hedgeStarted,
+        "success",
+      );
+      return result;
+    };
     try {
       const selection = this.planPeers(
         await this.options.directory.listPeers(segmentName),
@@ -176,15 +256,33 @@ export class HybridSegmentFetcher {
       peer &&
       plan?.execution?.strategy === "hedged-origin"
     ) {
-      const result = await this.hedgedFetch(
-        peer,
-        segmentName,
-        plan.execution.originHedgeDelayMs ?? 0,
-        signal,
-      );
-      this.cache(segmentName, result.data);
-      this.setLastSource(segmentName, result.source);
-      return result;
+      let hedgeStarted = false;
+      try {
+        const hedgedResult = await this.hedgedFetch(
+          peer,
+          segmentName,
+          plan.execution.originHedgeDelayMs ?? 0,
+          signal,
+          () => {
+            hedgeStarted = true;
+          },
+        );
+        const { hedgeStarted: observedHedgeStart, ...result } = hedgedResult;
+        this.cache(segmentName, result.data);
+        this.setLastSource(segmentName, result.source);
+        return complete(result, observedHedgeStart);
+      } catch (error) {
+        this.recordSchedulerOutcome(
+          plan,
+          segmentsAhead,
+          "none",
+          hedgeStarted,
+          signal.aborted || this.shutdownController.signal.aborted
+            ? "aborted"
+            : "failure",
+        );
+        throw error;
+      }
     }
 
     if (peer) {
@@ -199,9 +297,16 @@ export class HybridSegmentFetcher {
         });
         this.cache(segmentName, data);
         this.setLastSource(segmentName, "p2p");
-        return { data, source: "p2p" };
+        return complete({ data, source: "p2p" });
       } catch (error) {
         if (signal.aborted || this.shutdownController.signal.aborted) {
+          this.recordSchedulerOutcome(
+            plan,
+            segmentsAhead,
+            "none",
+            false,
+            "aborted",
+          );
           throw this.activeAbortReason(signal);
         }
         this.recordPeerFailure(
@@ -212,11 +317,24 @@ export class HybridSegmentFetcher {
       }
     }
 
-    const data = await this.fetchFromOrigin(segmentName, signal);
-    this.options.stats.recordOriginBytes(data.byteLength);
-    this.cache(segmentName, data);
-    this.setLastSource(segmentName, "origin");
-    return { data, source: "origin" };
+    try {
+      const data = await this.fetchFromOrigin(segmentName, signal);
+      this.options.stats.recordOriginBytes(data.byteLength);
+      this.cache(segmentName, data);
+      this.setLastSource(segmentName, "origin");
+      return complete({ data, source: "origin" });
+    } catch (error) {
+      this.recordSchedulerOutcome(
+        plan,
+        segmentsAhead,
+        "none",
+        false,
+        signal.aborted || this.shutdownController.signal.aborted
+          ? "aborted"
+          : "failure",
+      );
+      throw error;
+    }
   }
 
   /**
@@ -385,9 +503,11 @@ export class HybridSegmentFetcher {
     segmentsAhead?: number,
   ): { peers: Peer[]; plan: SegmentSchedulingPlan } {
     const candidates = this.schedulingPeersFor(peers);
+    const deadline = this.syntheticDeadline(segmentsAhead);
     const context: SegmentSchedulingContext = {
       segmentId: segmentName,
       ...(segmentsAhead === undefined ? {} : { segmentsAhead }),
+      ...(deadline === undefined ? {} : { deadline }),
       candidates,
       selfPeerId: this.options.selfPeerId,
       maximumParallelism: this.maxParallel,
@@ -468,6 +588,54 @@ export class HybridSegmentFetcher {
     } catch (error) {
       logger.warn("scheduler_decision_callback_failed", {
         policy: decision.policy,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private syntheticDeadline(
+    segmentsAhead: number | undefined,
+  ): SegmentDeadline | undefined {
+    if (
+      this.options.deadlineSchedulingEnabled !== true ||
+      segmentsAhead === undefined ||
+      this.segmentDurationMs === undefined
+    ) {
+      return undefined;
+    }
+    return {
+      kind: "synthetic",
+      slackMs: segmentsAhead * this.segmentDurationMs,
+      segmentDurationMs: this.segmentDurationMs,
+    };
+  }
+
+  private recordSchedulerOutcome(
+    plan: SegmentSchedulingPlan | undefined,
+    segmentsAhead: number,
+    finalSource: SchedulerOutcome["finalSource"],
+    hedgeStarted: boolean,
+    outcome: SchedulerOutcome["outcome"],
+  ): void {
+    const deadlineKind =
+      this.syntheticDeadline(segmentsAhead)?.kind ?? "unknown";
+    const plannedStrategy =
+      plan?.execution?.strategy ??
+      (plan?.mode === "origin" ? "origin-only" : "legacy-p2p-first");
+    const schedulerOutcome: SchedulerOutcome = {
+      policy: plan?.policy ?? this.scheduler.policyName,
+      deadlineKind,
+      plannedStrategy,
+      plannedMode: plan?.mode ?? "origin",
+      finalSource,
+      hedgeStarted,
+      outcome,
+    };
+    try {
+      this.options.onSchedulerOutcome?.(schedulerOutcome);
+    } catch (error) {
+      logger.warn("scheduler_outcome_callback_failed", {
+        policy: schedulerOutcome.policy,
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -607,9 +775,7 @@ export class HybridSegmentFetcher {
           `Origin segment '${segmentName}' failed integrity verification`,
         );
       }
-      this.options.originLatencyEstimator?.observe(
-        performance.now() - startedAt,
-      );
+      this.originLatencyEstimator?.observe(performance.now() - startedAt);
       return data;
     } finally {
       clearTimeout(timer);
@@ -693,7 +859,8 @@ export class HybridSegmentFetcher {
     segmentName: string,
     hedgeDelayMs: number,
     signal: AbortSignal,
-  ): Promise<SegmentFetchResult> {
+    onHedgeStart: () => void,
+  ): Promise<HedgedFetchResult> {
     const peerController = new AbortController();
     const originController = new AbortController();
     const abortBoth = (): void => {
@@ -717,8 +884,13 @@ export class HybridSegmentFetcher {
           false,
         ),
     );
+    const hedgeStart = this.createHedgeStart(
+      hedgeDelayMs,
+      originController.signal,
+      onHedgeStart,
+    );
     const originAttempt = this.captureHedgedAttempt("origin", async () => {
-      await this.waitForHedge(hedgeDelayMs, originController.signal);
+      await hedgeStart.promise;
       return this.fetchFromOrigin(segmentName, originController.signal);
     });
     const pending = new Map([
@@ -738,6 +910,7 @@ export class HybridSegmentFetcher {
           failures.push(attempt.error);
           if (attempt.source === "p2p") {
             this.recordPeerFailure(peer, attempt.error, attempt.elapsedMs);
+            hedgeStart.startNow();
           }
           continue;
         }
@@ -755,7 +928,11 @@ export class HybridSegmentFetcher {
           peerController.abort(new Error("Origin hedge won"));
           this.options.stats.recordOriginBytes(attempt.data.byteLength);
         }
-        return { data: attempt.data, source: attempt.source };
+        return {
+          data: attempt.data,
+          source: attempt.source,
+          hedgeStarted: hedgeStart.started(),
+        };
       }
       throw new AggregateError(
         failures,
@@ -791,19 +968,44 @@ export class HybridSegmentFetcher {
     }
   }
 
-  private waitForHedge(delayMs: number, signal: AbortSignal): Promise<void> {
-    return new Promise((resolve, reject) => {
+  private createHedgeStart(
+    delayMs: number,
+    signal: AbortSignal,
+    onStart: () => void,
+  ): {
+    promise: Promise<void>;
+    startNow(): void;
+    started(): boolean;
+  } {
+    let startNow = (): void => {};
+    let started = false;
+    const promise = new Promise<void>((resolve, reject) => {
+      let finished = false;
       const finish = (callback: () => void): void => {
+        if (finished) return;
+        finished = true;
         clearTimeout(timer);
         signal.removeEventListener("abort", onAbort);
         callback();
       };
+      const start = (): void =>
+        finish(() => {
+          started = true;
+          onStart();
+          resolve();
+        });
       const onAbort = (): void =>
         finish(() => reject(this.abortReason(signal)));
-      const timer = setTimeout(() => finish(resolve), delayMs);
+      const timer = setTimeout(start, delayMs);
+      startNow = start;
       signal.addEventListener("abort", onAbort, { once: true });
       if (signal.aborted) onAbort();
     });
+    return {
+      promise,
+      startNow: () => startNow(),
+      started: () => started,
+    };
   }
 
   private recordPeerFailure(

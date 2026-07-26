@@ -4,6 +4,8 @@ import type {
   Peer,
   PeerFailureReport,
   SchedulerDecision,
+  SegmentScheduler,
+  SegmentSchedulingContext,
 } from "@openstreamgrid/common";
 import { SegmentCache } from "../src/cache.js";
 import {
@@ -80,6 +82,85 @@ test("uses a ranked peer for non-urgent segments", async () => {
       selectedPeerCount: 1,
     },
   ]);
+});
+
+test("passes a calculated synthetic deadline to the scheduler", async () => {
+  let schedulingContext: SegmentSchedulingContext | undefined;
+  const scheduler: SegmentScheduler = {
+    policyName: "deadline-capture",
+    planSegment(context) {
+      schedulingContext = context;
+      return {
+        policy: this.policyName,
+        mode: "origin",
+        peerIds: [],
+        rankedPeers: [],
+        reason: "urgent_origin",
+      };
+    },
+  };
+  const fetcher = new HybridSegmentFetcher({
+    selfPeerId: "peer-b",
+    originBaseUrl: new URL("http://origin:8080/hls/"),
+    cache: new SegmentCache(1_000),
+    directory: new FakeDirectory(),
+    verifier,
+    stats: new TrafficStats(),
+    fetchImpl: async () => new Response("from-origin"),
+    scheduler,
+    deadlineSchedulingEnabled: true,
+    segmentDurationMs: 2_000,
+  });
+
+  await fetcher.fetchSegment("segment.ts", 3);
+
+  assert.deepEqual(schedulingContext?.deadline, {
+    kind: "synthetic",
+    slackMs: 6_000,
+    segmentDurationMs: 2_000,
+  });
+});
+
+test("uses deadline-aware scheduling when synthetic deadlines are enabled", async () => {
+  const decisions: SchedulerDecision[] = [];
+  const fetcher = new HybridSegmentFetcher({
+    selfPeerId: "peer-b",
+    originBaseUrl: new URL("http://origin:8080/hls/"),
+    cache: new SegmentCache(1_000),
+    directory: new FakeDirectory(),
+    verifier,
+    stats: new TrafficStats(),
+    fetchImpl: async () => new Response("from-peer"),
+    deadlineSchedulingEnabled: true,
+    segmentDurationMs: 2_000,
+    onSchedulerDecision: (decision) => decisions.push(decision),
+  });
+
+  const result = await fetcher.fetchSegment("segment.ts", 3);
+
+  assert.equal(result.source, "p2p");
+  assert.equal(decisions[0]?.policy, "deadline-aware");
+  assert.equal(decisions[0]?.reason, "deadline_relaxed_p2p");
+});
+
+test("preserves the legacy scheduler when deadline scheduling is disabled", async () => {
+  const decisions: SchedulerDecision[] = [];
+  const fetcher = new HybridSegmentFetcher({
+    selfPeerId: "peer-b",
+    originBaseUrl: new URL("http://origin:8080/hls/"),
+    cache: new SegmentCache(1_000),
+    directory: new FakeDirectory(),
+    verifier,
+    stats: new TrafficStats(),
+    fetchImpl: async () => new Response("from-peer"),
+    deadlineSchedulingEnabled: false,
+    segmentDurationMs: 2_000,
+    onSchedulerDecision: (decision) => decisions.push(decision),
+  });
+
+  await fetcher.fetchSegment("segment.ts", 3);
+
+  assert.equal(decisions[0]?.policy, "weighted-score");
 });
 
 test("falls back to origin when the selected peer is unreachable", async () => {

@@ -9,6 +9,7 @@ import { SegmentCache } from "../src/cache.js";
 import {
   HybridSegmentFetcher,
   type FetcherOptions,
+  type SchedulerOutcome,
 } from "../src/fetcher.js";
 import { OriginLatencyEstimator } from "../src/origin-latency-estimator.js";
 import { TrafficStats } from "../src/stats.js";
@@ -136,6 +137,41 @@ test("P2P wins before the Origin hedge delay", async (context) => {
   ]);
   assert.equal(stats.snapshot().p2pRequests, 1);
   assert.equal(stats.snapshot().originRequests, 0);
+});
+
+test("starts Origin immediately when P2P fails before the hedge delay", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const requests: string[] = [];
+  const outcomes: SchedulerOutcome[] = [];
+  const { fetcher, stats } = createFetcher(
+    async (input) => {
+      requests.push(String(input));
+      return String(input).startsWith("http://peer-a")
+        ? new Response("peer unavailable", { status: 503 })
+        : new Response("from-origin");
+    },
+    { onSchedulerOutcome: (outcome) => outcomes.push(outcome) },
+  );
+
+  const result = await fetcher.fetchSegment("segment.ts", 3);
+
+  assert.equal(result.source, "origin");
+  assert.deepEqual(requests, [
+    "http://peer-a:9090/segments/segment.ts",
+    "http://origin:8080/hls/segment.ts",
+  ]);
+  assert.equal(stats.snapshot().originRequests, 1);
+  assert.deepEqual(outcomes, [
+    {
+      policy: "test-hedged",
+      deadlineKind: "unknown",
+      plannedStrategy: "hedged-origin",
+      plannedMode: "single-peer",
+      finalSource: "origin",
+      hedgeStarted: true,
+      outcome: "success",
+    },
+  ]);
 });
 
 test("P2P can win after the Origin hedge has started", async (context) => {
