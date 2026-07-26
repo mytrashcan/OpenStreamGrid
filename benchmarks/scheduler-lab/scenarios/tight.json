@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "name": "tight",
+  "description": "Tight playback deadlines with variable peer timing.",
+  "seed": "phase3-tight-2026",
+  "requestCount": 240,
+  "slackMs": 2000,
+  "deadlineKind": "playlist-derived",
+  "originLatencyMs": 700,
+  "originJitterMs": 180,
+  "peerLatencyMs": 1100,
+  "peerLatencyJitterMs": 850,
+  "peerSuccessRate": 0.8,
+  "peerCount": 5,
+  "maximumParallelism": 3,
+  "peerTimeoutMs": 3000
+}

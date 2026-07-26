@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "name": "slow-origin",
+  "description": "Tight deadlines with an Origin that takes about 2 seconds.",
+  "seed": "phase3-slow-origin-2026",
+  "requestCount": 240,
+  "slackMs": 2500,
+  "deadlineKind": "player-derived",
+  "originLatencyMs": 2000,
+  "originJitterMs": 300,
+  "peerLatencyMs": 900,
+  "peerLatencyJitterMs": 350,
+  "peerSuccessRate": 0.9,
+  "peerCount": 5,
+  "maximumParallelism": 3,
+  "peerTimeoutMs": 3000
+}
