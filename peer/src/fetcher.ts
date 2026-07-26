@@ -1,5 +1,6 @@
 import {
   createLogger,
+  planSegmentSafely,
   validatePeerHttpBaseUrl,
   type Peer,
   type PeerFailureReport,
@@ -19,7 +20,6 @@ import { keepAliveFetch } from "./http-client.js";
 import {
   MAX_PARALLEL_DOWNLOADS_VALUE,
   schedulerDecisionFor,
-  planSegmentSafely,
   URGENT_THRESHOLD_SEGMENTS_VALUE,
   WeightedScoreScheduler,
 } from "./weighted-score-scheduler.js";
@@ -358,11 +358,24 @@ export class HybridSegmentFetcher {
       selfPeerId: this.options.selfPeerId,
       maximumParallelism: this.maxParallel,
     };
-    const plan = planSegmentSafely(
-      this.scheduler,
-      context,
-      (event, warningContext) => logger.warn(event, warningContext),
-    );
+    try {
+      this.scheduler.reconcilePeers?.(context.candidates);
+    } catch (error) {
+      logger.warn("scheduler_reconcile_failed", {
+        policy: this.scheduler.policyName,
+        segmentId: context.segmentId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    const { plan, warnings } = planSegmentSafely(this.scheduler, context);
+    for (const warning of warnings) {
+      logger.warn("scheduler_plan_invalid", {
+        policy: this.scheduler.policyName,
+        segmentId: context.segmentId,
+        validationFailure: warning.code,
+        message: warning.message,
+      });
+    }
     this.recordSchedulerDecision(schedulerDecisionFor(plan, candidates.length));
     if (plan.mode === "origin") return [];
 

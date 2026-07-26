@@ -6,9 +6,9 @@ import type {
   SegmentSchedulingContext,
   SegmentSchedulingPlan,
 } from "@openstreamgrid/common";
+import { planSegmentSafely } from "@openstreamgrid/common";
 import {
   METRIC_EMA_ALPHA_VALUE,
-  planSegmentSafely,
   schedulerDecisionFor,
   WeightedScoreScheduler,
 } from "../src/weighted-score-scheduler.js";
@@ -261,18 +261,18 @@ test("rejects invalid scheduler output and returns an Origin fallback", () => {
       policyName: invalidPlan.policy,
       planSegment: () => invalidPlan,
     };
-    const plan = planSegmentSafely(
+    const { plan, warnings: planWarnings } = planSegmentSafely(
       scheduler,
       makeContext([makePeer("peer-a")]),
-      (event) => warnings.push(event),
     );
+    warnings.push(...planWarnings.map(({ code }) => code));
     assert.equal(plan.mode, "origin");
     assert.equal(plan.reason, "origin_fallback");
   }
   assert.deepEqual(warnings, [
-    "scheduler_plan_invalid",
-    "scheduler_plan_invalid",
-    "scheduler_plan_invalid",
+    "invalid_mode",
+    "unknown_peer",
+    "non_finite_score",
   ]);
 });
 

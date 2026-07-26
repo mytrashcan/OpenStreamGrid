@@ -268,63 +268,6 @@ export class WeightedScoreScheduler implements SegmentScheduler {
   }
 }
 
-export type SchedulerWarning = (
-  event: string,
-  context: Readonly<Record<string, unknown>>,
-) => void;
-
-const isValidMode = (
-  mode: unknown,
-): mode is SegmentSchedulingPlan["mode"] =>
-  mode === "origin" || mode === "single-peer" || mode === "parallel-peers";
-
-const validatePlan = (
-  plan: SegmentSchedulingPlan,
-  context: SegmentSchedulingContext,
-): string | undefined => {
-  if (!isValidMode(plan.mode)) return "invalid_mode";
-  const candidateIds = new Set(context.candidates.map((peer) => peer.id));
-  if (plan.peerIds.some((peerId) => !candidateIds.has(peerId))) {
-    return "unknown_peer";
-  }
-  if (
-    plan.rankedPeers.some(
-      ({ score }) => score !== undefined && !Number.isFinite(score),
-    )
-  ) {
-    return "non_finite_score";
-  }
-  return undefined;
-};
-
-/**
- * Executes and validates an injected scheduler, falling back to Origin safely.
- */
-export const planSegmentSafely = (
-  scheduler: SegmentScheduler,
-  context: SegmentSchedulingContext,
-  warn: SchedulerWarning = () => {},
-): SegmentSchedulingPlan => {
-  try {
-    scheduler.reconcilePeers?.(context.candidates);
-    const plan = scheduler.planSegment(context);
-    const validationFailure = validatePlan(plan, context);
-    if (!validationFailure) return plan;
-    warn("scheduler_plan_invalid", {
-      policy: scheduler.policyName,
-      segmentId: context.segmentId,
-      validationFailure,
-    });
-  } catch (error) {
-    warn("scheduler_plan_failed", {
-      policy: scheduler.policyName,
-      segmentId: context.segmentId,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-  return originPlan(scheduler.policyName, "origin_fallback");
-};
-
 /** Builds the observable counter dimensions for one scheduling plan. */
 export const schedulerDecisionFor = (
   plan: SegmentSchedulingPlan,

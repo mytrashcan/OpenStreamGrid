@@ -141,6 +141,17 @@ export interface SegmentScheduler {
   reset?(): void;
 }
 
+export {
+  planBatch,
+  planSegmentSafely,
+  validateSchedulerPlan,
+} from "./scheduler.js";
+export type {
+  BatchAssignment,
+  BatchSegmentRequest,
+  SchedulerPlanValidationFailure,
+} from "./scheduler.js";
+
 /** Observable dimensions recorded for one scheduler decision. */
 export interface SchedulerDecision {
   readonly policy: string;
