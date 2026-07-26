@@ -121,6 +121,92 @@ test("passes a calculated synthetic deadline to the scheduler", async () => {
   });
 });
 
+const captureBatchSchedulingContexts = async (
+  requests: Array<{ segmentId: string; segmentsAhead?: number }>,
+  deadlineSchedulingEnabled: boolean,
+): Promise<SegmentSchedulingContext[]> => {
+  const contexts: SegmentSchedulingContext[] = [];
+  const scheduler: SegmentScheduler = {
+    policyName: "batch-deadline-capture",
+    planSegment(context) {
+      contexts.push(context);
+      return {
+        policy: this.policyName,
+        mode: "origin",
+        peerIds: [],
+        rankedPeers: [],
+        reason: "urgent_origin",
+      };
+    },
+  };
+  const fetcher = new HybridSegmentFetcher({
+    selfPeerId: "peer-b",
+    originBaseUrl: new URL("http://origin:8080/hls/"),
+    cache: new SegmentCache(10_000),
+    directory: new FakeDirectory(),
+    verifier,
+    stats: new TrafficStats(),
+    fetchImpl: async () => new Response("from-origin"),
+    scheduler,
+    deadlineSchedulingEnabled,
+    segmentDurationMs: 2_000,
+    maxParallel: 3,
+  });
+
+  await fetcher.fetchSegments(requests, []);
+  return contexts;
+};
+
+test("batch segments receive synthetic deadlines", async () => {
+  const contexts = await captureBatchSchedulingContexts(
+    [
+      { segmentId: "segment_1.ts", segmentsAhead: 2 },
+      { segmentId: "segment_2.ts", segmentsAhead: 1 },
+    ],
+    true,
+  );
+
+  assert.equal(contexts.length, 2);
+  assert.ok(
+    contexts.every((context) => context.deadline?.kind === "synthetic"),
+  );
+});
+
+test("batch segment deadlines use segmentsAhead for slack", async () => {
+  const contexts = await captureBatchSchedulingContexts(
+    [
+      { segmentId: "segment_1.ts", segmentsAhead: 4 },
+      { segmentId: "segment_2.ts", segmentsAhead: 1 },
+      { segmentId: "segment_3.ts", segmentsAhead: 0 },
+    ],
+    true,
+  );
+
+  assert.deepEqual(
+    Object.fromEntries(
+      contexts.map((context) => [
+        context.segmentId,
+        context.deadline?.slackMs,
+      ]),
+    ),
+    {
+      "segment_1.ts": 8_000,
+      "segment_2.ts": 2_000,
+      "segment_3.ts": 0,
+    },
+  );
+});
+
+test("batch scheduling without deadline configuration preserves legacy contexts", async () => {
+  const contexts = await captureBatchSchedulingContexts(
+    [{ segmentId: "segment.ts", segmentsAhead: 3 }],
+    false,
+  );
+
+  assert.equal(contexts[0]?.segmentsAhead, 3);
+  assert.equal(contexts[0]?.deadline, undefined);
+});
+
 test("uses deadline-aware scheduling when synthetic deadlines are enabled", async () => {
   const decisions: SchedulerDecision[] = [];
   const fetcher = new HybridSegmentFetcher({
@@ -339,7 +425,11 @@ test("downloads urgent segments first from distinct peers up to the parallel lim
   });
 
   const pending = fetcher.fetchSegments(
-    ["segment_1.ts", "segment_2.ts", "segment_3.ts"],
+    [
+      { segmentId: "segment_1.ts", segmentsAhead: 4 },
+      { segmentId: "segment_2.ts", segmentsAhead: 3 },
+      { segmentId: "segment_3.ts", segmentsAhead: 2 },
+    ],
     peers,
   );
   await firstWaveReady;
@@ -395,7 +485,10 @@ test("falls back only failed parallel peer downloads to origin", async () => {
   });
 
   const result = await fetcher.fetchSegments(
-    ["segment_1.ts", "segment_2.ts"],
+    [
+      { segmentId: "segment_1.ts", segmentsAhead: 3 },
+      { segmentId: "segment_2.ts", segmentsAhead: 2 },
+    ],
     peers,
   );
   await new Promise((resolve) => setImmediate(resolve));
@@ -677,8 +770,10 @@ test("rejects origin HTTP and integrity failures with useful errors", async () =
 
   let aggregate: unknown;
   try {
-    await create(async () => new Response("failed", { status: 503 })).fetchSegments(
-      ["one.ts", "two.ts"],
+    await create(
+      async () => new Response("failed", { status: 503 }),
+    ).fetchSegments(
+      [{ segmentId: "one.ts" }, { segmentId: "two.ts" }],
       [],
     );
     assert.fail("Expected parallel fetch failures");

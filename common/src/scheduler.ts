@@ -28,6 +28,11 @@ export interface BatchSegmentRequest {
   segmentsAhead?: number;
 }
 
+export interface BatchSyntheticDeadlineConfig {
+  kind: "synthetic";
+  segmentDurationMs: number;
+}
+
 export interface BatchAssignment {
   segmentId: string;
   peerId?: string;
@@ -466,6 +471,7 @@ export function planBatch(
   candidates: readonly SchedulingPeer[],
   selfPeerId: string,
   maximumParallelism: number,
+  deadlineConfig?: BatchSyntheticDeadlineConfig,
 ): BatchPlanningResult {
   if (
     !Number.isSafeInteger(maximumParallelism) ||
@@ -497,6 +503,17 @@ export function planBatch(
         ...(request.segmentsAhead === undefined
           ? {}
           : { segmentsAhead: request.segmentsAhead }),
+        ...(deadlineConfig === undefined ||
+        request.segmentsAhead === undefined
+          ? {}
+          : {
+              deadline: {
+                kind: deadlineConfig.kind,
+                slackMs:
+                  request.segmentsAhead * deadlineConfig.segmentDurationMs,
+                segmentDurationMs: deadlineConfig.segmentDurationMs,
+              },
+            }),
         candidates: availableCandidates,
         selfPeerId,
         maximumParallelism,

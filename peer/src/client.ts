@@ -265,7 +265,10 @@ class PeerApplication {
         fetched = new Map(results);
       } else {
         fetched = await this.fetcher.fetchSegments(
-          batch.map(({ segmentName }) => segmentName),
+          batch.map(({ segmentName, segmentsAhead }) => ({
+            segmentId: segmentName,
+            segmentsAhead,
+          })),
           this.tracker.allPeers(),
         );
       }

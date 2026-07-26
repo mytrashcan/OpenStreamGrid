@@ -3,6 +3,7 @@ import {
   planBatch,
   planSegmentSafely,
   validatePeerHttpBaseUrl,
+  type BatchSegmentRequest,
   type DeadlineKind,
   type Peer,
   type PeerFailureReport,
@@ -341,17 +342,24 @@ export class HybridSegmentFetcher {
    * Fetches playlist-ordered segments, prioritizing later (more urgent) entries.
    */
   async fetchSegments(
-    segments: string[],
+    requests: readonly BatchSegmentRequest[],
     peers: Peer[],
   ): Promise<Map<string, Buffer>> {
     const candidates = this.schedulingPeersFor(peers);
     this.reconcilePeers(candidates);
     const { assignments, warnings } = planBatch(
       this.scheduler,
-      segments.map((segmentId) => ({ segmentId })),
+      requests,
       candidates,
       this.options.selfPeerId,
       this.maxParallel,
+      this.options.deadlineSchedulingEnabled === true &&
+        this.segmentDurationMs !== undefined
+        ? {
+            kind: "synthetic",
+            segmentDurationMs: this.segmentDurationMs,
+          }
+        : undefined,
     );
     for (const warning of warnings) {
       logger.warn("scheduler_plan_invalid", {
