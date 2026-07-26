@@ -340,6 +340,7 @@ export class OpenStreamGridHlsPlugin {
     this.broadcastId = config.broadcastId;
     this.trackerUrl = config.trackerUrl;
     this.peerParticipation = config.peerParticipation !== false;
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
     const plugin = this;
     this.scheduler =
       config.scheduler ??
