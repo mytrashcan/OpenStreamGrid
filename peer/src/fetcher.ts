@@ -1,5 +1,6 @@
 import {
   createLogger,
+  planBatch,
   planSegmentSafely,
   validatePeerHttpBaseUrl,
   type Peer,
@@ -20,7 +21,6 @@ import { keepAliveFetch } from "./http-client.js";
 import {
   MAX_PARALLEL_DOWNLOADS_VALUE,
   schedulerDecisionFor,
-  URGENT_THRESHOLD_SEGMENTS_VALUE,
   WeightedScoreScheduler,
 } from "./weighted-score-scheduler.js";
 
@@ -60,7 +60,6 @@ export interface FetcherOptions {
   stats: TrafficStats;
   fetchImpl?: FetchFunction;
   p2pTimeoutMs?: number;
-  urgentThresholdSegments?: number;
   maxParallel?: number;
   transportManager?: TransportManager;
   scheduler?: SegmentScheduler;
@@ -86,7 +85,6 @@ class PeerFetchError extends Error {
 export class HybridSegmentFetcher {
   private readonly fetchImpl: FetchFunction;
   private readonly p2pTimeoutMs: number;
-  private readonly urgentThresholdSegments: number;
   private readonly maxParallel: number;
   private readonly scheduler: SegmentScheduler;
   private readonly inFlightSegments = new Map<
@@ -102,17 +100,11 @@ export class HybridSegmentFetcher {
   constructor(private readonly options: FetcherOptions) {
     this.fetchImpl = options.fetchImpl ?? keepAliveFetch;
     this.p2pTimeoutMs = options.p2pTimeoutMs ?? DEFAULT_P2P_TIMEOUT_MS;
-    this.urgentThresholdSegments =
-      options.urgentThresholdSegments ?? URGENT_THRESHOLD_SEGMENTS_VALUE;
     this.maxParallel = options.maxParallel ?? MAX_PARALLEL_DOWNLOADS_VALUE;
     if (!Number.isSafeInteger(this.maxParallel) || this.maxParallel <= 0) {
       throw new Error("Maximum parallel downloads must be a positive integer");
     }
-    this.scheduler =
-      options.scheduler ??
-      new WeightedScoreScheduler({
-        urgentThresholdSegments: this.urgentThresholdSegments,
-      });
+    this.scheduler = options.scheduler ?? new WeightedScoreScheduler();
   }
 
   async fetchSegment(
@@ -146,54 +138,52 @@ export class HybridSegmentFetcher {
     segmentName: string,
     segmentsAhead: number,
   ): Promise<SegmentFetchResult> {
-    if (segmentsAhead >= this.urgentThresholdSegments) {
-      let peers: Peer[] = [];
+    let peers: Peer[] = [];
+    try {
+      peers = this.rankPeers(
+        await this.options.directory.listPeers(segmentName),
+        segmentName,
+        segmentsAhead,
+      );
+    } catch (error) {
+      this.options.stats.recordFallback();
+      logger.error("peer_discovery_failed", error, { segmentName });
+    }
+    const peer = peers[0];
+    if (peer) {
+      const startedAt = performance.now();
       try {
-        peers = this.rankPeers(
-          await this.options.directory.listPeers(segmentName),
-          segmentName,
-          segmentsAhead,
-        );
+        const data = await this.fetchFromPeer(peer, segmentName);
+        this.observePeer({
+          peerId: peer.id,
+          succeeded: true,
+          latencyMs: performance.now() - startedAt,
+          bytes: data.byteLength,
+        });
+        this.cache(segmentName, data);
+        this.setLastSource(segmentName, "p2p");
+        return { data, source: "p2p" };
       } catch (error) {
+        const failure =
+          error instanceof PeerFetchError
+            ? error
+            : new PeerFetchError("Peer request failed", "connection");
+        this.observePeer({
+          peerId: peer.id,
+          succeeded: false,
+          latencyMs: performance.now() - startedAt,
+          bytes: 0,
+          failureReason: failure.reason,
+        });
+        this.options.stats.recordP2PFailure();
         this.options.stats.recordFallback();
-        logger.error("peer_discovery_failed", error, { segmentName });
-      }
-      const peer = peers[0];
-      if (peer) {
-        const startedAt = performance.now();
-        try {
-          const data = await this.fetchFromPeer(peer, segmentName);
-          this.scheduler.observePeer?.({
-            peerId: peer.id,
-            succeeded: true,
-            latencyMs: performance.now() - startedAt,
-            bytes: data.byteLength,
-          });
-          this.cache(segmentName, data);
-          this.setLastSource(segmentName, "p2p");
-          return { data, source: "p2p" };
-        } catch (error) {
-          const failure =
-            error instanceof PeerFetchError
-              ? error
-              : new PeerFetchError("Peer request failed", "connection");
-          this.scheduler.observePeer?.({
-            peerId: peer.id,
-            succeeded: false,
-            latencyMs: performance.now() - startedAt,
-            bytes: 0,
-            failureReason: failure.reason,
-          });
-          this.options.stats.recordP2PFailure();
-          this.options.stats.recordFallback();
-          void this.options.directory
-            .reportFailure(peer.id, failure.reason)
-            .catch((reportError: unknown) => {
-              logger.error("peer_failure_report_failed", reportError, {
-                peerId: peer.id,
-              });
+        void this.options.directory
+          .reportFailure(peer.id, failure.reason)
+          .catch((reportError: unknown) => {
+            logger.error("peer_failure_report_failed", reportError, {
+              peerId: peer.id,
             });
-        }
+          });
       }
     }
 
@@ -210,19 +200,27 @@ export class HybridSegmentFetcher {
     segments: string[],
     peers: Peer[],
   ): Promise<Map<string, Buffer>> {
-    const prioritizedSegments = [...new Set(segments)].reverse();
+    const candidates = this.schedulingPeersFor(peers);
+    this.reconcilePeers(candidates);
+    const assignments = planBatch(
+      this.scheduler,
+      segments.map((segmentId) => ({ segmentId })),
+      candidates,
+      this.options.selfPeerId,
+      this.maxParallel,
+    );
+    const peersById = new Map(peers.map((peer) => [peer.id, peer]));
     const fetched = new Map<string, Buffer>();
     const failures: unknown[] = [];
 
     for (
       let offset = 0;
-      offset < prioritizedSegments.length;
+      offset < assignments.length;
       offset += this.maxParallel
     ) {
-      const wave = prioritizedSegments.slice(offset, offset + this.maxParallel);
-      const rankedPeers = this.rankPeers(peers);
-      const assignedPeerIds = new Set<string>();
-      const tasks = wave.map((segmentName) => {
+      const wave = assignments.slice(offset, offset + this.maxParallel);
+      const tasks = wave.map((assignment) => {
+        const segmentName = assignment.segmentId;
         const cached = this.options.cache.get(segmentName);
         if (cached) {
           this.setLastSource(segmentName, "cache");
@@ -233,24 +231,19 @@ export class HybridSegmentFetcher {
         }
 
         const existing = this.inFlightSegments.get(segmentName);
-        if (existing) {
-          if (existing.peerId) assignedPeerIds.add(existing.peerId);
-          return existing.promise;
-        }
+        if (existing) return existing.promise;
 
-        const peer = rankedPeers.find(
-          (candidate) =>
-            !assignedPeerIds.has(candidate.id) &&
-            candidate.segments.includes(segmentName),
-        );
-        if (peer) assignedPeerIds.add(peer.id);
+        const peer =
+          assignment.peerId === undefined
+            ? undefined
+            : peersById.get(assignment.peerId);
         return this.startSegmentFetch(segmentName, peer);
       });
 
       const settled = await Promise.allSettled(tasks);
       for (const [index, result] of settled.entries()) {
-        const segmentName = wave[index];
-        if (!segmentName) continue;
+        const segmentName = wave[index]?.segmentId;
+        if (segmentName === undefined) continue;
         if (result.status === "fulfilled") {
           fetched.set(segmentName, result.value.data);
           this.setLastSource(segmentName, result.value.source);
@@ -272,8 +265,15 @@ export class HybridSegmentFetcher {
 
   /** Aborts outstanding peer and Origin requests during application shutdown. */
   stop(): void {
-    if (!this.shutdownController.signal.aborted) {
-      this.shutdownController.abort(new Error("Segment fetcher stopped"));
+    if (this.shutdownController.signal.aborted) return;
+    this.shutdownController.abort(new Error("Segment fetcher stopped"));
+    try {
+      this.scheduler.reset?.();
+    } catch (error) {
+      logger.warn("scheduler_reset_failed", {
+        policy: this.scheduler.policyName,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -300,7 +300,7 @@ export class HybridSegmentFetcher {
       const startedAt = performance.now();
       try {
         const data = await this.fetchFromPeer(peer, segmentName);
-        this.scheduler.observePeer?.({
+        this.observePeer({
           peerId: peer.id,
           succeeded: true,
           latencyMs: performance.now() - startedAt,
@@ -313,7 +313,7 @@ export class HybridSegmentFetcher {
           error instanceof PeerFetchError
             ? error
             : new PeerFetchError("Peer request failed", "connection");
-        this.scheduler.observePeer?.({
+        this.observePeer({
           peerId: peer.id,
           succeeded: false,
           latencyMs: performance.now() - startedAt,
@@ -342,15 +342,7 @@ export class HybridSegmentFetcher {
     segmentName = "",
     segmentsAhead?: number,
   ): Peer[] {
-    const candidates: SchedulingPeer[] = peers.map((peer, originalIndex) => ({
-      id: peer.id,
-      latencyMs: peer.latencyMs,
-      successRate: peer.successRate,
-      uploadBandwidthBps: peer.uploadBandwidthBps ?? 0,
-      trustScore: peer.trustScore,
-      segments: peer.segments,
-      originalIndex,
-    }));
+    const candidates = this.schedulingPeersFor(peers);
     const context: SegmentSchedulingContext = {
       segmentId: segmentName,
       ...(segmentsAhead === undefined ? {} : { segmentsAhead }),
@@ -358,15 +350,7 @@ export class HybridSegmentFetcher {
       selfPeerId: this.options.selfPeerId,
       maximumParallelism: this.maxParallel,
     };
-    try {
-      this.scheduler.reconcilePeers?.(context.candidates);
-    } catch (error) {
-      logger.warn("scheduler_reconcile_failed", {
-        policy: this.scheduler.policyName,
-        segmentId: context.segmentId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    this.reconcilePeers(context.candidates, context.segmentId);
     const { plan, warnings } = planSegmentSafely(this.scheduler, context);
     for (const warning of warnings) {
       logger.warn("scheduler_plan_invalid", {
@@ -390,6 +374,47 @@ export class HybridSegmentFetcher {
       const peer = peersById.get(peerId);
       return peer ? [peer] : [];
     });
+  }
+
+  private schedulingPeersFor(peers: readonly Peer[]): SchedulingPeer[] {
+    return peers.map((peer, originalIndex) => ({
+      id: peer.id,
+      latencyMs: peer.latencyMs,
+      successRate: peer.successRate,
+      uploadBandwidthBps: peer.uploadBandwidthBps ?? 0,
+      trustScore: peer.trustScore,
+      segments: peer.segments,
+      originalIndex,
+    }));
+  }
+
+  private reconcilePeers(
+    candidates: readonly SchedulingPeer[],
+    segmentId = "",
+  ): void {
+    try {
+      this.scheduler.reconcilePeers?.(candidates);
+    } catch (error) {
+      logger.warn("scheduler_reconcile_failed", {
+        policy: this.scheduler.policyName,
+        segmentId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private observePeer(
+    observation: Parameters<NonNullable<SegmentScheduler["observePeer"]>>[0],
+  ): void {
+    try {
+      this.scheduler.observePeer?.(observation);
+    } catch (error) {
+      logger.warn("scheduler_observation_failed", {
+        policy: this.scheduler.policyName,
+        peerId: observation.peerId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private recordSchedulerDecision(decision: SchedulerDecision): void {

@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type {
+  Peer,
   SchedulingPeer,
   SegmentScheduler,
   SegmentSchedulingContext,
   SegmentSchedulingPlan,
 } from "@openstreamgrid/common";
 import { planSegmentSafely } from "@openstreamgrid/common";
+import { SegmentCache } from "../src/cache.js";
+import { HybridSegmentFetcher } from "../src/fetcher.js";
+import { TrafficStats } from "../src/stats.js";
 import {
   METRIC_EMA_ALPHA_VALUE,
   schedulerDecisionFor,
@@ -290,4 +294,138 @@ test("records scheduler decision dimensions", () => {
     eligibleCount: 2,
     selectedPeerCount: 1,
   });
+});
+
+const fetchPeer: Peer = {
+  id: "peer-a",
+  address: "http://peer-a:9090",
+  segments: ["segment.ts"],
+  joinedAt: "2026-07-26T00:00:00.000Z",
+  lastSeenAt: "2026-07-26T00:00:00.000Z",
+  latencyMs: 10,
+  successRate: 1,
+  trustScore: 1,
+  uploadBandwidthBps: 1_000_000,
+};
+
+const peerPlan = (policy: string): SegmentSchedulingPlan => ({
+  policy,
+  mode: "single-peer",
+  peerIds: [fetchPeer.id],
+  rankedPeers: [
+    {
+      peerId: fetchPeer.id,
+      rank: 1,
+      reasons: ["test"],
+    },
+  ],
+  reason: "peer_selected",
+});
+
+const createFetcher = (scheduler: SegmentScheduler): HybridSegmentFetcher =>
+  new HybridSegmentFetcher({
+    selfPeerId: "self",
+    originBaseUrl: new URL("http://origin:8080/hls/"),
+    cache: new SegmentCache(1_000),
+    directory: {
+      async listPeers(): Promise<Peer[]> {
+        return [fetchPeer];
+      },
+      async reportFailure(): Promise<void> {},
+    },
+    verifier: {
+      async verify(): Promise<boolean> {
+        return true;
+      },
+    },
+    stats: new TrafficStats(),
+    scheduler,
+    fetchImpl: async () => new Response("from-peer"),
+  });
+
+test("contains throwing peer observations without breaking fetch", async (context) => {
+  context.mock.method(console, "warn", () => {});
+  const scheduler: SegmentScheduler = {
+    policyName: "throwing-observer",
+    planSegment(): SegmentSchedulingPlan {
+      return peerPlan(this.policyName);
+    },
+    observePeer(): void {
+      throw new Error("observation failed");
+    },
+  };
+
+  const result = await createFetcher(scheduler).fetchSegment("segment.ts", 3);
+
+  assert.equal(result.source, "p2p");
+  assert.equal(result.data.toString(), "from-peer");
+});
+
+test("routes urgent uncached segments through the injected scheduler", async () => {
+  let plannedSegmentsAhead: number | undefined;
+  const scheduler: SegmentScheduler = {
+    policyName: "custom-urgent",
+    planSegment(segmentContext): SegmentSchedulingPlan {
+      plannedSegmentsAhead = segmentContext.segmentsAhead;
+      return peerPlan(this.policyName);
+    },
+  };
+
+  const result = await createFetcher(scheduler).fetchSegment("segment.ts", 0);
+
+  assert.equal(plannedSegmentsAhead, 0);
+  assert.equal(result.source, "p2p");
+});
+
+test("contains throwing peer reconciliation without breaking fetch", async (context) => {
+  context.mock.method(console, "warn", () => {});
+  const scheduler: SegmentScheduler = {
+    policyName: "throwing-reconciler",
+    planSegment(): SegmentSchedulingPlan {
+      return peerPlan(this.policyName);
+    },
+    reconcilePeers(): void {
+      throw new Error("reconciliation failed");
+    },
+  };
+
+  const result = await createFetcher(scheduler).fetchSegment("segment.ts", 3);
+
+  assert.equal(result.source, "p2p");
+  assert.equal(result.data.toString(), "from-peer");
+});
+
+test("resets the scheduler when the fetcher stops", () => {
+  let resets = 0;
+  const scheduler: SegmentScheduler = {
+    policyName: "resettable",
+    planSegment(): SegmentSchedulingPlan {
+      return peerPlan(this.policyName);
+    },
+    reset(): void {
+      resets += 1;
+    },
+  };
+  const fetcher = createFetcher(scheduler);
+
+  fetcher.stop();
+  fetcher.stop();
+
+  assert.equal(resets, 1);
+});
+
+test("contains scheduler reset failures during stop", (context) => {
+  context.mock.method(console, "warn", () => {});
+  const scheduler: SegmentScheduler = {
+    policyName: "throwing-reset",
+    planSegment(): SegmentSchedulingPlan {
+      return peerPlan(this.policyName);
+    },
+    reset(): void {
+      throw new Error("reset failed");
+    },
+  };
+  const fetcher = createFetcher(scheduler);
+
+  assert.doesNotThrow(() => fetcher.stop());
 });
