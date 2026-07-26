@@ -1,0 +1,452 @@
+{
+  "schemaVersion": 1,
+  "kind": "scheduler-lab-aggregate",
+  "generatedAt": "2026-07-26T12:18:08.185Z",
+  "scenario": {
+    "name": "mixed-workload",
+    "description": "A deterministic mixture of relaxed, tight, critical, and unknown playback deadlines.",
+    "seed": "phase3-mixed-2026",
+    "requestCount": 400,
+    "originLatencyMs": 350,
+    "peerSuccessRate": 0.78,
+    "deadlineMix": [
+      {
+        "kind": "player-derived",
+        "slackMs": 6000,
+        "weight": 3
+      },
+      {
+        "kind": "playlist-derived",
+        "slackMs": 2000,
+        "weight": 3
+      },
+      {
+        "kind": "synthetic",
+        "slackMs": 500,
+        "weight": 2
+      },
+      {
+        "kind": "unknown",
+        "slackMs": 2500,
+        "weight": 2
+      }
+    ]
+  },
+  "policyOrder": [
+    "Node-legacy",
+    "Node-deadline-aware",
+    "Browser-legacy",
+    "Browser-deadline-aware"
+  ],
+  "policies": {
+    "Node-legacy": {
+      "requests": 400,
+      "deadlineMetCount": 340,
+      "deadlineMetRatePercent": 85,
+      "peerWinCount": 310,
+      "peerWinRatePercent": 77.5,
+      "originWinCount": 90,
+      "originWinRatePercent": 22.5,
+      "hedgeStartedCount": 0,
+      "hedgeStartedRatePercent": 0,
+      "completionMs": {
+        "mean": 865.29,
+        "p50": 860.54,
+        "p95": 1365.967,
+        "p99": 1603.507
+      },
+      "peerCompletionMsMean": 784.284,
+      "originCompletionMsMean": 1144.313,
+      "hedgeDelayMsMean": null,
+      "deadlineKinds": {
+        "player-derived": {
+          "requests": 119,
+          "deadlineMetCount": 119,
+          "deadlineMetRatePercent": 100,
+          "peerWinCount": 91,
+          "peerWinRatePercent": 76.471,
+          "originWinCount": 28,
+          "originWinRatePercent": 23.529,
+          "hedgeStartedCount": 0,
+          "hedgeStartedRatePercent": 0,
+          "completionMs": {
+            "mean": 906.231,
+            "p50": 926.123,
+            "p95": 1472.1,
+            "p99": 1603.507
+          },
+          "peerCompletionMsMean": 824.193,
+          "originCompletionMsMean": 1172.855,
+          "hedgeDelayMsMean": null
+        },
+        "playlist-derived": {
+          "requests": 130,
+          "deadlineMetCount": 130,
+          "deadlineMetRatePercent": 100,
+          "peerWinCount": 105,
+          "peerWinRatePercent": 80.769,
+          "originWinCount": 25,
+          "originWinRatePercent": 19.231,
+          "hedgeStartedCount": 0,
+          "hedgeStartedRatePercent": 0,
+          "completionMs": {
+            "mean": 816.123,
+            "p50": 814.313,
+            "p95": 1331.017,
+            "p99": 1432.796
+          },
+          "peerCompletionMsMean": 753.605,
+          "originCompletionMsMean": 1078.695,
+          "hedgeDelayMsMean": null
+        },
+        "synthetic": {
+          "requests": 69,
+          "deadlineMetCount": 9,
+          "deadlineMetRatePercent": 13.043,
+          "peerWinCount": 52,
+          "peerWinRatePercent": 75.362,
+          "originWinCount": 17,
+          "originWinRatePercent": 24.638,
+          "hedgeStartedCount": 0,
+          "hedgeStartedRatePercent": 0,
+          "completionMs": {
+            "mean": 872.696,
+            "p50": 875.227,
+            "p95": 1422.146,
+            "p99": 1656.945
+          },
+          "peerCompletionMsMean": 781.381,
+          "originCompletionMsMean": 1152.013,
+          "hedgeDelayMsMean": null
+        },
+        "unknown": {
+          "requests": 82,
+          "deadlineMetCount": 82,
+          "deadlineMetRatePercent": 100,
+          "peerWinCount": 62,
+          "peerWinRatePercent": 75.61,
+          "originWinCount": 20,
+          "originWinRatePercent": 24.39,
+          "hedgeStartedCount": 0,
+          "hedgeStartedRatePercent": 0,
+          "completionMs": {
+            "mean": 877.592,
+            "p50": 868.46,
+            "p95": 1334.615,
+            "p99": 1765.922
+          },
+          "peerCompletionMsMean": 780.095,
+          "originCompletionMsMean": 1179.832,
+          "hedgeDelayMsMean": null
+        }
+      }
+    },
+    "Node-deadline-aware": {
+      "requests": 400,
+      "deadlineMetCount": 400,
+      "deadlineMetRatePercent": 100,
+      "peerWinCount": 255,
+      "peerWinRatePercent": 63.75,
+      "originWinCount": 145,
+      "originWinRatePercent": 36.25,
+      "hedgeStartedCount": 27,
+      "hedgeStartedRatePercent": 6.75,
+      "completionMs": {
+        "mean": 768.877,
+        "p50": 769.12,
+        "p95": 1332.578,
+        "p99": 1565.82
+      },
+      "peerCompletionMsMean": 771.173,
+      "originCompletionMsMean": 764.838,
+      "hedgeDelayMsMean": 1439.583,
+      "deadlineKinds": {
+        "player-derived": {
+          "requests": 119,
+          "deadlineMetCount": 119,
+          "deadlineMetRatePercent": 100,
+          "peerWinCount": 92,
+          "peerWinRatePercent": 77.311,
+          "originWinCount": 27,
+          "originWinRatePercent": 22.689,
+          "hedgeStartedCount": 0,
+          "hedgeStartedRatePercent": 0,
+          "completionMs": {
+            "mean": 896.237,
+            "p50": 918.137,
+            "p95": 1385.932,
+            "p99": 1603.507
+          },
+          "peerCompletionMsMean": 813.167,
+          "originCompletionMsMean": 1179.291,
+          "hedgeDelayMsMean": null
+        },
+        "playlist-derived": {
+          "requests": 130,
+          "deadlineMetCount": 130,
+          "deadlineMetRatePercent": 100,
+          "peerWinCount": 103,
+          "peerWinRatePercent": 79.231,
+          "originWinCount": 27,
+          "originWinRatePercent": 20.769,
+          "hedgeStartedCount": 27,
+          "hedgeStartedRatePercent": 20.769,
+          "completionMs": {
+            "mean": 812.675,
+            "p50": 815.074,
+            "p95": 1331.017,
+            "p99": 1392
+          },
+          "peerCompletionMsMean": 747.442,
+          "originCompletionMsMean": 1061.526,
+          "hedgeDelayMsMean": 1439.583
+        },
+        "synthetic": {
+          "requests": 69,
+          "deadlineMetCount": 69,
+          "deadlineMetRatePercent": 100,
+          "peerWinCount": 0,
+          "peerWinRatePercent": 0,
+          "originWinCount": 69,
+          "originWinRatePercent": 100,
+          "hedgeStartedCount": 0,
+          "hedgeStartedRatePercent": 0,
+          "completionMs": {
+            "mean": 361.372,
+            "p50": 360.958,
+            "p95": 424.906,
+            "p99": 459.601
+          },
+          "peerCompletionMsMean": null,
+          "originCompletionMsMean": 361.372,
+          "hedgeDelayMsMean": null
+        },
+        "unknown": {
+          "requests": 82,
+          "deadlineMetCount": 82,
+          "deadlineMetRatePercent": 100,
+          "peerWinCount": 60,
+          "peerWinRatePercent": 73.171,
+          "originWinCount": 22,
+          "originWinRatePercent": 26.829,
+          "hedgeStartedCount": 0,
+          "hedgeStartedRatePercent": 0,
+          "completionMs": {
+            "mean": 857.513,
+            "p50": 822.151,
+            "p95": 1334.427,
+            "p99": 1765.922
+          },
+          "peerCompletionMsMean": 747.521,
+          "originCompletionMsMean": 1157.492,
+          "hedgeDelayMsMean": null
+        }
+      }
+    },
+    "Browser-legacy": {
+      "requests": 400,
+      "deadlineMetCount": 338,
+      "deadlineMetRatePercent": 84.5,
+      "peerWinCount": 395,
+      "peerWinRatePercent": 98.75,
+      "originWinCount": 5,
+      "originWinRatePercent": 1.25,
+      "hedgeStartedCount": 0,
+      "hedgeStartedRatePercent": 0,
+      "completionMs": {
+        "mean": 824.088,
+        "p50": 801.724,
+        "p95": 1271.02,
+        "p99": 1639.425
+      },
+      "peerCompletionMsMean": 813.691,
+      "originCompletionMsMean": 1645.516,
+      "hedgeDelayMsMean": null,
+      "deadlineKinds": {
+        "player-derived": {
+          "requests": 119,
+          "deadlineMetCount": 119,
+          "deadlineMetRatePercent": 100,
+          "peerWinCount": 117,
+          "peerWinRatePercent": 98.319,
+          "originWinCount": 2,
+          "originWinRatePercent": 1.681,
+          "hedgeStartedCount": 0,
+          "hedgeStartedRatePercent": 0,
+          "completionMs": {
+            "mean": 802.815,
+            "p50": 779.731,
+            "p95": 1319.648,
+            "p99": 1639.425
+          },
+          "peerCompletionMsMean": 787.838,
+          "originCompletionMsMean": 1678.923,
+          "hedgeDelayMsMean": null
+        },
+        "playlist-derived": {
+          "requests": 130,
+          "deadlineMetCount": 129,
+          "deadlineMetRatePercent": 99.231,
+          "peerWinCount": 128,
+          "peerWinRatePercent": 98.462,
+          "originWinCount": 2,
+          "originWinRatePercent": 1.538,
+          "hedgeStartedCount": 0,
+          "hedgeStartedRatePercent": 0,
+          "completionMs": {
+            "mean": 820.443,
+            "p50": 803.05,
+            "p95": 1250.802,
+            "p99": 1531.261
+          },
+          "peerCompletionMsMean": 805.602,
+          "originCompletionMsMean": 1770.245,
+          "hedgeDelayMsMean": null
+        },
+        "synthetic": {
+          "requests": 69,
+          "deadlineMetCount": 8,
+          "deadlineMetRatePercent": 11.594,
+          "peerWinCount": 69,
+          "peerWinRatePercent": 100,
+          "originWinCount": 0,
+          "originWinRatePercent": 0,
+          "hedgeStartedCount": 0,
+          "hedgeStartedRatePercent": 0,
+          "completionMs": {
+            "mean": 820.401,
+            "p50": 841.273,
+            "p95": 1177.016,
+            "p99": 1421.175
+          },
+          "peerCompletionMsMean": 820.401,
+          "originCompletionMsMean": null,
+          "hedgeDelayMsMean": null
+        },
+        "unknown": {
+          "requests": 82,
+          "deadlineMetCount": 82,
+          "deadlineMetRatePercent": 100,
+          "peerWinCount": 81,
+          "peerWinRatePercent": 98.78,
+          "originWinCount": 1,
+          "originWinRatePercent": 1.22,
+          "hedgeStartedCount": 0,
+          "hedgeStartedRatePercent": 0,
+          "completionMs": {
+            "mean": 863.844,
+            "p50": 813.793,
+            "p95": 1396.21,
+            "p99": 1917.671
+          },
+          "peerCompletionMsMean": 858.098,
+          "originCompletionMsMean": 1329.245,
+          "hedgeDelayMsMean": null
+        }
+      }
+    },
+    "Browser-deadline-aware": {
+      "requests": 400,
+      "deadlineMetCount": 400,
+      "deadlineMetRatePercent": 100,
+      "peerWinCount": 326,
+      "peerWinRatePercent": 81.5,
+      "originWinCount": 74,
+      "originWinRatePercent": 18.5,
+      "hedgeStartedCount": 3,
+      "hedgeStartedRatePercent": 0.75,
+      "completionMs": {
+        "mean": 745.02,
+        "p50": 722.175,
+        "p95": 1265.833,
+        "p99": 1718.422
+      },
+      "peerCompletionMsMean": 812.27,
+      "originCompletionMsMean": 466.137,
+      "hedgeDelayMsMean": 1422.397,
+      "deadlineKinds": {
+        "player-derived": {
+          "requests": 119,
+          "deadlineMetCount": 119,
+          "deadlineMetRatePercent": 100,
+          "peerWinCount": 117,
+          "peerWinRatePercent": 98.319,
+          "originWinCount": 2,
+          "originWinRatePercent": 1.681,
+          "hedgeStartedCount": 0,
+          "hedgeStartedRatePercent": 0,
+          "completionMs": {
+            "mean": 802.815,
+            "p50": 779.731,
+            "p95": 1319.648,
+            "p99": 1639.425
+          },
+          "peerCompletionMsMean": 787.838,
+          "originCompletionMsMean": 1678.923,
+          "hedgeDelayMsMean": null
+        },
+        "playlist-derived": {
+          "requests": 130,
+          "deadlineMetCount": 130,
+          "deadlineMetRatePercent": 100,
+          "peerWinCount": 128,
+          "peerWinRatePercent": 98.462,
+          "originWinCount": 2,
+          "originWinRatePercent": 1.538,
+          "hedgeStartedCount": 3,
+          "hedgeStartedRatePercent": 2.308,
+          "completionMs": {
+            "mean": 820.793,
+            "p50": 803.05,
+            "p95": 1250.802,
+            "p99": 1719.197
+          },
+          "peerCompletionMsMean": 805.602,
+          "originCompletionMsMean": 1779.504,
+          "hedgeDelayMsMean": 1422.397
+        },
+        "synthetic": {
+          "requests": 69,
+          "deadlineMetCount": 69,
+          "deadlineMetRatePercent": 100,
+          "peerWinCount": 0,
+          "peerWinRatePercent": 0,
+          "originWinCount": 69,
+          "originWinRatePercent": 100,
+          "hedgeStartedCount": 0,
+          "hedgeStartedRatePercent": 0,
+          "completionMs": {
+            "mean": 361.372,
+            "p50": 360.958,
+            "p95": 424.906,
+            "p99": 459.601
+          },
+          "peerCompletionMsMean": null,
+          "originCompletionMsMean": 361.372,
+          "hedgeDelayMsMean": null
+        },
+        "unknown": {
+          "requests": 82,
+          "deadlineMetCount": 82,
+          "deadlineMetRatePercent": 100,
+          "peerWinCount": 81,
+          "peerWinRatePercent": 98.78,
+          "originWinCount": 1,
+          "originWinRatePercent": 1.22,
+          "hedgeStartedCount": 0,
+          "hedgeStartedRatePercent": 0,
+          "completionMs": {
+            "mean": 863.844,
+            "p50": 813.793,
+            "p95": 1396.21,
+            "p99": 1917.671
+          },
+          "peerCompletionMsMean": 858.098,
+          "originCompletionMsMean": 1329.245,
+          "hedgeDelayMsMean": null
+        }
+      }
+    }
+  },
+  "disclaimer": "Controlled deterministic scheduler simulation; not a production capacity claim."
+}
