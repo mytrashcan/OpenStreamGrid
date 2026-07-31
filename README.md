@@ -1,6 +1,6 @@
 # OpenStreamGrid
 
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/mytrashcan/OpenStreamGrid)](https://github.com/mytrashcan/OpenStreamGrid/releases/latest)
 [![CI](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/ci.yml/badge.svg)](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/ci.yml)
 [![Node.js 22+](https://img.shields.io/badge/Node.js-22%2B-green.svg)](package.json)
@@ -354,7 +354,7 @@ peer; `sdk/` is the browser/Hls.js package; `common/` contains shared contracts;
 
 [![Discord: coming soon](https://img.shields.io/badge/Discord-coming%20soon-5865F2?logo=discord&logoColor=white)](#community)
 [![GitHub stars](https://img.shields.io/github/stars/mytrashcan/OpenStreamGrid?style=social)](https://github.com/mytrashcan/OpenStreamGrid/stargazers)
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 - Ask usage questions and propose ideas in [GitHub Discussions](https://github.com/mytrashcan/OpenStreamGrid/discussions).
 - Report reproducible defects through [GitHub Issues](https://github.com/mytrashcan/OpenStreamGrid/issues).
@@ -381,4 +381,4 @@ server once one is available.
 
 ## License
 
-OpenStreamGrid is licensed under the [GNU General Public License v3.0](LICENSE).
+OpenStreamGrid is licensed under the [MIT License](LICENSE).

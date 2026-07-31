@@ -1,6 +1,6 @@
 # OpenStreamGrid
 
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/mytrashcan/OpenStreamGrid)](https://github.com/mytrashcan/OpenStreamGrid/releases/latest)
 [![CI](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/ci.yml/badge.svg)](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/ci.yml)
 [![Node.js 22+](https://img.shields.io/badge/Node.js-22%2B-green.svg)](package.json)
@@ -347,4 +347,4 @@ P2P 교환과 Origin 폴백 통합 테스트는 `bash test/docker-test.sh`, 기�
 이슈와 Pull Request를 환영합니다. 개발 환경, 테스트 기준, 코딩 규칙은
 [CONTRIBUTING.md](CONTRIBUTING.md)를 먼저 확인해 주세요.
 
-OpenStreamGrid는 [GNU General Public License v3.0](LICENSE)으로 배포됩니다.
+OpenStreamGrid는 [MIT License](LICENSE)로 배포됩니다.
