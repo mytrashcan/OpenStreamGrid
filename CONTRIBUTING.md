@@ -64,4 +64,4 @@ path. Do not commit secrets, generated dependency directories, local databases,
 or private media.
 
 By contributing, you agree that your contribution is licensed under the
-repository's GPL-3.0 license.
+repository's MIT License.
