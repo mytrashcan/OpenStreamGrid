@@ -8,6 +8,9 @@ on:
         required: true
         default: 'benchmarks/scenarios/ci-smoke.json'
 
+permissions:
+  contents: read
+
 jobs:
   benchmark:
     runs-on: ubuntu-latest
