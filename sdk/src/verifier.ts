@@ -24,11 +24,14 @@ export async function sha256Hex(data: Uint8Array): Promise<string> {
  * Standard format: "<hex>  <filename>" or just "<hex>".
  */
 export function parseSha256(content: string): string {
-  const match = content.trim().match(/^([a-fA-F0-9]{64})(?:\s+.+)?$/);
-  if (!match?.[1]) {
+  // Avoid ReDoS: the old /^([a-fA-F0-9]{64})(?:\s+.+)?$/ pattern could
+  // backtrack exponentially on pathological input (whitespace-heavy lines).
+  // Match the hex prefix with a bounded quantifier only.
+  const match = content.trim().match(/^[a-fA-F0-9]{64}/u);
+  if (!match) {
     throw new Error("Invalid SHA-256 response format");
   }
-  return match[1].toLowerCase();
+  return match[0].toLowerCase();
 }
 
 /**
