@@ -1,22 +1,16 @@
 # Title-based labeling for issues and PRs via github/issue-labeler v3.
-# Each label's regexes are matched against the title only (include-title: 1,
-# include-body: 0). See https://github.com/github/issue-labeler
+# NOTE: multiple regex entries per label are AND-ed (ALL must match), so each
+# label uses ONE regex with alternation. Title-only matching
+# (include-title: 1, include-body: 0). See https://github.com/github/issue-labeler
 
 enhancement:
-  - '^[Ff]eat(\(.*\))?[: ]'
-  - '^[Ff]eature[: ]'
-  - '^[Pp]erf(\(.*\))?[: ]'
-  - '^(제안|추가|개선)'
+  - '^([Ff]eat|[Ff]eature|[Pp]erf|제안|추가|개선)(\(.*\))?[: ]'
 
 bug:
-  - '^[Ff]ix(\(.*\))?[: ]'
-  - '^[Bb]ug[: ]'
-  - '^(버그|오류|장애)'
+  - '^([Ff]ix|[Bb]ug|버그|오류|장애)(\(.*\))?[: ]'
 
 documentation:
-  - '^[Dd]ocs(\(.*\))?[: ]'
-  - '^(문서|설명서)'
+  - '^([Dd]ocs|문서|설명서)(\(.*\))?[: ]'
 
 question:
-  - '\?$'
-  - '^(질문|문의)'
+  - '^([Qq]uestion|질문|문의)(\(.*\))?[: ]|\?'
