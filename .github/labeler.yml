@@ -1,20 +1,12 @@
-# Auto-labeling rules for actions/labeler v5.
-# Title rules map Conventional Commit prefixes to labels; path rules
-# label based on changed files. See https://github.com/actions/labeler.
-
-enhancement:
-  - title: '^(feat|feature|perf)(\(.*\))?:'
-
-bug:
-  - title: '^fix(\(.*\))?:'
+# Auto-label PRs based on changed files. actions/labeler v5.
+# See https://github.com/actions/labeler
+# Title-based rules live in .github/issue-labeler.yml (github/issue-labeler).
 
 documentation:
-  - any-of:
-      - title: '^docs(\(.*\))?:'
-      - changed-files:
-          - any-glob-to-any-file:
-              - 'docs/**'
-              - '**/*.md'
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'docs/**'
+          - '**/*.md'
 
 ci:
   - changed-files:
@@ -44,3 +36,4 @@ tests:
           - '**/*.test.tsx'
           - '**/*.spec.ts'
           - '**/*.test.js'
+          - '**/*.test.go'
