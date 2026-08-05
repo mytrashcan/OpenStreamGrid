@@ -1,0 +1,46 @@
+# Auto-labeling rules for actions/labeler v5.
+# Title rules map Conventional Commit prefixes to labels; path rules
+# label based on changed files. See https://github.com/actions/labeler.
+
+enhancement:
+  - title: '^(feat|feature|perf)(\(.*\))?:'
+
+bug:
+  - title: '^fix(\(.*\))?:'
+
+documentation:
+  - any-of:
+      - title: '^docs(\(.*\))?:'
+      - changed-files:
+          - any-glob-to-any-file:
+              - 'docs/**'
+              - '**/*.md'
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.github/**'
+          - 'Dockerfile'
+          - 'docker-compose*.yml'
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '**/package-lock.json'
+          - '**/pnpm-lock.yaml'
+          - '**/yarn.lock'
+          - '**/requirements*.txt'
+          - '**/uv.lock'
+          - '**/poetry.lock'
+          - '**/go.mod'
+          - '**/go.sum'
+          - '**/Cargo.lock'
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'test/**'
+          - '**/*.test.ts'
+          - '**/*.test.tsx'
+          - '**/*.spec.ts'
+          - '**/*.test.js'
