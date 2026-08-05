@@ -1,0 +1,24 @@
+name: Issue & PR Title Labeler
+
+on:
+  issues:
+    types: [opened, edited]
+  pull_request_target:
+    types: [opened, edited]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: github/issue-labeler@v3.4
+        with:
+          repo-token: ${{ github.token }}
+          configuration-path: .github/issue-labeler.yml
+          include-title: 1
+          include-body: 0
+          sync-labels: 1

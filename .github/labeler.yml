@@ -1,0 +1,39 @@
+# Auto-label PRs based on changed files. actions/labeler v5.
+# See https://github.com/actions/labeler
+# Title-based rules live in .github/issue-labeler.yml (github/issue-labeler).
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'docs/**'
+          - '**/*.md'
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.github/**'
+          - 'Dockerfile'
+          - 'docker-compose*.yml'
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '**/package-lock.json'
+          - '**/pnpm-lock.yaml'
+          - '**/yarn.lock'
+          - '**/requirements*.txt'
+          - '**/uv.lock'
+          - '**/poetry.lock'
+          - '**/go.mod'
+          - '**/go.sum'
+          - '**/Cargo.lock'
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'test/**'
+          - '**/*.test.ts'
+          - '**/*.test.tsx'
+          - '**/*.spec.ts'
+          - '**/*.test.js'
+          - '**/*.test.go'
