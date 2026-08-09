@@ -1,10 +1,11 @@
 name: Issue & PR Title Labeler
 
+# Re-run on PR updates and reopenings to prevent stale failed checks, including Dependabot PRs.
 on:
   issues:
     types: [opened, edited]
   pull_request_target:
-    types: [opened, edited]
+    types: [opened, edited, synchronize, reopened]
 
 permissions:
   contents: read
