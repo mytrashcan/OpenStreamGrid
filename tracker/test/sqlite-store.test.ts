@@ -381,3 +381,42 @@ test("rejects corrupted broadcast and peer metadata", (context) => {
   );
   corruptedBroadcast.close();
 });
+
+test("joinPeerDetailed is atomic and applySegmentDelta enforces the cap", (context) => {
+  let now = new Date("2026-07-17T00:00:00.000Z");
+  const store = new SQLiteStore(temporaryDatabasePath(context), () => now, 2);
+  context.after(() => store.close());
+  store.registerBroadcast({ id: "live", playlistUrl: "http://origin/live.m3u8" });
+
+  now = new Date("2026-07-17T00:00:01.000Z");
+  const first = store.joinPeerDetailed("live", {
+    id: "peer-a",
+    address: "http://peer-a:9090",
+  }, { maxPeers: 1 });
+  assert.equal(first.alreadyJoined, false);
+
+  now = new Date("2026-07-17T00:00:02.000Z");
+  const rejoin = store.joinPeerDetailed("live", {
+    id: "peer-a",
+    address: "http://peer-a:9091",
+  }, { maxPeers: 1 });
+  assert.equal(rejoin.alreadyJoined, true);
+  assert.equal(rejoin.peer.address, "http://peer-a:9091");
+  assert.equal(rejoin.peer.joinedAt, "2026-07-17T00:00:01.000Z");
+
+  assert.throws(
+    () =>
+      store.joinPeerDetailed("live", {
+        id: "peer-b",
+        address: "http://peer-b:9090",
+      }, { maxPeers: 1 }),
+    (error: unknown) =>
+      error instanceof StoreError && error.statusCode === 429,
+  );
+
+  store.applySegmentDelta("live", "peer-a", ["s1.ts"], []);
+  const merged = store.applySegmentDelta("live", "peer-a", ["s2.ts"], ["s1.ts"]);
+  assert.deepEqual(merged.segments, ["s2.ts"]);
+  const capped = store.applySegmentDelta("live", "peer-a", ["s3.ts", "s4.ts"], []);
+  assert.deepEqual(capped.segments, ["s3.ts", "s4.ts"]);
+});

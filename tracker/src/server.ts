@@ -62,6 +62,7 @@ export interface TrackerConfiguration {
   rateLimitRps: number;
   rateLimitBurst: number;
   maxPeersPerBroadcast: number;
+  wsAllowedOrigins?: string[];
 }
 
 const parseInteger = (
@@ -100,6 +101,10 @@ export const parseTrackerConfiguration = (
   ) {
     throw new Error("PEER_SESSION_SECRET must contain at least 32 bytes");
   }
+  const wsAllowedOrigins = (environment.TRACKER_WS_ALLOWED_ORIGINS ?? "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter((origin) => origin !== "");
   return {
     port: parseInteger(
       environment.PORT ?? String(DEFAULT_PORT),
@@ -136,6 +141,7 @@ export const parseTrackerConfiguration = (
       "MAX_PEERS_PER_BROADCAST",
       1,
     ),
+    ...(wsAllowedOrigins.length > 0 ? { wsAllowedOrigins } : {}),
   };
 };
 
@@ -956,20 +962,33 @@ export const createTrackerHandler = (
               error instanceof Error ? error.message : "Peer address is invalid",
             );
           }
-          const alreadyJoined = store
-            .listPeers(broadcastId)
-            .some((peer) => peer.id === join.id);
-          if (alreadyJoined) requirePeerSession(broadcastId, join.id);
+          // Best-effort authorization peek for rejoin attempts; the
+          // authoritative check happens on the atomic join result below.
           if (
-            !alreadyJoined &&
-            store.listPeers(broadcastId).length >= maxPeersPerBroadcast
+            store
+              .listPeers(broadcastId)
+              .some((peer) => peer.id === join.id)
           ) {
-            metrics.requestRateLimited();
-            throw new RequestError("Broadcast peer limit reached", 429, {
-              "retry-after": "1",
-            });
+            requirePeerSession(broadcastId, join.id);
           }
-          const peer = store.joinPeer(broadcastId, join);
+          let joined: ReturnType<TrackerStoreBackend["joinPeerDetailed"]>;
+          try {
+            // Atomic conditional insert: reports whether the peer
+            // pre-existed so only one concurrent request mints a fresh token.
+            joined = store.joinPeerDetailed(broadcastId, join, {
+              maxPeers: maxPeersPerBroadcast,
+            });
+          } catch (error) {
+            if (error instanceof StoreError && error.statusCode === 429) {
+              metrics.requestRateLimited();
+              throw new RequestError(error.message, 429, {
+                "retry-after": "1",
+              });
+            }
+            throw error;
+          }
+          const { peer, alreadyJoined } = joined;
+          if (alreadyJoined) requirePeerSession(broadcastId, join.id);
           const issuedSession = peerSessions.issue(broadcastId, join.id);
           if (!alreadyJoined) metrics.peerJoined();
           sendJson(response, alreadyJoined ? 200 : 201, {
@@ -1098,7 +1117,10 @@ export class TrackerServer {
       Partial<
         Pick<
           TrackerConfiguration,
-          "trackerApiKey" | "peerSessionSecret" | "peerSessionTtlMs"
+          | "trackerApiKey"
+          | "peerSessionSecret"
+          | "peerSessionTtlMs"
+          | "wsAllowedOrigins"
         >
       > = {
       rateLimitRps: DEFAULT_RATE_LIMIT_RPS,
@@ -1152,6 +1174,9 @@ export class TrackerServer {
       store,
       this.statsEvents,
       peerSessions,
+      configuration.wsAllowedOrigins
+        ? { allowedOrigins: configuration.wsAllowedOrigins }
+        : {},
     );
     this.webSockets = webSockets;
   }
