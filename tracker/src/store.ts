@@ -19,7 +19,14 @@ import {
   sanitizePeerTrafficStats,
 } from "./store-utils.js";
 
-const NOT_FOUND_STATUS_CODE = 404;
+const NOT_FOUND_STATUS_CODE = 4_04;
+const TOO_MANY_REQUESTS_STATUS_CODE = 4_29;
+
+/** Options for atomic peer joins. */
+export interface JoinPeerOptions {
+  /** Maximum number of distinct peers allowed per broadcast. */
+  maxPeers?: number;
+}
 
 /** Store operation failure with its corresponding HTTP status. */
 export class StoreError extends Error {
@@ -40,7 +47,16 @@ export interface TrackerStoreBackend {
   listBroadcasts(): Broadcast[];
   getBroadcast(id: string): Broadcast;
   unregisterBroadcast(id: string): void;
-  joinPeer(broadcastId: string, request: PeerJoinRequest): Peer;
+  joinPeer(broadcastId: string, request: PeerJoinRequest, options?: JoinPeerOptions): Peer;
+  /**
+   * Atomically inserts (or rejoins) a peer and reports whether the peer
+   * pre-existed, so callers can issue session tokens without a TOCTOU race.
+   */
+  joinPeerDetailed(
+    broadcastId: string,
+    request: PeerJoinRequest,
+    options?: JoinPeerOptions,
+  ): { peer: Peer; alreadyJoined: boolean };
   leavePeer(broadcastId: string, peerId: string): void;
   listPeers(broadcastId: string, segment?: string): Peer[];
   listPeerStats(broadcastId: string): PeerStatsSnapshot[];
@@ -49,6 +65,13 @@ export interface TrackerStoreBackend {
     peerId: string,
     segments: string[],
     replace?: boolean,
+  ): Peer;
+  /** Atomically applies added/removed segment deltas with cap enforcement. */
+  applySegmentDelta(
+    broadcastId: string,
+    peerId: string,
+    added: string[],
+    removed: string[],
   ): Peer;
   heartbeat(
     broadcastId: string,
@@ -151,10 +174,32 @@ export class TrackerStore implements TrackerStoreBackend {
     }
   }
 
-  joinPeer(broadcastId: string, request: PeerJoinRequest): Peer {
+  joinPeer(
+    broadcastId: string,
+    request: PeerJoinRequest,
+    options?: JoinPeerOptions,
+  ): Peer {
+    return this.joinPeerDetailed(broadcastId, request, options).peer;
+  }
+
+  joinPeerDetailed(
+    broadcastId: string,
+    request: PeerJoinRequest,
+    options?: JoinPeerOptions,
+  ): { peer: Peer; alreadyJoined: boolean } {
     const state = this.requireBroadcast(broadcastId);
     const timestamp = this.timestamp();
     const existing = state.peers.get(request.id);
+    if (
+      !existing &&
+      options?.maxPeers !== undefined &&
+      state.peers.size >= options.maxPeers
+    ) {
+      throw new StoreError(
+        "Broadcast peer limit reached",
+        TOO_MANY_REQUESTS_STATUS_CODE,
+      );
+    }
     const peer: Peer = {
       id: request.id,
       address: request.address,
@@ -173,7 +218,7 @@ export class TrackerStore implements TrackerStoreBackend {
       peer,
       stats: existing?.stats ?? createEmptyPeerTrafficStats(),
     });
-    return this.copyPeer(peer);
+    return { peer: this.copyPeer(peer), alreadyJoined: existing !== undefined };
   }
 
   leavePeer(broadcastId: string, peerId: string): void {
@@ -212,6 +257,21 @@ export class TrackerStore implements TrackerStoreBackend {
     peerState.peer.segments = [...new Set(nextSegments)].slice(
       -this.maxSegmentsPerPeer,
     );
+    peerState.peer.lastSeenAt = this.timestamp();
+    return this.copyPeer(peerState.peer);
+  }
+
+  applySegmentDelta(
+    broadcastId: string,
+    peerId: string,
+    added: string[],
+    removed: string[],
+  ): Peer {
+    const peerState = this.requirePeer(broadcastId, peerId);
+    const next = new Set(peerState.peer.segments);
+    for (const segment of removed) next.delete(segment);
+    for (const segment of added) next.add(segment);
+    peerState.peer.segments = [...next].slice(-this.maxSegmentsPerPeer);
     peerState.peer.lastSeenAt = this.timestamp();
     return this.copyPeer(peerState.peer);
   }

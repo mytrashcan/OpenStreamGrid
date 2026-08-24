@@ -11,6 +11,7 @@ import {
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 import {
   PeerSessionTokenService,
+  bearerToken,
   type PeerSessionClaims,
 } from "./peer-session.js";
 import type { TrackerStoreBackend } from "./store.js";
@@ -111,6 +112,15 @@ const requiredSegments = (message: JsonObject): string[] => {
   return segments;
 };
 
+/** Optional WebSocket hardening configuration. */
+export interface TrackerWebSocketOptions {
+  /**
+   * Allowlist of Origin headers permitted on WS upgrades. An empty list
+   * (default) permits all origins.
+   */
+  allowedOrigins?: string[];
+}
+
 /** Validates tracker WebSocket messages and broadcasts peer updates. */
 export class TrackerWebSocketHub implements TrackerEvents {
   private readonly webSocketServer = new WebSocketServer({
@@ -129,6 +139,7 @@ export class TrackerWebSocketHub implements TrackerEvents {
     private readonly store: TrackerStoreBackend,
     private readonly downstreamEvents: TrackerEvents = {},
     private readonly peerSessions = new PeerSessionTokenService(),
+    private readonly options: TrackerWebSocketOptions = {},
   ) {
     this.server.on("upgrade", this.handleUpgrade);
     this.webSocketServer.on("connection", (socket) => {
@@ -221,7 +232,20 @@ export class TrackerWebSocketHub implements TrackerEvents {
       socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
       return;
     }
-    const claims = this.peerSessions.verify(url.searchParams.get("sessionToken") ?? undefined);
+    if (!this.isOriginAllowed(request.headers.origin)) {
+      socket.end(
+        "HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+      );
+      return;
+    }
+    // Prefer the Authorization header so the token stays out of URLs, access
+    // logs, and intermediary proxies; the query parameter remains as a
+    // fallback for browser clients that cannot set upgrade headers.
+    const token =
+      bearerToken(request.headers.authorization) ??
+      url.searchParams.get("sessionToken") ??
+      undefined;
+    const claims = this.peerSessions.verify(token);
     if (!claims || !this.peerExists(claims)) {
       socket.end(
         "HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
@@ -229,19 +253,33 @@ export class TrackerWebSocketHub implements TrackerEvents {
       return;
     }
     const clientIp = request.socket.remoteAddress ?? "unknown";
-    if ((this.connectionsPerIp.get(clientIp) ?? 0) >= MAX_CONNECTIONS_PER_IP) {
+    const currentConnections = this.connectionsPerIp.get(clientIp) ?? 0;
+    if (currentConnections >= MAX_CONNECTIONS_PER_IP) {
       socket.end(
         "HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
       );
       return;
     }
+    // Reserve the per-IP slot before the async upgrade completes so
+    // concurrent upgrades cannot exceed the limit; roll it back if the
+    // handshake fails before a WebSocket is established.
+    this.connectionsPerIp.set(clientIp, currentConnections + 1);
+    let reserved = false;
+    const releaseReservation = (): void => {
+      if (reserved) return;
+      reserved = true;
+      const remaining = (this.connectionsPerIp.get(clientIp) ?? 1) - 1;
+      if (remaining <= 0) this.connectionsPerIp.delete(clientIp);
+      else this.connectionsPerIp.set(clientIp, remaining);
+    };
+    socket.once("error", releaseReservation);
+    socket.once("close", releaseReservation);
     this.webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
+      reserved = true;
+      socket.off("error", releaseReservation);
+      socket.off("close", releaseReservation);
       this.sessions.set(webSocket, claims);
       this.connectionIps.set(webSocket, clientIp);
-      this.connectionsPerIp.set(
-        clientIp,
-        (this.connectionsPerIp.get(clientIp) ?? 0) + 1,
-      );
       this.webSocketServer.emit("connection", webSocket, request);
       const expiryTimer = setTimeout(
         () => webSocket.close(4_001, "Peer session expired"),
@@ -251,6 +289,12 @@ export class TrackerWebSocketHub implements TrackerEvents {
       this.sessionExpiryTimers.set(webSocket, expiryTimer);
     });
   };
+
+  private isOriginAllowed(origin: string | undefined): boolean {
+    const allowed = this.options.allowedOrigins ?? [];
+    if (allowed.length === 0) return true;
+    return origin !== undefined && allowed.includes(origin);
+  }
 
   private handleMessage(socket: WebSocket, data: RawData): void {
     try {
@@ -311,14 +355,7 @@ export class TrackerWebSocketHub implements TrackerEvents {
         if (parsed.added !== undefined || parsed.removed !== undefined) {
           const added = requiredSegments({ segments: parsed.added ?? [] });
           const removed = requiredSegments({ segments: parsed.removed ?? [] });
-          const peer = this.store
-            .listPeers(broadcastId)
-            .find((candidate) => candidate.id === peerId);
-          if (!peer) throw new Error("Peer was not found");
-          const next = new Set(peer.segments);
-          for (const segment of removed) next.delete(segment);
-          for (const segment of added) next.add(segment);
-          this.store.reportSegments(broadcastId, peerId, [...next], true);
+          this.store.applySegmentDelta(broadcastId, peerId, added, removed);
           this.broadcast({
             type: "segment_inventory_delta",
             broadcastId,

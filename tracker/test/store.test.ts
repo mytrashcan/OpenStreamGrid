@@ -193,3 +193,56 @@ test("handles empty updates, cutoff boundaries, and missing store entities", () 
   );
   store.close();
 });
+
+test("joinPeerDetailed reports pre-existence atomically and enforces the peer cap", () => {
+  const store = new TrackerStore();
+  store.registerBroadcast({ id: "live", playlistUrl: "http://origin/live.m3u8" });
+
+  const first = store.joinPeerDetailed("live", {
+    id: "peer-a",
+    address: "http://peer-a:9090",
+  }, { maxPeers: 1 });
+  assert.equal(first.alreadyJoined, false);
+
+  const second = store.joinPeerDetailed("live", {
+    id: "peer-a",
+    address: "http://peer-a:9091",
+  }, { maxPeers: 1 });
+  assert.equal(second.alreadyJoined, true);
+  assert.equal(second.peer.address, "http://peer-a:9091");
+  assert.equal(second.peer.joinedAt, first.peer.joinedAt);
+
+  assert.throws(
+    () =>
+      store.joinPeerDetailed("live", {
+        id: "peer-b",
+        address: "http://peer-b:9090",
+      }, { maxPeers: 1 }),
+    (error: unknown) =>
+      error instanceof StoreError && error.statusCode === 429,
+  );
+});
+
+test("applySegmentDelta merges deltas under the segment cap", () => {
+  const store = new TrackerStore(() => new Date("2026-07-17T00:00:00.000Z"), 2);
+  store.registerBroadcast({ id: "live", playlistUrl: "http://origin/live.m3u8" });
+  store.joinPeer("live", { id: "peer-a", address: "http://peer-a" });
+
+  const afterAdd = store.applySegmentDelta("live", "peer-a", ["s1.ts"], []);
+  assert.deepEqual(afterAdd.segments, ["s1.ts"]);
+  const afterMerge = store.applySegmentDelta("live", "peer-a", ["s2.ts"], ["s1.ts"]);
+  assert.deepEqual(afterMerge.segments, ["s2.ts"]);
+  // Cap of 2 keeps only the most recent segments.
+  const capped = store.applySegmentDelta(
+    "live",
+    "peer-a",
+    ["s3.ts", "s4.ts"],
+    [],
+  );
+  assert.deepEqual(capped.segments, ["s3.ts", "s4.ts"]);
+
+  assert.throws(
+    () => store.applySegmentDelta("live", "missing", [], []),
+    StoreError,
+  );
+});

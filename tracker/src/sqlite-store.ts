@@ -17,6 +17,7 @@ import Database from "better-sqlite3";
 import { runSQLiteMigrations } from "./sqlite-migration.js";
 import {
   StoreError,
+  type JoinPeerOptions,
   type PeerStatsSnapshot,
   type TrackerStoreBackend,
 } from "./store.js";
@@ -30,6 +31,7 @@ import {
 const DEFAULT_DB_PATH = "./data/tracker.db";
 const DATABASE_BUSY_TIMEOUT_MS = 5_000;
 const NOT_FOUND_STATUS_CODE = 404;
+const TOO_MANY_REQUESTS_STATUS_CODE = 429;
 
 interface BroadcastRow {
   id: string;
@@ -160,6 +162,11 @@ const prepareStatements = (database: Database.Database) => ({
     FROM peers
     WHERE broadcast_id = @broadcastId
     ORDER BY joined_at, peer_id
+  `),
+  countPeers: database.prepare(`
+    SELECT COUNT(*) AS count
+    FROM peers
+    WHERE broadcast_id = @broadcastId
   `),
   listPeersWithSegment: database.prepare(`
     SELECT p.broadcast_id, p.peer_id, p.address, p.upload_bandwidth_bps,
@@ -462,11 +469,34 @@ export class SQLiteStore implements TrackerStoreBackend {
     })();
   }
 
-  joinPeer(broadcastId: string, request: PeerJoinRequest): Peer {
+  joinPeer(
+    broadcastId: string,
+    request: PeerJoinRequest,
+    options?: JoinPeerOptions,
+  ): Peer {
+    return this.joinPeerDetailed(broadcastId, request, options).peer;
+  }
+
+  joinPeerDetailed(
+    broadcastId: string,
+    request: PeerJoinRequest,
+    options?: JoinPeerOptions,
+  ): { peer: Peer; alreadyJoined: boolean } {
     this.requireBroadcast(broadcastId);
     const timestamp = this.timestamp();
-    const existing = this.findPeer(broadcastId, request.id);
-    this.database.transaction(() => {
+    return this.database.transaction(() => {
+      const existing = this.findPeer(broadcastId, request.id);
+      if (
+        !existing &&
+        options?.maxPeers !== undefined &&
+        (this.statements.countPeers.get({ broadcastId }) as { count: number })
+          .count >= options.maxPeers
+      ) {
+        throw new StoreError(
+          "Broadcast peer limit reached",
+          TOO_MANY_REQUESTS_STATUS_CODE,
+        );
+      }
       this.statements.upsertPeer.run({
         broadcastId,
         peerId: request.id,
@@ -483,8 +513,11 @@ export class SQLiteStore implements TrackerStoreBackend {
         broadcastId,
         peerId: request.id,
       });
+      return {
+        peer: this.requirePeer(broadcastId, request.id),
+        alreadyJoined: existing !== undefined,
+      };
     })();
-    return this.requirePeer(broadcastId, request.id);
   }
 
   leavePeer(broadcastId: string, peerId: string): void {
@@ -556,6 +589,39 @@ export class SQLiteStore implements TrackerStoreBackend {
       });
     })();
     return this.requirePeer(broadcastId, peerId);
+  }
+
+  applySegmentDelta(
+    broadcastId: string,
+    peerId: string,
+    added: string[],
+    removed: string[],
+  ): Peer {
+    this.requirePeer(broadcastId, peerId);
+    return this.database.transaction(() => {
+      const existing = this.getSegments(broadcastId, peerId);
+      const next = new Set(existing);
+      for (const segment of removed) next.delete(segment);
+      for (const segment of added) next.add(segment);
+      const nextSegments = [...next].slice(-this.maxSegmentsPerPeer);
+      const existingSet = new Set(existing);
+      const nextSet = new Set(nextSegments);
+      for (const segment of existing) {
+        if (!nextSet.has(segment)) {
+          this.statements.deletePeerSegment.run({ broadcastId, peerId, segment });
+        }
+      }
+      for (const segment of nextSegments) {
+        if (existingSet.has(segment)) continue;
+        this.statements.insertPeerSegment.run({ broadcastId, peerId, segment });
+      }
+      this.statements.updatePeerLastSeen.run({
+        broadcastId,
+        peerId,
+        lastSeenAt: this.timestamp(),
+      });
+      return this.requirePeer(broadcastId, peerId);
+    })();
   }
 
   heartbeat(
