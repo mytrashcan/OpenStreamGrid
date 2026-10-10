@@ -16,6 +16,21 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      # These majors need coordinated changes; upgrade them deliberately.
+      # typescript 7: @typescript-eslint 8 declares a peer range below 7.
+      - dependency-name: typescript
+        update-types:
+          - version-update:semver-major
+      # better-sqlite3 13: no Node 22 prebuilds, and the slim build images have
+      # no compiler toolchain for node-gyp.
+      - dependency-name: better-sqlite3
+        update-types:
+          - version-update:semver-major
+      # @types/node: keep in step with the Node versions CI and images run.
+      - dependency-name: "@types/node"
+        update-types:
+          - version-update:semver-major
 
   - package-ecosystem: github-actions
     directory: /
