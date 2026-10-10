@@ -362,20 +362,24 @@ peer; `sdk/` is the browser/Hls.js package; `common/` contains shared contracts;
 - Ask usage questions and propose ideas in [GitHub Discussions](https://github.com/mytrashcan/OpenStreamGrid/discussions).
 - Report reproducible defects through [GitHub Issues](https://github.com/mytrashcan/OpenStreamGrid/issues).
 - Report security vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+- Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 The Discord community is not open yet. This badge will be linked to the official
 server once one is available.
 
 ## Star History
 
-> Star history chart coming soon. If OpenStreamGrid is useful to you, consider
-> [starring the repository](https://github.com/mytrashcan/OpenStreamGrid).
+[![Star History Chart](https://api.star-history.com/svg?repos=mytrashcan/OpenStreamGrid&type=Date)](https://star-history.com/#mytrashcan/OpenStreamGrid&Date)
+
+If OpenStreamGrid is useful to you, consider
+[starring the repository](https://github.com/mytrashcan/OpenStreamGrid).
 
 ## Documentation
 
 - [Korean README](README.ko.md)
 - [API reference](API_REFERENCE.md)
 - [Contributing guide](CONTRIBUTING.md)
+- [Code of conduct](CODE_OF_CONDUCT.md)
 - [Security policy](SECURITY.md)
 - [Release notes](RELEASE_NOTES.md)
 - [Changelog](CHANGELOG.md)

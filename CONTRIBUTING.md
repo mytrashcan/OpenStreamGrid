@@ -2,7 +2,8 @@
 
 Thank you for improving OpenStreamGrid. Changes should preserve its role as
 transport middleware: application-specific playback, accounts, billing, and
-content management belong outside this repository.
+content management belong outside this repository. All participation follows
+the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Development setup
 
