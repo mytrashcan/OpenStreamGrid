@@ -10,6 +10,9 @@ tracker:
   env:
     STORE_TYPE: sqlite
     DB_PATH: /data/tracker.db
+  # Additional Kubernetes EnvVar entries, for example TRACKER_WS_ALLOWED_ORIGINS,
+  # RATE_LIMIT_RPS, or MAX_PEERS_PER_BROADCAST. valueFrom is supported.
+  extraEnv: []
   auth:
     # Create this Secret before installation; see deploy/k8s/README.md.
     existingSecret: openstreamgrid-auth
@@ -47,6 +50,8 @@ origin:
     # Leave empty to advertise the in-cluster Origin service. Set the external
     # HTTPS URL when browser clients access HLS through an ingress or CDN.
     PUBLIC_ORIGIN_URL: ""
+  # Additional Kubernetes EnvVar entries, for example SEGMENT_DURATION_SECONDS.
+  extraEnv: []
   hlsSizeLimit: 256Mi
   resources:
     requests:

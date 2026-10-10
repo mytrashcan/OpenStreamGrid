@@ -65,6 +65,9 @@ spec:
               value: {{ default (printf "http://%s:%v" (include "openstreamgrid.originName" .) .Values.origin.port) .Values.origin.env.PUBLIC_ORIGIN_URL | quote }}
             - name: HLS_DIRECTORY
               value: {{ .Values.origin.env.HLS_DIRECTORY | quote }}
+            {{- with .Values.origin.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.origin.port }}
