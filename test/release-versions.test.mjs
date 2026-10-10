@@ -44,16 +44,24 @@ test("workspaces depend on the current common package version", () => {
 test("lockfiles record the current first-party package versions", () => {
   const rootLock = readJson("package-lock.json");
   for (const key of ["", "common", "tracker", "origin", "peer"]) {
-    assert.equal(rootLock.packages[key].version, chartAppVersion, `package-lock.json packages["${key}"]`);
+    assert.equal(rootLock.packages[key]?.version, chartAppVersion, `package-lock.json packages["${key}"]`);
   }
   const sdkLock = readJson("sdk/package-lock.json");
-  assert.equal(sdkLock.packages[""].version, chartAppVersion, "sdk/package-lock.json");
+  for (const key of ["", "../common"]) {
+    assert.equal(sdkLock.packages[key]?.version, chartAppVersion, `sdk/package-lock.json packages["${key}"]`);
+  }
+  const exampleLock = readJson("examples/react-integration/package-lock.json");
+  assert.equal(
+    exampleLock.packages["../../sdk"]?.version,
+    chartAppVersion,
+    'examples/react-integration/package-lock.json packages["../../sdk"]',
+  );
 });
 
 test("Helm image tags default to the release tag derived from appVersion", () => {
   const values = readText("helm/openstreamgrid/values.yaml");
-  const pinnedTags = [...values.matchAll(/^\s+tag:\s*"([^"]*)"/gm)]
-    .map((match) => match[1])
-    .filter((tag) => tag !== "");
+  const pinnedTags = [...values.matchAll(/^\s+tag:[ \t]*(.*)$/gm)]
+    .map((match) => match[1].replace(/\s+#.*$/, "").trim())
+    .filter((tag) => tag !== '""' && tag !== "''" && tag !== "");
   assert.deepEqual(pinnedTags, [], "values.yaml should leave image tags empty to follow appVersion");
 });
