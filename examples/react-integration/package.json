@@ -10,15 +10,15 @@
   },
   "dependencies": {
     "@openstreamgrid/sdk": "file:../../sdk",
-    "hls.js": "^1.6.16",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "hls.js": "^1.7.3",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   },
   "devDependencies": {
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
     "typescript": "6.0.3",
-    "vite": "^8.1.5"
+    "vite": "^8.3.3"
   }
 }
