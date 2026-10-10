@@ -121,6 +121,31 @@ Ingress uses Kubernetes `Prefix` paths: `/hls` and all of its subpaths route to
 the origin, while `/` routes tracker API, dashboard, health, and WebSocket
 traffic to the tracker.
 
+## Monitoring
+
+The tracker exposes Prometheus metrics at `/metrics`, protected by the tracker
+API key. With the Prometheus Operator installed, enable the bundled
+`ServiceMonitor`, which sends the key from `tracker.auth.existingSecret` as a
+Bearer token, and the Grafana dashboard ConfigMap for the Grafana sidecar:
+
+```bash
+helm upgrade --install openstreamgrid helm/openstreamgrid \
+  --namespace openstreamgrid \
+  --set tracker.metrics.serviceMonitor.enabled=true \
+  --set tracker.metrics.serviceMonitor.labels.release=kube-prometheus-stack \
+  --set grafanaDashboard.enabled=true
+```
+
+Match `serviceMonitor.labels` to your Prometheus `serviceMonitorSelector`, and
+`grafanaDashboard.labels` to the sidecar's label (default `grafana_dashboard:
+"1"`). Without Kubernetes, import
+[`helm/openstreamgrid/dashboards/openstreamgrid.json`](../../helm/openstreamgrid/dashboards/openstreamgrid.json)
+into Grafana and pick a Prometheus data source that scrapes the tracker.
+
+The dashboard covers active broadcasts and peers, P2P offload (P2P successes
+divided by P2P successes plus origin requests), P2P success rate, fallbacks,
+integrity failures, REST latency quantiles, peer churn, and rate limiting.
+
 ## Operational notes
 
 - The default `ReadWriteOnce` SQLite volume supports exactly one tracker

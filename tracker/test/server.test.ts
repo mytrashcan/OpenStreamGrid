@@ -297,6 +297,28 @@ test("authenticates protected HTTP routes when an API key is configured", async 
   );
   assert.equal(stats.status, 200);
 
+  // Prometheus-style scrapers send the admin key as a Bearer token.
+  const bearerMetrics = await invokeRaw(
+    handler,
+    "GET",
+    "/metrics",
+    undefined,
+    "192.0.2.25",
+    { authorization: "Bearer test-secret" },
+  );
+  assert.equal(bearerMetrics.status, 200);
+  assert.match(bearerMetrics.body, /openstreamgrid_active_peers/);
+  const wrongBearer = await invokeRaw(
+    handler,
+    "GET",
+    "/metrics",
+    undefined,
+    "192.0.2.26",
+    { authorization: "Bearer wrong-secret" },
+  );
+  assert.equal(wrongBearer.status, 401);
+  assert.deepEqual(JSON.parse(wrongBearer.body), { error: "Invalid API key" });
+
   const publicHealth = await invokeRaw(
     handler,
     "GET",
