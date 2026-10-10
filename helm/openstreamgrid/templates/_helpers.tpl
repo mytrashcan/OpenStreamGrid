@@ -40,3 +40,12 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "openstreamgrid.originName" -}}
 {{- printf "%s-origin" (include "openstreamgrid.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
+
+{{/*
+Release images are published with the Git tag name (for example v0.6.0), so an
+empty image tag resolves to the chart appVersion with a "v" prefix.
+*/}}
+{{- define "openstreamgrid.image" -}}
+{{- $tag := .image.tag | default (printf "v%s" .context.Chart.AppVersion) -}}
+{{- printf "%s:%s" .image.repository $tag -}}
+{{- end }}

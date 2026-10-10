@@ -23,7 +23,7 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
       initContainers:
         - name: ffmpeg-check
-          image: "{{ .Values.origin.image.repository }}:{{ .Values.origin.image.tag }}"
+          image: {{ include "openstreamgrid.image" (dict "image" .Values.origin.image "context" $) | quote }}
           imagePullPolicy: {{ .Values.origin.image.pullPolicy }}
           command:
             - /usr/bin/ffmpeg
@@ -38,7 +38,7 @@ spec:
             runAsNonRoot: true
       containers:
         - name: origin
-          image: "{{ .Values.origin.image.repository }}:{{ .Values.origin.image.tag }}"
+          image: {{ include "openstreamgrid.image" (dict "image" .Values.origin.image "context" $) | quote }}
           imagePullPolicy: {{ .Values.origin.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false

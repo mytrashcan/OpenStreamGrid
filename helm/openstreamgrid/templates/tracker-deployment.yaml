@@ -26,7 +26,7 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: tracker
-          image: "{{ .Values.tracker.image.repository }}:{{ .Values.tracker.image.tag }}"
+          image: {{ include "openstreamgrid.image" (dict "image" .Values.tracker.image "context" $) | quote }}
           imagePullPolicy: {{ .Values.tracker.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false

@@ -227,6 +227,7 @@ WebSocket의 `sessionToken` 쿼리로 사용합니다.
 | `RATE_LIMIT_RPS` | `100` | 클라이언트별 초당 지속 요청 한도 |
 | `RATE_LIMIT_BURST` | `200` | 클라이언트별 순간 요청 버스트 한도 |
 | `MAX_PEERS_PER_BROADCAST` | `500` | 방송별 최대 활성 피어 수 |
+| `TRACKER_WS_ALLOWED_ORIGINS` | 미설정 | `/ws` 연결을 허용할 `Origin` 값 목록(쉼표 구분, 정확히 일치); 설정하면 일치하는 `Origin` 헤더가 없는 업그레이드(Node 피어 포함)는 403으로 거부 |
 
 ### Origin
 

@@ -2,6 +2,51 @@
 
 All notable changes to OpenStreamGrid are documented in this file.
 
+## [Unreleased]
+
+### Security
+
+- Made peer joins atomic so concurrent joins cannot bypass the per-broadcast
+  peer cap or both mint session tokens, and applied WebSocket segment deltas
+  atomically in the store.
+- Reserved per-IP WebSocket slots before the upgrade handshake, preferred the
+  `Authorization` header over the `sessionToken` query parameter, and added an
+  optional `TRACKER_WS_ALLOWED_ORIGINS` allowlist.
+- Fixed a polynomial-ReDoS in the SDK `parseSha256` helper and restricted
+  workflow token permissions (CodeQL findings).
+
+### Changed
+
+- Relicensed the project from GPL-3.0 to MIT.
+- The Helm chart now derives image tags from `appVersion` (`v<appVersion>`),
+  matching the published GHCR release tags. Chart and package versions are
+  aligned with the 0.6.0 release.
+
+### CI
+
+- Added automated pull request and issue labeling.
+
+## [0.6.0] - 2026-07-26
+
+### Scheduling
+
+- Added the shared `SegmentScheduler` contract and extracted the Node
+  weighted-score and browser trust/latency-probe policies into injectable
+  schedulers without changing their default selection behavior.
+- Added deadline-aware scheduler decorators for Node peers and the browser SDK,
+  with first-success-wins hedged P2P/Origin requests, cancellation, and a
+  bounded Origin-latency estimator.
+
+### Benchmarking
+
+- Added versioned, seeded benchmark scenarios with schema validation, QoE
+  metrics (deadline misses, stall proxies, latency percentiles, fairness),
+  repeated-run aggregation, result comparison, and SVG reports.
+- Added a deterministic scheduler lab with critical, tight, relaxed,
+  slow-Origin, unreliable-peer, and mixed-workload scenarios.
+
+See [RELEASE_NOTES.md](RELEASE_NOTES.md) for details.
+
 ## [0.5.0] - 2026-07-22
 
 ### Security
