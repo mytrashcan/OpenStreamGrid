@@ -10,6 +10,12 @@ All notable changes to OpenStreamGrid are documented in this file.
   variables (including `valueFrom`) to the containers, so settings such as
   `TRACKER_WS_ALLOWED_ORIGINS` and rate limits are configurable in Kubernetes.
 
+### Fixed
+
+- The React integration example compiles again: it narrows `SdkEvent` before
+  reading `segment`, which `scheduler_decision` events do not carry. CI now
+  builds the example so SDK type changes cannot break it silently.
+
 ## [0.6.1] - 2026-10-11
 
 ### Security
