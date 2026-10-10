@@ -40,6 +40,13 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
+      - name: Build React integration example
+        if: matrix.node-version == '22'
+        working-directory: examples/react-integration
+        run: |
+          npm ci
+          npm run build
+
       - name: Run tests with coverage
         run: npm run test:coverage
 
