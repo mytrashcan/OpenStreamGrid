@@ -54,6 +54,9 @@ spec:
                   name: {{ .Values.tracker.auth.existingSecret | quote }}
                   key: {{ .Values.tracker.auth.peerSessionSecretKey | quote }}
             {{- end }}
+            {{- with .Values.tracker.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.tracker.port }}

@@ -4,6 +4,12 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Helm `tracker.extraEnv` and `origin.extraEnv` pass additional environment
+  variables (including `valueFrom`) to the containers, so settings such as
+  `TRACKER_WS_ALLOWED_ORIGINS` and rate limits are configurable in Kubernetes.
+
 ## [0.6.1] - 2026-10-11
 
 ### Security

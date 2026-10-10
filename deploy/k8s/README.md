@@ -67,6 +67,25 @@ ingress:
 
 Then apply it with `helm upgrade --install ... -f production-values.yaml`.
 
+### Additional configuration
+
+The chart sets the core environment variables itself. Pass any other tracker or
+origin setting from the README configuration tables through `extraEnv`, which
+accepts Kubernetes `EnvVar` entries including `valueFrom`:
+
+```yaml
+tracker:
+  extraEnv:
+    - name: TRACKER_WS_ALLOWED_ORIGINS
+      value: https://player.example
+    - name: MAX_PEERS_PER_BROADCAST
+      value: "1000"
+origin:
+  extraEnv:
+    - name: SEGMENT_DURATION_SECONDS
+      value: "4"
+```
+
 ## Deploy with Kustomize
 
 The Kustomize overlay inflates the local Helm chart, so Helm support must be
