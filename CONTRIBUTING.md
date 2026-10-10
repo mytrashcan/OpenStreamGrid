@@ -69,3 +69,15 @@ or private media.
 
 By contributing, you agree that your contribution is licensed under the
 repository's MIT License.
+
+## Releasing
+
+1. Run `node scripts/bump-version.mjs X.Y.Z`. It updates every workspace
+   manifest, lockfile entry, and the Helm chart `version`/`appVersion` together;
+   `test/release-versions.test.mjs` fails if any of them drift.
+2. Move the `[Unreleased]` CHANGELOG entries under `[X.Y.Z] - YYYY-MM-DD`, add a
+   section to RELEASE_NOTES.md, and update the version references in the
+   READMEs and `deploy/k8s/README.md`.
+3. Merge the release pull request, then tag the merge commit `vX.Y.Z` and push
+   the tag. The Docker publish workflow refuses tags that do not match
+   `package.json` and publishes `vX.Y.Z` and `X.Y.Z` images for amd64 and arm64.

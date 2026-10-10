@@ -4,6 +4,8 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-11
+
 ### Security
 
 - Made peer joins atomic so concurrent joins cannot bypass the per-broadcast
@@ -28,8 +30,10 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 - Relicensed the project from GPL-3.0 to MIT.
 - The Helm chart now derives image tags from `appVersion` (`v<appVersion>`),
-  matching the published GHCR release tags. Chart and package versions are
-  aligned with the 0.6.0 release.
+  matching the published GHCR release tags; the previous default (`0.5.0`)
+  did not exist and failed with `ImagePullBackOff`.
+- Package, lockfile, and chart versions are set together by
+  `scripts/bump-version.mjs`, and a test fails when they drift apart.
 
 ### Community
 

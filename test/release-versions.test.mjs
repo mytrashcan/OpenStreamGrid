@@ -27,7 +27,7 @@ const manifestPaths = [
 ];
 
 test("Helm chart declares an appVersion that matches its chart version", () => {
-  assert.match(chartAppVersion ?? "", /^\d+\.\d+\.\d+$/);
+  assert.match(chartAppVersion ?? "", /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
   assert.equal(chartField("version"), chartAppVersion, "Chart.yaml version");
 });
 

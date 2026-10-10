@@ -1,3 +1,53 @@
+# OpenStreamGrid 0.6.1 Release Notes
+
+OpenStreamGrid 0.6.1 is a patch release for 0.6.0. It hardens tracker
+admission and signaling, fixes the WebSocket Origin allowlist for Node peers,
+makes the Helm chart deployable with its default values, and publishes
+multi-architecture container images. Scheduling behavior is unchanged.
+
+## Security
+
+- Peer joins are atomic: concurrent joins can no longer exceed the
+  per-broadcast peer cap or both receive session tokens, and WebSocket segment
+  deltas are applied atomically in the store.
+- WebSocket upgrades reserve the per-IP connection slot before the handshake
+  and prefer `Authorization: Bearer` over the `sessionToken` query parameter.
+- Fixed a polynomial-ReDoS in the SDK `parseSha256` helper.
+
+## Fixes
+
+- `TRACKER_WS_ALLOWED_ORIGINS` now applies only to browser upgrades. Node
+  peers, which send no `Origin` header, are no longer rejected with `403` and
+  still require a valid peer session. Allowlist entries are validated and
+  normalized at startup.
+- The Helm chart's default image tag (`0.5.0`) did not exist on GHCR. The chart
+  now resolves images to `v<appVersion>`.
+
+## Upgrade notes
+
+- If you set `TRACKER_WS_ALLOWED_ORIGINS`, every entry must be an http(s)
+  origin such as `https://player.example`; other values stop the tracker at
+  startup.
+- The project is now licensed under MIT (previously GPL-3.0).
+
+## Operations
+
+- Container images are built for `linux/amd64` and `linux/arm64`, include an
+  SBOM attestation, and are tagged both `v0.6.1` and `0.6.1`.
+- CI pins every action to a commit SHA, runs on Node 22 and 24, builds the
+  images on native arm64 runners, and reports test coverage.
+- Added a Code of Conduct and Dependabot version updates.
+
+## Validation
+
+- `npm run build`
+- `npm run typecheck`
+- `npm run test:coverage` (235 tests)
+- `npm run lint`
+- `helm lint` and `helm template` with default values
+
+---
+
 # OpenStreamGrid 0.6.0 Release Notes
 
 OpenStreamGrid 0.6.0 completes a three-phase scheduling program that makes

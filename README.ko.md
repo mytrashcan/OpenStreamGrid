@@ -32,7 +32,7 @@ P2P 전송이 불가능하거나 재생 기한 안에 완료되지 않으면 즉
 명령 하나로 Tracker, 테스트 Origin, 피어 2개를 실행할 수 있습니다.
 
 ```bash
-git clone --branch v0.6.0 --depth 1 https://github.com/mytrashcan/OpenStreamGrid.git
+git clone --branch v0.6.1 --depth 1 https://github.com/mytrashcan/OpenStreamGrid.git
 cd OpenStreamGrid
 docker compose up --build --detach
 docker compose ps
@@ -52,10 +52,11 @@ Origin으로 폴백합니다. 종료할 때는 `docker compose down`을 실행�
 ## 릴리스 상태
 
 현재 안정 릴리스는
-[OpenStreamGrid v0.6.0](https://github.com/mytrashcan/OpenStreamGrid/releases/tag/v0.6.0)입니다.
-이 버전에는 재현 가능한 QoE 벤치마크, 교체 가능한 Node 및 브라우저 스케줄링
-정책, 재생 기한을 고려한 P2P/Origin 헤지가 포함됩니다. 검증된 Origin 폴백은
-최종 안전 경계로 유지됩니다. 재현 가능한 배포에는 릴리스 태그를 사용하고, 업그레이드
+[OpenStreamGrid v0.6.1](https://github.com/mytrashcan/OpenStreamGrid/releases/tag/v0.6.1)입니다.
+v0.6.0의 재현 가능한 QoE 벤치마크, 교체 가능한 스케줄링 정책, 재생 기한을 고려한
+P2P/Origin 헤지 위에 피어 참여와 WebSocket 업그레이드 보안 강화, Node 피어용
+WebSocket Origin 허용 목록 수정, Helm 이미지 태그 수정, 멀티 아키텍처 컨테이너
+이미지를 더한 패치 릴리스입니다. 검증된 Origin 폴백은 최종 안전 경계로 유지됩니다. 재현 가능한 배포에는 릴리스 태그를 사용하고, 업그레이드
 전에는 [릴리스 노트](RELEASE_NOTES.md)를 확인하세요. 전체 변경 내역은
 [변경 이력](CHANGELOG.md)에 정리되어 있습니다.
 
@@ -63,12 +64,12 @@ Origin으로 폴백합니다. 종료할 때는 `docker compose down`을 실행�
 
 | 구성 요소 | 이미지 |
 | --- | --- |
-| Tracker | `ghcr.io/mytrashcan/openstreamgrid-tracker:v0.6.0` |
-| Origin | `ghcr.io/mytrashcan/openstreamgrid-origin:v0.6.0` |
-| Node Peer | `ghcr.io/mytrashcan/openstreamgrid-peer:v0.6.0` |
+| Tracker | `ghcr.io/mytrashcan/openstreamgrid-tracker:v0.6.1` |
+| Origin | `ghcr.io/mytrashcan/openstreamgrid-origin:v0.6.1` |
+| Node Peer | `ghcr.io/mytrashcan/openstreamgrid-peer:v0.6.1` |
 
-v0.6.0 다음 릴리스부터 이미지는 `linux/amd64`와 `linux/arm64`용으로 빌드되고
-`vX.Y.Z`와 `X.Y.Z` 두 형식의 태그로 게시됩니다(v0.6.0은 `linux/amd64` 전용).
+이미지는 `linux/amd64`와 `linux/arm64`용으로 빌드되고 `vX.Y.Z`와 `X.Y.Z` 두
+형식의 태그로 게시됩니다(v0.6.1부터; 이전 릴리스는 `linux/amd64`, `vX.Y.Z` 태그만 제공).
 운영 환경에서는 변경되지 않는 버전 태그를 사용하세요. `latest` 태그는 평가용으로
 제공합니다. 브라우저 SDK는 CI에서 빌드와 npm 게시 dry-run까지 검증하지만 아직
 npm 레지스트리에는 게시하지 않았습니다. 최초 게시 전까지는 태그가 지정된 소스를
