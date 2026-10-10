@@ -1,0 +1,5 @@
+{
+  "include": ["*/dist-test/src/**"],
+  "reporter": ["text", "lcov"],
+  "reports-dir": "coverage"
+}
