@@ -338,6 +338,7 @@ P2P 교환과 Origin 폴백 통합 테스트는 `bash test/docker-test.sh`, 기�
 - [영문 README](README.md)
 - [API 레퍼런스](API_REFERENCE.md)
 - [기여 가이드](CONTRIBUTING.md)
+- [행동 강령](CODE_OF_CONDUCT.md)
 - [보안 정책](SECURITY.md)
 - [릴리스 노트](RELEASE_NOTES.md)
 - [변경 이력](CHANGELOG.md)

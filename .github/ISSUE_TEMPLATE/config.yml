@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: OpenStreamGrid Discord
-    url: https://discord.gg/your-invite-code
-    about: Ask questions and discuss OpenStreamGrid with the community.
+  - name: Questions and ideas
+    url: https://github.com/mytrashcan/OpenStreamGrid/discussions
+    about: Ask usage questions and propose ideas in GitHub Discussions.
+  - name: Report a security vulnerability
+    url: https://github.com/mytrashcan/OpenStreamGrid/security/advisories/new
+    about: Report vulnerabilities privately instead of opening a public issue.

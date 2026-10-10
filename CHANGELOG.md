@@ -31,6 +31,13 @@ All notable changes to OpenStreamGrid are documented in this file.
   matching the published GHCR release tags. Chart and package versions are
   aligned with the 0.6.0 release.
 
+### Community
+
+- Added a Code of Conduct, Dependabot configuration for npm, GitHub Actions,
+  and Docker base images, and a star history chart in the README.
+- Replaced the placeholder Discord contact link in the issue chooser with
+  GitHub Discussions and private security advisory links.
+
 ### CI
 
 - Added automated pull request and issue labeling.
