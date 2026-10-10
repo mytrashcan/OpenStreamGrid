@@ -76,7 +76,12 @@ jobs:
         run: npm pack --dry-run
 
   container-and-chart:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Release images ship for both architectures; build each natively.
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Build runtime images
@@ -84,5 +89,10 @@ jobs:
           docker build -f tracker/Dockerfile -t openstreamgrid-tracker:test .
           docker build -f origin/Dockerfile -t openstreamgrid-origin:test .
           docker build -f peer/Dockerfile -t openstreamgrid-peer:test .
+      - name: Load native modules inside the images
+        run: |
+          docker run --rm openstreamgrid-tracker:test -e "new (require('better-sqlite3'))(':memory:').close(); console.log('better-sqlite3', process.arch)"
+          docker run --rm openstreamgrid-peer:test -e "require('@roamhq/wrtc'); console.log('@roamhq/wrtc', process.arch)"
       - name: Lint Helm chart
+        if: matrix.runner == 'ubuntu-latest'
         run: docker run --rm -v "$PWD:/src" alpine/helm:3.16.4 lint /src/helm/openstreamgrid
