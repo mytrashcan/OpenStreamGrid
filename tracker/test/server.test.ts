@@ -83,6 +83,19 @@ test("validates tracker environment configuration", () => {
     () => parseTrackerConfiguration({ TRACKER_API_KEY: " " }),
     /TRACKER_API_KEY must not be empty/,
   );
+  assert.deepEqual(
+    parseTrackerConfiguration({
+      TRACKER_WS_ALLOWED_ORIGINS: " https://Player.Example/ ,, http://localhost:5173, https://cdn.example:443",
+    }).wsAllowedOrigins,
+    ["https://player.example", "http://localhost:5173", "https://cdn.example"],
+  );
+  for (const invalid of ["player.example", "ftp://player.example", "https://player.example/app", "null"]) {
+    assert.throws(
+      () => parseTrackerConfiguration({ TRACKER_WS_ALLOWED_ORIGINS: invalid }),
+      /TRACKER_WS_ALLOWED_ORIGINS entries must be http\(s\) origins/,
+      invalid,
+    );
+  }
   assert.throws(
     () => createConfiguredStore({ STORE_TYPE: "sqlite", DB_PATH: " " }),
     /DB_PATH must not be empty/,
@@ -788,6 +801,58 @@ test("authenticates WebSocket upgrades with a peer session", async () => {
     assert.equal(authenticatedSocket.readyState, WebSocket.OPEN);
   } finally {
     authenticatedSocket?.close();
+    await server.stop();
+  }
+});
+
+test("applies the WebSocket Origin allowlist to browser upgrades only", async () => {
+  const server = new TrackerServer(
+    () => new TrackerStore(),
+    30_000,
+    {
+      trackerApiKey: "test-secret",
+      rateLimitRps: 100,
+      rateLimitBurst: 200,
+      maxPeersPerBroadcast: 500,
+      wsAllowedOrigins: ["https://player.example"],
+    },
+  );
+  const port = await server.start(0, "127.0.0.1");
+  const sockets: WebSocket[] = [];
+  const upgradeStatus = (url: string, origin?: string): Promise<number> =>
+    new Promise((resolve, reject) => {
+      const socket = new WebSocket(url, origin ? { origin } : undefined);
+      sockets.push(socket);
+      socket.once("unexpected-response", (_request, response) => {
+        response.resume();
+        resolve(response.statusCode ?? 0);
+      });
+      socket.once("open", () => resolve(101));
+      socket.once("error", reject);
+    });
+
+  try {
+    const broadcast = await fetch(`http://127.0.0.1:${port}/api/v1/broadcasts`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": "test-secret" },
+      body: JSON.stringify({ id: "live", playlistUrl: "http://origin/live.m3u8" }),
+    });
+    assert.equal(broadcast.status, 201);
+    const join = await fetch(`http://127.0.0.1:${port}/api/v1/broadcasts/live/peers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "peer-a", address: "http://peer-a:9090" }),
+    });
+    const { sessionToken } = await join.json() as { sessionToken: string };
+    const url = `ws://127.0.0.1:${port}/ws?sessionToken=${encodeURIComponent(sessionToken)}`;
+
+    assert.equal(await upgradeStatus(url, "https://attacker.example"), 403);
+    assert.equal(await upgradeStatus(url, "https://player.example"), 101);
+    // Node peers send no Origin header; they are still bound by session auth.
+    assert.equal(await upgradeStatus(url), 101);
+    assert.equal(await upgradeStatus(`ws://127.0.0.1:${port}/ws?sessionToken=wrong`), 401);
+  } finally {
+    for (const socket of sockets) socket.close();
     await server.stop();
   }
 });

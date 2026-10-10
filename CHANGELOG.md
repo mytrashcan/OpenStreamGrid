@@ -15,6 +15,12 @@ All notable changes to OpenStreamGrid are documented in this file.
 - Fixed a polynomial-ReDoS in the SDK `parseSha256` helper and restricted
   workflow token permissions (CodeQL findings).
 
+### Fixed
+
+- `TRACKER_WS_ALLOWED_ORIGINS` no longer rejects Node peers, which send no
+  `Origin` header; the allowlist now applies only to browser upgrades, and
+  entries are validated and normalized to their origin form at startup.
+
 ### Changed
 
 - Relicensed the project from GPL-3.0 to MIT.

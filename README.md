@@ -231,7 +231,7 @@ codes, and origin/peer endpoints.
 | `RATE_LIMIT_RPS` | `100` | Sustained requests per second per client |
 | `RATE_LIMIT_BURST` | `200` | Token-bucket burst capacity per client |
 | `MAX_PEERS_PER_BROADCAST` | `500` | Active-peer limit per broadcast |
-| `TRACKER_WS_ALLOWED_ORIGINS` | unset | Comma-separated exact `Origin` values allowed to open `/ws`; when set, upgrades without a matching `Origin` header (including Node peers) receive 403 |
+| `TRACKER_WS_ALLOWED_ORIGINS` | unset | Comma-separated http(s) origins allowed to open `/ws` from a browser; other browser origins receive 403. Upgrades without an `Origin` header, such as Node peers, still require a valid peer session |
 
 ### Origin
 

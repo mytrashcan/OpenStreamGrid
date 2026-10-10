@@ -115,8 +115,10 @@ const requiredSegments = (message: JsonObject): string[] => {
 /** Optional WebSocket hardening configuration. */
 export interface TrackerWebSocketOptions {
   /**
-   * Allowlist of Origin headers permitted on WS upgrades. An empty list
-   * (default) permits all origins.
+   * Allowlist of Origin headers permitted on browser WS upgrades. An empty
+   * list (default) permits all origins. Upgrades without an Origin header
+   * (non-browser clients such as Node peers) are not subject to the list and
+   * still require a valid peer session.
    */
   allowedOrigins?: string[];
 }
@@ -292,8 +294,11 @@ export class TrackerWebSocketHub implements TrackerEvents {
 
   private isOriginAllowed(origin: string | undefined): boolean {
     const allowed = this.options.allowedOrigins ?? [];
-    if (allowed.length === 0) return true;
-    return origin !== undefined && allowed.includes(origin);
+    // Origin checks stop cross-site browser pages from connecting. Browsers
+    // always send Origin on upgrades, while non-browser clients omit it and
+    // could forge it anyway, so a missing header falls through to session auth.
+    if (allowed.length === 0 || origin === undefined) return true;
+    return allowed.includes(origin);
   }
 
   private handleMessage(socket: WebSocket, data: RawData): void {

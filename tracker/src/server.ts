@@ -84,6 +84,29 @@ const parseInteger = (
   return parsed;
 };
 
+const parseAllowedOrigin = (value: string): string => {
+  let url: URL | undefined;
+  try {
+    url = new URL(value);
+  } catch {
+    url = undefined;
+  }
+  if (
+    !url ||
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.pathname !== "/" ||
+    url.search !== "" ||
+    url.hash !== ""
+  ) {
+    throw new Error(
+      `TRACKER_WS_ALLOWED_ORIGINS entries must be http(s) origins without a path; received '${value}'`,
+    );
+  }
+  return url.origin;
+};
+
 /** Parses and validates tracker process configuration before startup. */
 export const parseTrackerConfiguration = (
   environment: NodeJS.ProcessEnv = process.env,
@@ -104,7 +127,8 @@ export const parseTrackerConfiguration = (
   const wsAllowedOrigins = (environment.TRACKER_WS_ALLOWED_ORIGINS ?? "")
     .split(",")
     .map((origin) => origin.trim())
-    .filter((origin) => origin !== "");
+    .filter((origin) => origin !== "")
+    .map(parseAllowedOrigin);
   return {
     port: parseInteger(
       environment.PORT ?? String(DEFAULT_PORT),
