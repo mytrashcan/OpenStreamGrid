@@ -20,6 +20,9 @@ All notable changes to OpenStreamGrid are documented in this file.
 - `TRACKER_WS_ALLOWED_ORIGINS` no longer rejects Node peers, which send no
   `Origin` header; the allowlist now applies only to browser upgrades, and
   entries are validated and normalized to their origin form at startup.
+  **Upgrade note:** entries that are not http(s) origins (for example a bare
+  `player.example`) now stop the tracker at startup instead of silently never
+  matching.
 
 ### Changed
 

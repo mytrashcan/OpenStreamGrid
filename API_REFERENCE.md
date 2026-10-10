@@ -237,6 +237,12 @@ selector exclusion threshold.
 
 Connect to `/ws` using `ws://` or `wss://`. JSON messages are text frames.
 
+Upgrades require a peer session token (`Authorization: Bearer <token>` or
+`?sessionToken=<token>`) and return `401` without a valid one. When
+`TRACKER_WS_ALLOWED_ORIGINS` is set, browser upgrades whose `Origin` header is
+not in the list (including the literal `null` origin) return `403`. Upgrades
+without an `Origin` header, such as Node peers, are not subject to the list.
+
 The first client message subscribes the connection:
 
 ```json

@@ -85,12 +85,7 @@ const parseInteger = (
 };
 
 const parseAllowedOrigin = (value: string): string => {
-  let url: URL | undefined;
-  try {
-    url = new URL(value);
-  } catch {
-    url = undefined;
-  }
+  const url = URL.canParse(value) ? new URL(value) : undefined;
   if (
     !url ||
     (url.protocol !== "http:" && url.protocol !== "https:") ||

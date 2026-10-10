@@ -847,6 +847,8 @@ test("applies the WebSocket Origin allowlist to browser upgrades only", async ()
     const url = `ws://127.0.0.1:${port}/ws?sessionToken=${encodeURIComponent(sessionToken)}`;
 
     assert.equal(await upgradeStatus(url, "https://attacker.example"), 403);
+    // Sandboxed iframes and file:// pages send the literal "null" origin.
+    assert.equal(await upgradeStatus(url, "null"), 403);
     assert.equal(await upgradeStatus(url, "https://player.example"), 101);
     // Node peers send no Origin header; they are still bound by session auth.
     assert.equal(await upgradeStatus(url), 101);
