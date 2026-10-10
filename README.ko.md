@@ -138,6 +138,7 @@ Peer보다 지속적인 품질 이력이 적기 때문에 두 정책을 의도�
 - 업로드 속도 및 동시 연결 수 제한
 - 관리자 API 키와 단기 피어 세션 인증, STUN/TURN 설정
 - SQLite WAL 영속화와 실시간 대시보드, SSE, Prometheus 메트릭
+- Helm 차트의 Grafana 대시보드와 Prometheus Operator `ServiceMonitor`
 - Docker Compose 통합 테스트, 부하 테스트, Kubernetes/Helm 배포 파일
 
 ## 무설치 브라우저 Peer
@@ -186,7 +187,7 @@ hls.attachMedia(document.querySelector("video")!);
 ## API 요약
 
 Tracker 리소스는 `/api/v1` 아래에 있습니다. 관리 요청은 `X-API-Key`를
-사용합니다. 피어 참여 응답의 세션 토큰은 이후 REST 요청의 Bearer 토큰과
+사용하며, Prometheus 같은 수집기는 같은 키를 `Authorization: Bearer <key>`로 보낼 수 있습니다. 피어 참여 응답의 세션 토큰은 이후 REST 요청의 Bearer 토큰과
 WebSocket의 `sessionToken` 쿼리로 사용합니다.
 
 | 메서드 | 경로 | 설명 |

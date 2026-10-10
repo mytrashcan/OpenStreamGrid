@@ -8,7 +8,9 @@ HTTP surfaces exposed by the origin and Node peers. Examples assume a tracker at
 
 - JSON request bodies use `Content-Type: application/json`.
 - Path identifiers must be percent-encoded.
-- Administrative requests use `X-API-Key: <key>`. A successful peer join
+- Administrative requests use `X-API-Key: <key>`. Clients that can only send
+  a bearer credential, such as Prometheus scraping `/metrics`, may send the
+  same key as `Authorization: Bearer <key>`. A successful peer join
   returns a scoped session token. Peer REST calls use `Authorization: Bearer
   <token>` and WebSocket clients use `?sessionToken=<token>`.
 - Errors use `{ "error": "message" }`.

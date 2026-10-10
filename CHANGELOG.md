@@ -9,6 +9,13 @@ All notable changes to OpenStreamGrid are documented in this file.
 - Helm `tracker.extraEnv` and `origin.extraEnv` pass additional environment
   variables (including `valueFrom`) to the containers, so settings such as
   `TRACKER_WS_ALLOWED_ORIGINS` and rate limits are configurable in Kubernetes.
+- Grafana dashboard (`helm/openstreamgrid/dashboards/openstreamgrid.json`) for
+  delivery, reliability, and tracker API metrics, shipped optionally as a
+  sidecar ConfigMap (`grafanaDashboard.enabled`).
+- Optional Prometheus Operator `ServiceMonitor` for the tracker
+  (`tracker.metrics.serviceMonitor.enabled`).
+- Admin endpoints, including `/metrics`, also accept the tracker API key as
+  `Authorization: Bearer <key>` so Prometheus can scrape them.
 
 ## [0.6.1] - 2026-10-11
 

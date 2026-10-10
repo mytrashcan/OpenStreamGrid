@@ -143,6 +143,7 @@ chooses Origin.
 - SHA-256 verification, peer trust scoring, and integrity-failure exclusion.
 - TTL-aware LRU caching, upload bandwidth limiting, and connection limits.
 - Real-time dashboard, Prometheus metrics, SSE updates, and SQLite history.
+- Grafana dashboard and Prometheus Operator `ServiceMonitor` in the Helm chart.
 - Docker Compose, load-test scenarios, Kubernetes/Helm manifests, and CI.
 
 ## Zero-install browser peers
@@ -190,7 +191,8 @@ administrator credential for trusted origin and operations components.
 
 ## Tracker API
 
-Tracker resources are under `/api/v1`. Administrators send `X-API-Key: <key>`.
+Tracker resources are under `/api/v1`. Administrators send `X-API-Key: <key>`
+or, for scrapers such as Prometheus, `Authorization: Bearer <key>`.
 Peer join returns a short-lived session token; peer REST calls use
 `Authorization: Bearer <token>` and WebSocket upgrades use `?sessionToken=<token>`.
 
