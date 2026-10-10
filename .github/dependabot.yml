@@ -24,9 +24,11 @@ updates:
     commit-message:
       prefix: ci
     groups:
+      # Major action upgrades arrive as individual pull requests for review.
       github-actions:
-        patterns:
-          - "*"
+        update-types:
+          - minor
+          - patch
 
   - package-ecosystem: docker
     directories:
@@ -38,3 +40,10 @@ updates:
     commit-message:
       prefix: chore
       include: scope
+    ignore:
+      # The build stage must match the distroless nodejs22 runtime, or native
+      # modules (better-sqlite3, @roamhq/wrtc) fail to load with an ABI error.
+      # Move both stages to a new Node LTS together, by hand.
+      - dependency-name: node
+        update-types:
+          - version-update:semver-major
