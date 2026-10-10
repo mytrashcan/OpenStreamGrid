@@ -89,7 +89,15 @@ test("validates tracker environment configuration", () => {
     }).wsAllowedOrigins,
     ["https://player.example", "http://localhost:5173", "https://cdn.example"],
   );
-  for (const invalid of ["player.example", "ftp://player.example", "https://player.example/app", "null"]) {
+  for (const invalid of [
+    "player.example",
+    "ftp://player.example",
+    "https://player.example/app",
+    "https://user:pass@player.example",
+    "https://player.example?embed=1",
+    "https://player.example#player",
+    "null",
+  ]) {
     assert.throws(
       () => parseTrackerConfiguration({ TRACKER_WS_ALLOWED_ORIGINS: invalid }),
       /TRACKER_WS_ALLOWED_ORIGINS entries must be http\(s\) origins/,
