@@ -37,6 +37,10 @@ All notable changes to OpenStreamGrid are documented in this file.
 - Run the test suite once with c8 coverage instead of twice, publish a
   coverage summary and lcov artifact, and test on Node 22 and 24.
 - Removed the unused `.eslintignore`; ignores live in `eslint.config.js`.
+- Pinned every workflow action to a commit SHA.
+- Container images are now built for `linux/amd64` and `linux/arm64`, carry an
+  SBOM, and are tagged with both `vX.Y.Z` and `X.Y.Z`. Tag pushes fail fast
+  when the tag does not match the `package.json` version.
 
 ## [0.6.0] - 2026-07-26
 

@@ -67,6 +67,8 @@ Origin으로 폴백합니다. 종료할 때는 `docker compose down`을 실행�
 | Origin | `ghcr.io/mytrashcan/openstreamgrid-origin:v0.6.0` |
 | Node Peer | `ghcr.io/mytrashcan/openstreamgrid-peer:v0.6.0` |
 
+v0.6.0 다음 릴리스부터 이미지는 `linux/amd64`와 `linux/arm64`용으로 빌드되고
+`vX.Y.Z`와 `X.Y.Z` 두 형식의 태그로 게시됩니다(v0.6.0은 `linux/amd64` 전용).
 운영 환경에서는 변경되지 않는 버전 태그를 사용하세요. `latest` 태그는 평가용으로
 제공합니다. 브라우저 SDK는 CI에서 빌드와 npm 게시 dry-run까지 검증하지만 아직
 npm 레지스트리에는 게시하지 않았습니다. 최초 게시 전까지는 태그가 지정된 소스를

@@ -60,6 +60,8 @@ Tagged container images are published to GHCR for production deployment:
 | Origin | `ghcr.io/mytrashcan/openstreamgrid-origin:v0.6.0` |
 | Node peer | `ghcr.io/mytrashcan/openstreamgrid-peer:v0.6.0` |
 
+Starting with the release after v0.6.0, images are built for `linux/amd64` and
+`linux/arm64` and tagged both `vX.Y.Z` and `X.Y.Z`; v0.6.0 is `linux/amd64` only.
 Use immutable version tags in deployments; `latest` is provided for evaluation.
 The browser SDK package is build- and publish-dry-run verified in CI but is not
 yet published to npm. Until the first registry release, consume it from a tagged
