@@ -1,6 +1,6 @@
 {
   "name": "@openstreamgrid/peer",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -16,7 +16,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@openstreamgrid/common": "0.6.0",
+    "@openstreamgrid/common": "0.6.1",
     "@roamhq/wrtc": "^0.10.0",
     "ws": "^8.21.1"
   },

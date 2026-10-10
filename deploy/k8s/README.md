@@ -32,8 +32,8 @@ policies. Ingress and tracker autoscaling are disabled by default.
 
 The container images must be available to the cluster:
 
-- `ghcr.io/mytrashcan/openstreamgrid-tracker:v0.6.0`
-- `ghcr.io/mytrashcan/openstreamgrid-origin:v0.6.0`
+- `ghcr.io/mytrashcan/openstreamgrid-tracker:v0.6.1`
+- `ghcr.io/mytrashcan/openstreamgrid-origin:v0.6.1`
 
 The chart derives both image tags from its `appVersion` as `v<appVersion>`,
 matching the published release tags. Set `tracker.image.tag` or
