@@ -1,7 +1,8 @@
 tracker:
   image:
     repository: ghcr.io/mytrashcan/openstreamgrid-tracker
-    tag: "0.5.0"
+    # Defaults to v<appVersion>, matching the published GHCR release tag.
+    tag: ""
     pullPolicy: IfNotPresent
   # SQLite uses a single writer. Scale only after selecting a shared external store.
   replicaCount: 1
@@ -35,7 +36,8 @@ tracker:
 origin:
   image:
     repository: ghcr.io/mytrashcan/openstreamgrid-origin
-    tag: "0.5.0"
+    # Defaults to v<appVersion>, matching the published GHCR release tag.
+    tag: ""
     pullPolicy: IfNotPresent
   replicaCount: 1
   port: 8080
