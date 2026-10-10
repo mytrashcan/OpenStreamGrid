@@ -34,6 +34,9 @@ All notable changes to OpenStreamGrid are documented in this file.
 ### CI
 
 - Added automated pull request and issue labeling.
+- Run the test suite once with c8 coverage instead of twice, publish a
+  coverage summary and lcov artifact, and test on Node 22 and 24.
+- Removed the unused `.eslintignore`; ignores live in `eslint.config.js`.
 
 ## [0.6.0] - 2026-07-26
 

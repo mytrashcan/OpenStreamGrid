@@ -17,6 +17,9 @@ npm test
 npm run lint
 ```
 
+Run `npm run test:coverage` to execute the same suite with a c8 coverage report
+(text output plus `coverage/lcov.info`); CI publishes this report for Node 22.
+
 Use `bash test/docker-test.sh` for delivery/fallback changes and
 `bash scripts/benchmark.sh` for performance-sensitive changes. Docker tests use
 isolated Compose projects but bind the documented local ports.
