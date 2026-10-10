@@ -12,9 +12,10 @@ function readJson(path) {
   return JSON.parse(readText(path));
 }
 
-const chartAppVersion = readText("helm/openstreamgrid/Chart.yaml").match(
-  /^appVersion:\s*"?([^"\s]+)"?\s*$/m,
-)?.[1];
+const chartYaml = readText("helm/openstreamgrid/Chart.yaml");
+const chartField = (field) =>
+  chartYaml.match(new RegExp(`^${field}:\\s*["']?([^"'\\s]+)["']?\\s*$`, "m"))?.[1];
+const chartAppVersion = chartField("appVersion");
 
 const manifestPaths = [
   "package.json",
@@ -25,8 +26,9 @@ const manifestPaths = [
   "sdk/package.json",
 ];
 
-test("Helm chart declares an appVersion", () => {
+test("Helm chart declares an appVersion that matches its chart version", () => {
   assert.match(chartAppVersion ?? "", /^\d+\.\d+\.\d+$/);
+  assert.equal(chartField("version"), chartAppVersion, "Chart.yaml version");
 });
 
 test("package versions match the Helm chart appVersion", () => {
