@@ -15,6 +15,9 @@ All notable changes to OpenStreamGrid are documented in this file.
   session; the browser SDK adds them to its ICE servers and renews them with
   the session, so viewer code no longer needs static TURN passwords. Node peers
   keep using `TURN_SERVER`.
+- Browser E2E test (Playwright): two real Chromium viewers play the Compose
+  stream through the Hls.js plugin and must exchange a verified segment over
+  WebRTC. It runs in CI for SDK, tracker, and origin changes.
 - Helm `tracker.extraEnv` and `origin.extraEnv` pass additional environment
   variables (including `valueFrom`) to the containers, so settings such as
   `TRACKER_WS_ALLOWED_ORIGINS` and rate limits are configurable in Kubernetes.

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>OpenStreamGrid browser E2E viewer</title>
+    <script type="importmap">
+      { "imports": { "hls.js": "/vendor/hls.mjs" } }
+    </script>
+  </head>
+  <body>
+    <video id="video" muted autoplay playsinline></video>
+    <script type="module">
+      import Hls from "hls.js";
+      import { OpenStreamGridHlsPlugin } from "/sdk/sdk.js";
+
+      const params = new URLSearchParams(location.search);
+      const state = { peerFetched: 0, originFallbacks: 0, fatalErrors: [], events: {}, recent: [] };
+      window.osg = state;
+
+      const plugin = new OpenStreamGridHlsPlugin({
+        trackerUrl: params.get("tracker"),
+        broadcastId: params.get("broadcast") ?? "live",
+        peerId: params.get("peer"),
+        originBaseUrl: params.get("originBase"),
+        // Host candidates only: both viewers run on the same machine.
+        iceServers: [],
+        onEvent: (event) => {
+          state.events[event.type] = (state.events[event.type] ?? 0) + 1;
+          if (event.type === "peer_fetched") state.peerFetched += 1;
+          if (event.type === "origin_fallback") state.originFallbacks += 1;
+          // Keep the latest diagnostic events for failure reports.
+          state.recent = [...state.recent.slice(-19), event];
+        },
+      });
+      const hls = new Hls({ liveSyncDurationCount: 3 });
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (data.fatal) state.fatalErrors.push(data.details);
+      });
+      plugin.attach(hls);
+      hls.loadSource(params.get("playlist"));
+      hls.attachMedia(document.getElementById("video"));
+    </script>
+  </body>
+</html>

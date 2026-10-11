@@ -9,3 +9,7 @@ tracker/data/
 *.log
 .env
 video/
+
+# Playwright browser E2E output
+e2e/browser/test-results/
+e2e/browser/playwright-report/

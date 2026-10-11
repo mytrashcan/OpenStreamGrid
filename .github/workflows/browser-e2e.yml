@@ -1,0 +1,71 @@
+name: Browser E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "sdk/**"
+      - "common/**"
+      - "tracker/**"
+      - "origin/**"
+      - "e2e/browser/**"
+      - "docker-compose.yml"
+      - ".github/workflows/browser-e2e.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  p2p-playback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            sdk/package-lock.json
+            e2e/browser/package-lock.json
+
+      - name: Build the browser SDK
+        run: |
+          npm ci
+          npm ci --prefix sdk
+          npm run build --workspace @openstreamgrid/common
+          npm run build --prefix sdk
+
+      - name: Start tracker and origin
+        run: docker compose -p osg-e2e up --detach --build --wait tracker origin
+
+      - name: Install Playwright and Chromium
+        working-directory: e2e/browser
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run browser E2E
+        working-directory: e2e/browser
+        run: npx playwright test
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-report
+          path: |
+            e2e/browser/playwright-report
+            e2e/browser/test-results
+          retention-days: 7
+
+      - name: Dump service logs on failure
+        if: failure()
+        run: docker compose -p osg-e2e logs --no-color --tail 200 tracker origin
+
+      - name: Stop services
+        if: always()
+        run: docker compose -p osg-e2e down --volumes
