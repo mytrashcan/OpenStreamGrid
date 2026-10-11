@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# Serialize publishes so overlapping runs re-check npm instead of racing.
+concurrency:
+  group: sdk-npm-publish
+  cancel-in-progress: false
+
 jobs:
   publish:
     # Opt in with the SDK_NPM_PUBLISH repository variable once the npm scope

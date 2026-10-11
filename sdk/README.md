@@ -24,7 +24,8 @@ const hls = new Hls();
 const plugin = new OpenStreamGridHlsPlugin({
   trackerUrl: "https://stream.example.com",
   broadcastId: "live",
-  originBaseUrl: "https://stream.example.com/hls/low",
+  // Covers every rendition so segment verification accepts all qualities.
+  originBaseUrl: "https://stream.example.com/hls",
 });
 plugin.attach(hls);
 hls.loadSource("https://stream.example.com/hls/stream.m3u8");
