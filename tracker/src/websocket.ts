@@ -135,6 +135,8 @@ export class TrackerWebSocketHub implements TrackerEvents {
     maxPayload: MAX_WEB_SOCKET_PAYLOAD_BYTES,
   });
   private readonly subscriptions = new Map<WebSocket, Subscription>();
+  /** Subscribed sockets per broadcast, so fan-out skips other broadcasts. */
+  private readonly subscribersByBroadcast = new Map<string, Set<WebSocket>>();
   private readonly sessions = new Map<WebSocket, PeerSessionClaims>();
   private readonly messageBudgets = new Map<WebSocket, MessageBudget>();
   private readonly connectionIps = new Map<WebSocket, string>();
@@ -204,12 +206,9 @@ export class TrackerWebSocketHub implements TrackerEvents {
   }
 
   statsUpdated(broadcastId: string, peerId: string): void {
-    this.broadcast({
-      type: "stats_update",
-      broadcastId,
-      peerId,
-      stats: this.store.getBroadcastStats(broadcastId),
-    });
+    // Peers do not use broadcast-wide stats, so they are not fanned out over
+    // WebSocket: recomputing and sending them to every peer on every report
+    // made each report cost O(peers). The dashboard receives them over SSE.
     this.downstreamEvents.statsUpdated?.(broadcastId, peerId);
   }
 
@@ -324,7 +323,7 @@ export class TrackerWebSocketHub implements TrackerEvents {
         ) {
           throw new Error("Subscription does not match the authenticated peer session");
         }
-        this.subscriptions.set(socket, { broadcastId, peerId });
+        this.setSubscription(socket, { broadcastId, peerId });
         this.send(socket, {
           type: "peer_list",
           broadcastId,
@@ -436,14 +435,30 @@ export class TrackerWebSocketHub implements TrackerEvents {
   }
 
   private relayWebRtcSignal(message: WebRtcSignalMessage): void {
-    for (const [socket, subscription] of this.subscriptions) {
-      if (
-        subscription.broadcastId === message.broadcastId &&
-        subscription.peerId === message.targetPeerId
-      ) {
+    for (const socket of this.subscribersByBroadcast.get(message.broadcastId) ?? []) {
+      if (this.subscriptions.get(socket)?.peerId === message.targetPeerId) {
         this.send(socket, message);
       }
     }
+  }
+
+  private setSubscription(socket: WebSocket, subscription: Subscription): void {
+    this.unindexSubscription(socket);
+    this.subscriptions.set(socket, subscription);
+    let subscribers = this.subscribersByBroadcast.get(subscription.broadcastId);
+    if (!subscribers) {
+      subscribers = new Set();
+      this.subscribersByBroadcast.set(subscription.broadcastId, subscribers);
+    }
+    subscribers.add(socket);
+  }
+
+  private unindexSubscription(socket: WebSocket): void {
+    const broadcastId = this.subscriptions.get(socket)?.broadcastId;
+    if (!broadcastId) return;
+    const subscribers = this.subscribersByBroadcast.get(broadcastId);
+    subscribers?.delete(socket);
+    if (subscribers?.size === 0) this.subscribersByBroadcast.delete(broadcastId);
   }
 
   private peerExists(claims: PeerSessionClaims): boolean {
@@ -474,6 +489,7 @@ export class TrackerWebSocketHub implements TrackerEvents {
     const expiryTimer = this.sessionExpiryTimers.get(socket);
     if (expiryTimer) clearTimeout(expiryTimer);
     this.sessionExpiryTimers.delete(socket);
+    this.unindexSubscription(socket);
     this.subscriptions.delete(socket);
     this.sessions.delete(socket);
     this.messageBudgets.delete(socket);
@@ -486,21 +502,25 @@ export class TrackerWebSocketHub implements TrackerEvents {
   }
 
   private broadcast(message: WsServerMessage): void {
-    for (const [socket, subscription] of this.subscriptions) {
-      if (subscription.broadcastId === message.broadcastId) {
-        this.send(socket, message);
-      }
-    }
+    const subscribers = this.subscribersByBroadcast.get(message.broadcastId);
+    if (!subscribers || subscribers.size === 0) return;
+    // Serialize once: fan-out sends the same payload to every subscriber.
+    const payload = JSON.stringify(message);
+    for (const socket of subscribers) this.sendSerialized(socket, payload);
   }
 
   private send(socket: WebSocket, message: WsServerMessage): void {
+    this.sendSerialized(socket, JSON.stringify(message));
+  }
+
+  private sendSerialized(socket: WebSocket, payload: string): void {
     if (socket.readyState === WebSocket.OPEN) {
       if (socket.bufferedAmount > MAX_BUFFERED_WEB_SOCKET_BYTES) {
         socket.terminate();
         return;
       }
       try {
-        socket.send(JSON.stringify(message));
+        socket.send(payload);
       } catch (error) {
         logger.error("websocket_send_failed", error);
         socket.terminate();

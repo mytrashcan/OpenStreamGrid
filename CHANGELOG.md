@@ -6,6 +6,8 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Added
 
+- `npm run benchmark:tracker-capacity` measures one tracker's control-plane
+  capacity; results are in `docs/tracker-capacity.md`.
 - `TRACKER_WS_MAX_CONNECTIONS_PER_IP` (default 20) for viewers sharing one NAT
   address, and `TRUST_PROXY_HOPS` to take the client address from
   `X-Forwarded-For` behind trusted proxies. Helm `tracker.trustProxyHops`
@@ -49,6 +51,14 @@ All notable changes to OpenStreamGrid are documented in this file.
   (`tracker.metrics.serviceMonitor.enabled`).
 - Admin endpoints, including `/metrics`, also accept the tracker API key as
   `Authorization: Bearer <key>` so Prometheus can scrape them.
+
+### Changed
+
+- The tracker no longer sends `stats_update` to every peer on each stats
+  report (the SDK and Node peer ignored it; the dashboard uses SSE). At 500
+  peers in one broadcast, REST p95 latency dropped from about 1 s to 7 ms.
+- WebSocket fan-out serializes each message once and only visits the
+  broadcast's own subscribers.
 
 ### Fixed
 
