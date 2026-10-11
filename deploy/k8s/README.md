@@ -157,6 +157,25 @@ The dashboard covers active broadcasts and peers, P2P offload (P2P successes
 divided by P2P successes plus origin requests), P2P success rate, fallbacks,
 integrity failures, REST latency quantiles, peer churn, and rate limiting.
 
+## Recovery
+
+The tracker runs as one replica, so a restart pauses P2P coordination. Playback
+does not stop: viewers keep loading segments from the origin or CDN, and peers
+reconnect on their own.
+
+- **Process restart:** in local measurements (Docker Compose, SQLite), the
+  tracker answered `/health` again 0.3–0.4 s after `docker restart`, and kept its
+  broadcasts and peers. A browser viewer's WebSocket reconnected about 1 s after
+  the restart, playback continued without errors, and the peer stayed registered.
+- **Pod rescheduling:** on Kubernetes, recovery is dominated by scheduling a new
+  pod and re-attaching the `ReadWriteOnce` SQLite volume, typically tens of
+  seconds and up to a few minutes when a node fails. Set
+  `tracker.priorityClassName` so the tracker is rescheduled ahead of less
+  important workloads.
+
+Scaling beyond one replica is discussed in
+[ADR 0001](../../docs/adr/0001-tracker-horizontal-scaling.md).
+
 ## Operational notes
 
 - The default `ReadWriteOnce` SQLite volume supports exactly one tracker

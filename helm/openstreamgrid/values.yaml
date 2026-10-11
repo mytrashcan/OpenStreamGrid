@@ -6,6 +6,9 @@ tracker:
     pullPolicy: IfNotPresent
   # SQLite uses a single writer. Scale only after selecting a shared external store.
   replicaCount: 1
+  # Optional PriorityClass so the single tracker replica is rescheduled ahead of
+  # less important workloads after a node failure.
+  priorityClassName: ""
   port: 7070
   env:
     STORE_TYPE: sqlite

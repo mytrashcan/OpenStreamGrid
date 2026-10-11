@@ -90,8 +90,9 @@ useful here: with one replica it would only block node drains.
 ## Recommendation
 
 1. **Now:** harden option C, which is cheap and already mostly in place:
-   an optional priority class in the chart, a documented recovery time, and a
-   measured capacity figure.
+   an optional priority class in the chart and a documented recovery time
+   (both done; see the Kubernetes guide's *Recovery* section), and a measured
+   capacity figure.
 2. **Measure:** extend `scripts/benchmark.sh` to report tracker CPU and
    signaling latency as peers per broadcast grow, to find the single-instance
    ceiling.

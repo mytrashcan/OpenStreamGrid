@@ -9,6 +9,9 @@ All notable changes to OpenStreamGrid are documented in this file.
 - `OpenStreamGridShakaPlugin` brings the same delivery core to Shaka Player
   through an HTTP(S) scheme plugin, with deadlines derived from Shaka's request
   timeouts. The browser E2E covers it.
+- Helm `tracker.priorityClassName` and a documented tracker recovery profile:
+  the process is healthy again in under 0.5 s after a restart, and viewers
+  reconnect in about 1 s without interrupting playback.
 - CMAF/fMP4 HLS: `HLS_SEGMENT_TYPE=fmp4` makes the origin emit `.m4s` media
   segments with an immutable per-rendition init segment and SHA-256
   sidecars; Node peers and the browser SDK share `.m4s` segments, while init

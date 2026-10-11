@@ -21,6 +21,9 @@ spec:
         {{- include "openstreamgrid.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: tracker
     spec:
+      {{- with .Values.tracker.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
       securityContext:
         fsGroup: 65532
         fsGroupChangePolicy: OnRootMismatch
