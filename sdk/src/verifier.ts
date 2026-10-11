@@ -93,6 +93,7 @@ export class OriginHashVerifier {
   async verifyUrl(
     segmentUrl: string,
     data: Uint8Array,
+    signal?: AbortSignal,
   ): Promise<SegmentVerificationResult> {
     const segment = new URL(segmentUrl);
     const basePath = this.originBaseUrl.pathname.endsWith("/")
@@ -109,7 +110,8 @@ export class OriginHashVerifier {
     );
     url.hash = "";
     if (!this.hashUrlResolver) url.pathname = `${url.pathname}.sha256`;
-    const response = await fetch(url);
+    // Cancellable so a stalled sidecar cannot outlive the segment request.
+    const response = await fetch(url, signal ? { signal } : undefined);
     if (!response.ok) {
       throw new Error(
         `Failed to fetch hash for '${segmentUrl}': HTTP ${response.status}`,

@@ -958,7 +958,7 @@ export class OpenStreamGridHlsPlugin {
         this.peerTimeoutMs,
         signal,
       );
-      await this.verifySegment(segmentName, segmentUrl, data, "peer");
+      await this.verifySegment(segmentName, segmentUrl, data, "peer", signal);
       return { index, peerId: candidate.peer.id, data };
     } catch (error) {
       // Attempts cancelled because another peer won or the request ended
@@ -1068,7 +1068,7 @@ export class OpenStreamGridHlsPlugin {
   ): Promise<SegmentLoadResult> {
     const startedAt = performance.now();
     const data = await this.fetchFromOrigin(segmentUrl, signal);
-    await this.verifySegment(segmentName, segmentUrl, data, "origin");
+    await this.verifySegment(segmentName, segmentUrl, data, "origin", signal);
     this.observeOriginLatency(performance.now() - startedAt);
     return { source: "origin", data };
   }
@@ -1078,9 +1078,10 @@ export class OpenStreamGridHlsPlugin {
     segmentUrl: string,
     data: Uint8Array,
     source: "peer" | "origin",
+    signal?: AbortSignal,
   ): Promise<void> {
     if (!this.verifier) return;
-    const verification = await this.verifier.verifyUrl(segmentUrl, data);
+    const verification = await this.verifier.verifyUrl(segmentUrl, data, signal);
     if (verification.valid) return;
     this.stats.integrityFailures++;
     this.emit({

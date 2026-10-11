@@ -752,3 +752,49 @@ test("stops waiting for a slow peer in time to meet a known deadline", async (co
     (event) => event.type === "origin_fallback" && "message" in event && /deadline/.test(event.message ?? ""),
   ));
 });
+
+test("a stalled hash sidecar cannot hold the peer phase past the deadline", async (context) => {
+  let sidecarRequests = 0;
+  let stalledSidecarAborted = false;
+  context.mock.method(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith(".sha256")) {
+      sidecarRequests += 1;
+      if (sidecarRequests === 1) {
+        // The peer copy's verification stalls until cancelled.
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            stalledSidecarAborted = true;
+            reject(init.signal?.reason);
+          }, { once: true });
+        });
+      }
+      return new Response(`${digest}  segment.ts\n`);
+    }
+    return new Response(segmentData);
+  });
+  const plugin = new OpenStreamGridHlsPlugin({
+    trackerUrl: "ws://tracker.example/ws",
+    broadcastId: "live",
+    originBaseUrl: "https://origin.example/hls",
+    peerTimeoutMs: 30_000,
+    scheduler: new DeadlineAwareScheduler({
+      maximumPeerProbeWindowMs: 100,
+      originLatencyEstimator: { estimateMs: 50 },
+    }),
+  });
+  context.mock.method(plugin.wsClient, "getPeersWithSegment", () => [
+    { ...peer("http://fast.example:9090"), id: "fast" },
+  ]);
+
+  const result = await plugin.loadSegment(
+    "segment.ts",
+    "https://origin.example/hls/low/segment.ts",
+    new AbortController().signal,
+    { kind: "synthetic", slackMs: 1_000 },
+  );
+
+  assert.deepEqual(result.data, segmentData);
+  assert.equal(stalledSidecarAborted, true);
+  assert.equal(plugin.stats.originRequests, 1);
+});

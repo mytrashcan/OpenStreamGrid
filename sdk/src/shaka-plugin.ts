@@ -8,6 +8,8 @@ import type { HlsjsPluginConfig } from "./types.js";
 /** Shaka request as seen by a scheme plugin (subset used by the adapter). */
 export interface ShakaRequest {
   headers?: Record<string, string>;
+  /** Shaka sends cookies/credentials cross-site when true. */
+  allowCrossSiteCredentials?: boolean;
   /** Shaka aborts a request after `timeout` or after `stallTimeout` without progress (0 disables). */
   retryParameters?: { timeout?: number; stallTimeout?: number };
 }
@@ -133,13 +135,15 @@ export class OpenStreamGridShakaPlugin {
   private schemePlugin(shaka: ShakaNamespace): ShakaSchemePlugin {
     const fallback = shaka.net.HttpFetchPlugin.parse;
     return (uri, request, requestType, progressUpdated, headersReceived, config) => {
-      const ranged = Object.keys(request.headers ?? {}).some(
-        (header) => header.toLowerCase() === "range",
-      );
+      // The grid fetches plain, uncredentialed GETs. Requests that carry headers
+      // (Range, Authorization, tokens added by request filters) or cookies stay
+      // on Shaka's fetch plugin so they keep working.
+      const customized =
+        Object.keys(request.headers ?? {}).length > 0 || request.allowCrossSiteCredentials === true;
       if (
         this.shaka !== shaka ||
         requestType !== shaka.net.NetworkingEngine.RequestType.SEGMENT ||
-        ranged ||
+        customized ||
         !isMediaSegmentUri(uri)
       ) {
         return fallback(uri, request, requestType, progressUpdated, headersReceived, config);

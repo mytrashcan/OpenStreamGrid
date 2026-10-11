@@ -111,10 +111,14 @@ test("loads media segments through the grid and leaves other requests to Shaka",
     await scheme("https://cdn.example/hls/low/stream.m3u8", {}, MANIFEST, noop, noop, {}).promise;
     await scheme("https://cdn.example/hls/low/init_low.mp4", {}, SEGMENT, noop, noop, {}).promise;
     await scheme("https://cdn.example/hls/low/seg_000002.m4s", { headers: { Range: "bytes=0-99" } }, SEGMENT, noop, noop, {}).promise;
+    await scheme("https://cdn.example/hls/low/seg_000003.m4s", { headers: { Authorization: "Bearer t" } }, SEGMENT, noop, noop, {}).promise;
+    await scheme("https://cdn.example/hls/low/seg_000004.m4s", { allowCrossSiteCredentials: true }, SEGMENT, noop, noop, {}).promise;
     assert.deepEqual(fallbackCalls, [
       "https://cdn.example/hls/low/stream.m3u8",
       "https://cdn.example/hls/low/init_low.mp4",
       "https://cdn.example/hls/low/seg_000002.m4s",
+      "https://cdn.example/hls/low/seg_000003.m4s",
+      "https://cdn.example/hls/low/seg_000004.m4s",
     ]);
     assert.equal(loads.length, 1);
   } finally {
