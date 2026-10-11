@@ -204,12 +204,9 @@ export class TrackerWebSocketHub implements TrackerEvents {
   }
 
   statsUpdated(broadcastId: string, peerId: string): void {
-    this.broadcast({
-      type: "stats_update",
-      broadcastId,
-      peerId,
-      stats: this.store.getBroadcastStats(broadcastId),
-    });
+    // Peers do not use broadcast-wide stats, so they are not fanned out over
+    // WebSocket: recomputing and sending them to every peer on every report
+    // made each report cost O(peers). The dashboard receives them over SSE.
     this.downstreamEvents.statsUpdated?.(broadcastId, peerId);
   }
 

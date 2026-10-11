@@ -291,7 +291,6 @@ Server-to-client messages:
 | `peer_joined` | `broadcastId`, `peer` | Peer joined |
 | `peer_left` | `broadcastId`, `peerId` | Peer left |
 | `segment_available` | `broadcastId`, `peerId`, `segments` | Availability changed |
-| `stats_update` | `broadcastId`, `peerId`, `stats` | Monitoring data changed |
 | `webrtc_offer` / `webrtc_answer` | `peerId`, `targetPeerId`, `requestId`, `sdp` | Relayed signaling |
 
 Malformed frames are rejected. Connections are closed during tracker shutdown;
