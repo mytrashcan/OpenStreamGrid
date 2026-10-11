@@ -243,7 +243,7 @@ codes, and origin/peer endpoints.
 | `RATE_LIMIT_BURST` | `200` | Token-bucket burst capacity per client |
 | `MAX_PEERS_PER_BROADCAST` | `500` | Active-peer limit per broadcast |
 | `TRACKER_WS_ALLOWED_ORIGINS` | unset | Comma-separated http(s) origins allowed to open `/ws` from a browser; other browser origins receive 403. Upgrades without an `Origin` header, such as Node peers, still require a valid peer session |
-| `TURN_URLS` | unset | Comma-separated `turn:`/`turns:` URIs returned with short-lived credentials on peer join; the browser SDK uses them (Node peers use `TURN_SERVER`) |
+| `TURN_URLS` | unset | Comma-separated `turn:`/`turns:` URIs returned with short-lived credentials on peer join; browser and Node peers add them to their ICE servers |
 | `TURN_SHARED_SECRET` | unset | TURN server shared secret (coturn `static-auth-secret`, at least 16 bytes); required with `TURN_URLS` |
 
 ### Origin

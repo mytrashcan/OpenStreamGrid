@@ -108,10 +108,37 @@ const parsePeer = (value: unknown): Peer => {
   };
 };
 
+/** Keeps only well-formed ICE servers from a join response. */
+const parseIssuedIceServers = (value: unknown): RTCIceServer[] => {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry): RTCIceServer[] => {
+    if (!isObject(entry)) return [];
+    const { urls, username, credential } = entry;
+    const validUrls =
+      (typeof urls === "string" && urls !== "") ||
+      (Array.isArray(urls) &&
+        urls.length > 0 &&
+        urls.every((url) => typeof url === "string" && url !== ""));
+    if (
+      !validUrls ||
+      (username !== undefined && typeof username !== "string") ||
+      (credential !== undefined && typeof credential !== "string")
+    ) {
+      return [];
+    }
+    return [{
+      urls: Array.isArray(urls) ? [...(urls as string[])] : (urls as string),
+      ...(typeof username === "string" ? { username } : {}),
+      ...(typeof credential === "string" ? { credential } : {}),
+    }];
+  });
+};
+
 const parsePeerSession = (value: unknown): {
   peer: Peer;
   sessionToken: string;
   expiresAt: number;
+  iceServers: RTCIceServer[];
 } => {
   if (
     !isObject(value) ||
@@ -125,6 +152,7 @@ const parsePeerSession = (value: unknown): {
     peer: parsePeer(value.peer),
     sessionToken: value.sessionToken,
     expiresAt: Date.parse(value.expiresAt),
+    iceServers: parseIssuedIceServers(value.iceServers),
   };
 };
 
@@ -204,6 +232,8 @@ export interface TrackerClientOptions {
   requestTimeoutMs?: number;
   /** Restores a previously issued session, primarily for reconnecting clients. */
   initialSessionToken?: string;
+  /** Receives ICE servers issued with each join or session refresh. */
+  onIssuedIceServers?: (servers: RTCIceServer[]) => void;
 }
 
 /** Maintains tracker membership, WebSocket updates, and periodic reports. */
@@ -271,6 +301,7 @@ export class TrackerClient implements PeerDirectory {
       body: JSON.stringify(request),
     }));
     this.sessionToken = session.sessionToken;
+    this.options.onIssuedIceServers?.(session.iceServers);
     this.joinRequest = { ...request, ...(request.metadata ? { metadata: { ...request.metadata } } : {}) };
     this.scheduleSessionRefresh(session.expiresAt);
     return session.peer;

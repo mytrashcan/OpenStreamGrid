@@ -28,6 +28,12 @@ const MAX_DATA_CHANNEL_CHUNK_BYTES = 16 * 1024;
 const MAX_BUFFERED_BYTES = 1024 * 1024;
 const WEBSOCKET_NORMAL_CLOSURE_CODE = 1_000;
 export const DEFAULT_STUN_SERVER = "stun:stun.l.google.com:19302";
+
+const copyIceServers = (servers: RTCIceServer[]): RTCIceServer[] =>
+  servers.map((server) => ({
+    ...server,
+    urls: Array.isArray(server.urls) ? [...server.urls] : server.urls,
+  }));
 const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   { urls: DEFAULT_STUN_SERVER },
 ];
@@ -97,7 +103,8 @@ const binaryBuffer = (value: unknown): Buffer | undefined => {
 export class WebRtcTransport implements TransportAdapter {
   readonly name = "webrtc";
   private readonly timeoutMs: number;
-  private readonly iceServers: RTCIceServer[];
+  private readonly baseIceServers: RTCIceServer[];
+  private iceServers: RTCIceServer[];
   private readonly segmentProvider: SegmentProvider | undefined;
   private readonly verifier: SegmentIntegrityVerifier | undefined;
   private readonly onUpload: ((bytes: number) => void) | undefined;
@@ -130,12 +137,8 @@ export class WebRtcTransport implements TransportAdapter {
     if (!Number.isSafeInteger(this.timeoutMs) || this.timeoutMs <= 0) {
       throw new Error("WebRTC request timeout must be a positive integer");
     }
-    this.iceServers = (options.iceServers ?? DEFAULT_ICE_SERVERS).map(
-      (server) => ({
-        ...server,
-        urls: Array.isArray(server.urls) ? [...server.urls] : server.urls,
-      }),
-    );
+    this.baseIceServers = copyIceServers(options.iceServers ?? DEFAULT_ICE_SERVERS);
+    this.iceServers = this.baseIceServers;
     this.segmentProvider = options.segmentProvider;
     this.verifier = options.verifier;
     this.onUpload = options.onUpload;
@@ -938,6 +941,14 @@ export class WebRtcTransport implements TransportAdapter {
       signal.addEventListener("abort", onAbort, { once: true });
       if (signal.aborted) onAbort();
     });
+  }
+
+  /**
+   * Appends tracker-issued ICE servers to the configured ones for
+   * connections created afterwards, replacing any previously issued set.
+   */
+  setIssuedIceServers(servers: RTCIceServer[]): void {
+    this.iceServers = [...this.baseIceServers, ...copyIceServers(servers)];
   }
 
   private createPeerConnection(): RTCPeerConnection {

@@ -182,3 +182,38 @@ test("authenticates tracker REST requests with the configured API key", async ()
     assert.equal(new Headers(request.headers).get("X-API-Key"), "test-secret");
   }
 });
+
+test("hands tracker-issued TURN credentials to the transport on join", async () => {
+  const issued: RTCIceServer[][] = [];
+  const client = new TrackerClient({
+    trackerUrl: "https://tracker.example",
+    broadcastId: "live",
+    peerId: "peer-a",
+    heartbeat: () => ({}),
+    stats,
+    segments: () => [],
+    onIssuedIceServers: (servers) => issued.push(servers),
+    fetchImpl: async (_input, init = {}) => {
+      if (init.method === "DELETE") return new Response(null, { status: 204 });
+      return Response.json({
+        peer: remotePeer,
+        sessionToken: "peer-session-token",
+        expiresAt: "2099-01-01T00:00:00.000Z",
+        iceServers: [
+          { urls: ["turns:turn.example.com:5349"], username: "4070908800:peer-a", credential: "c1" },
+          { urls: [] },
+          { urls: "" },
+          { urls: ["turn:turn.example.com", ""] },
+          { urls: "turn:turn.example.com", credential: 7 },
+        ],
+      });
+    },
+  });
+
+  await client.join({ id: "peer-a", address: "http://peer-a:9090" });
+  await client.leave();
+
+  assert.deepEqual(issued, [[
+    { urls: ["turns:turn.example.com:5349"], username: "4070908800:peer-a", credential: "c1" },
+  ]]);
+});

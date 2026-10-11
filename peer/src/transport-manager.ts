@@ -107,6 +107,11 @@ export class TransportManager {
     return startPromise;
   }
 
+  /** Forwards tracker-issued ICE servers (TURN credentials) to WebRTC. */
+  setIssuedIceServers(servers: RTCIceServer[]): void {
+    this.webRtcTransport.setIssuedIceServers?.(servers);
+  }
+
   setSessionToken(sessionToken: string): void {
     if (this.started) throw new Error("Cannot change the peer session after transport startup");
     this.transportOptions.sessionToken = sessionToken;
