@@ -71,7 +71,7 @@ test("reports failed peer attempts with the reason before falling back", async (
   const events: SdkEvent[] = [];
   context.mock.method(globalThis, "fetch", async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.startsWith("http://peer-a.example")) return new Response(null, { status: 503 });
+    if (new URL(url).host === "peer-a.example:9090") return new Response(null, { status: 503 });
     if (url.endsWith(".sha256")) return new Response(`${digest}  segment.ts\n`);
     return new Response(segmentData);
   });
