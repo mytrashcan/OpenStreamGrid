@@ -550,6 +550,8 @@ test("passes tracker-issued TURN credentials to the browser WebRTC peer", async 
               credential: "issued-credential",
             },
             { urls: 42 },
+            { urls: "" },
+            { urls: [""] },
             "not-an-object",
           ],
         }, { status: 201 })

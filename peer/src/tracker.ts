@@ -115,8 +115,10 @@ const parseIssuedIceServers = (value: unknown): RTCIceServer[] => {
     if (!isObject(entry)) return [];
     const { urls, username, credential } = entry;
     const validUrls =
-      typeof urls === "string" ||
-      (Array.isArray(urls) && urls.length > 0 && urls.every((url) => typeof url === "string"));
+      (typeof urls === "string" && urls !== "") ||
+      (Array.isArray(urls) &&
+        urls.length > 0 &&
+        urls.every((url) => typeof url === "string" && url !== ""));
     if (
       !validUrls ||
       (username !== undefined && typeof username !== "string") ||

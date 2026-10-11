@@ -202,6 +202,8 @@ test("hands tracker-issued TURN credentials to the transport on join", async () 
         iceServers: [
           { urls: ["turns:turn.example.com:5349"], username: "4070908800:peer-a", credential: "c1" },
           { urls: [] },
+          { urls: "" },
+          { urls: ["turn:turn.example.com", ""] },
           { urls: "turn:turn.example.com", credential: 7 },
         ],
       });

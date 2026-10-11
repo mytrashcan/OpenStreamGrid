@@ -70,8 +70,10 @@ const parseIssuedIceServers = (value: unknown): RTCIceServer[] => {
     if (entry === null || typeof entry !== "object") continue;
     const { urls, username, credential } = entry as Record<string, unknown>;
     const validUrls =
-      typeof urls === "string" ||
-      (Array.isArray(urls) && urls.length > 0 && urls.every((url) => typeof url === "string"));
+      (typeof urls === "string" && urls !== "") ||
+      (Array.isArray(urls) &&
+        urls.length > 0 &&
+        urls.every((url) => typeof url === "string" && url !== ""));
     if (
       !validUrls ||
       (username !== undefined && typeof username !== "string") ||
