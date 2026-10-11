@@ -181,6 +181,11 @@ hls.loadSource("https://stream.example.com/hls/stream.m3u8");
 hls.attachMedia(document.querySelector("video")!);
 ```
 
+Rather than embedding TURN credentials in viewer code, set `TURN_URLS` and
+`TURN_SHARED_SECRET` on the tracker. Each peer then receives short-lived TURN
+credentials with its session, the SDK adds them to `iceServers`, and they are
+renewed with the session.
+
 Set `peerParticipation: false` for receive-only playback. A native agent or
 browser extension can still be useful as an optional dedicated seed in managed
 environments, but it is not part of the normal viewer path.
@@ -238,6 +243,8 @@ codes, and origin/peer endpoints.
 | `RATE_LIMIT_BURST` | `200` | Token-bucket burst capacity per client |
 | `MAX_PEERS_PER_BROADCAST` | `500` | Active-peer limit per broadcast |
 | `TRACKER_WS_ALLOWED_ORIGINS` | unset | Comma-separated http(s) origins allowed to open `/ws` from a browser; other browser origins receive 403. Upgrades without an `Origin` header, such as Node peers, still require a valid peer session |
+| `TURN_URLS` | unset | Comma-separated `turn:`/`turns:` URLs returned to joining peers with short-lived credentials |
+| `TURN_SHARED_SECRET` | unset | TURN server shared secret (coturn `static-auth-secret`, at least 16 bytes); required with `TURN_URLS` |
 
 ### Origin
 

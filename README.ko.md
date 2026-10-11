@@ -176,6 +176,10 @@ hls.loadSource("https://stream.example.com/hls/stream.m3u8");
 hls.attachMedia(document.querySelector("video")!);
 ```
 
+TURN 자격증명을 시청자 코드에 넣는 대신 트래커에 `TURN_URLS`와
+`TURN_SHARED_SECRET`을 설정하세요. 그러면 각 피어가 세션과 함께 단기 TURN
+자격증명을 받고, SDK가 이를 `iceServers`에 추가하며, 세션과 함께 갱신됩니다.
+
 수신 전용 재생은 `peerParticipation: false`로 설정할 수 있습니다. 네이티브
 에이전트나 크롬 확장 프로그램은 관리형 환경의 전용 Seed Peer에는 유용하지만,
 일반 시청자 경로에는 필요하지 않습니다.
@@ -232,6 +236,8 @@ WebSocket의 `sessionToken` 쿼리로 사용합니다.
 | `RATE_LIMIT_BURST` | `200` | 클라이언트별 순간 요청 버스트 한도 |
 | `MAX_PEERS_PER_BROADCAST` | `500` | 방송별 최대 활성 피어 수 |
 | `TRACKER_WS_ALLOWED_ORIGINS` | 미설정 | 브라우저에서 `/ws` 연결을 허용할 http(s) origin 목록(쉼표 구분); 그 밖의 브라우저 origin은 403으로 거부. Node 피어처럼 `Origin` 헤더가 없는 연결은 유효한 피어 세션만 있으면 허용 |
+| `TURN_URLS` | 미설정 | 참여한 피어에게 단기 자격증명과 함께 내려줄 `turn:`/`turns:` URL 목록(쉼표 구분) |
+| `TURN_SHARED_SECRET` | 미설정 | TURN 서버 공유 비밀(coturn `static-auth-secret`, 16바이트 이상). `TURN_URLS`와 함께 필수 |
 
 ### Origin
 

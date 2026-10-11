@@ -62,6 +62,32 @@ const ORIGIN_LATENCY_EMA_ALPHA = 0.3;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const logger = createLogger("sdk");
 
+/** Keeps only well-formed ICE servers from a tracker registration response. */
+const parseIssuedIceServers = (value: unknown): RTCIceServer[] => {
+  if (!Array.isArray(value)) return [];
+  const servers: RTCIceServer[] = [];
+  for (const entry of value) {
+    if (entry === null || typeof entry !== "object") continue;
+    const { urls, username, credential } = entry as Record<string, unknown>;
+    const validUrls =
+      typeof urls === "string" ||
+      (Array.isArray(urls) && urls.length > 0 && urls.every((url) => typeof url === "string"));
+    if (
+      !validUrls ||
+      (username !== undefined && typeof username !== "string") ||
+      (credential !== undefined && typeof credential !== "string")
+    ) {
+      continue;
+    }
+    servers.push({
+      urls: Array.isArray(urls) ? [...(urls as string[])] : (urls as string),
+      ...(typeof username === "string" ? { username } : {}),
+      ...(typeof credential === "string" ? { credential } : {}),
+    });
+  }
+  return servers;
+};
+
 type PeerFetchAttempt =
   | { index: number; peerId: string; data: Uint8Array }
   | { index: number; data?: never };
@@ -1252,6 +1278,9 @@ export class OpenStreamGridHlsPlugin {
       throw new Error("Tracker registration did not return a peer session token");
     }
     this.peerSessionToken = (payload as { sessionToken: string }).sessionToken;
+    this.webRtcPeer?.setIssuedIceServers(
+      parseIssuedIceServers((payload as Record<string, unknown>).iceServers),
+    );
     this.scheduleSessionRefresh(Date.parse((payload as { expiresAt: string }).expiresAt));
     this.wsClient.setSessionToken(this.peerSessionToken);
     this.registered = true;

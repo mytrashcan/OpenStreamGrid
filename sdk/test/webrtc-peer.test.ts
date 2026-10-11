@@ -81,3 +81,48 @@ test("rejects unsafe segment identifiers before signaling", async () => {
     peer.stop();
   }
 });
+
+test("applies tracker-issued ICE servers to new connections", async () => {
+  const configurations: RTCConfiguration[] = [];
+  const peer = new BrowserWebRtcPeer({
+    broadcastId: "live",
+    peerId: "browser-a",
+    sendSignal: () => undefined,
+    segmentProvider: () => undefined,
+    iceServers: [{ urls: "stun:stun.example.com:3478" }],
+    peerConnectionFactory: (configuration) => {
+      configurations.push(configuration);
+      return peerConnectionFactory();
+    },
+  });
+  const requestOnce = async (): Promise<void> => {
+    const controller = new AbortController();
+    const request = peer.requestSegment("browser-b", "seg-1.ts", controller.signal);
+    controller.abort(new Error("test complete"));
+    await assert.rejects(request);
+  };
+  try {
+    const issued = {
+      urls: ["turns:turn.example.com:5349"],
+      username: "1700000000:browser-a",
+      credential: "issued-credential",
+    };
+    peer.setIssuedIceServers([issued]);
+    await requestOnce();
+    peer.setIssuedIceServers([]);
+    await requestOnce();
+  } finally {
+    peer.stop();
+  }
+  assert.deepEqual(configurations.map((configuration) => configuration.iceServers), [
+    [
+      { urls: "stun:stun.example.com:3478" },
+      {
+        urls: ["turns:turn.example.com:5349"],
+        username: "1700000000:browser-a",
+        credential: "issued-credential",
+      },
+    ],
+    [{ urls: "stun:stun.example.com:3478" }],
+  ]);
+});

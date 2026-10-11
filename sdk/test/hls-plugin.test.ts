@@ -382,3 +382,56 @@ test("registers and unregisters a zero-install browser peer", async (context) =>
     "https://tracker.example/api/v1/broadcasts/live%20event/peers/browser-a",
   );
 });
+
+test("passes tracker-issued TURN credentials to the browser WebRTC peer", async (context) => {
+  context.mock.method(globalThis, "fetch", async (_input: RequestInfo | URL, init?: RequestInit) =>
+    init?.method === "POST"
+      ? Response.json({
+          sessionToken: "test-peer-session",
+          expiresAt: "2099-01-01T00:00:00.000Z",
+          iceServers: [
+            {
+              urls: ["turns:turn.example.com:5349"],
+              username: "4070908800:browser-a",
+              credential: "issued-credential",
+            },
+            { urls: 42 },
+            "not-an-object",
+          ],
+        }, { status: 201 })
+      : new Response(null, { status: 204 }));
+  const issued: RTCIceServer[][] = [];
+  const plugin = new OpenStreamGridHlsPlugin({
+    trackerUrl: "https://tracker.example",
+    broadcastId: "live",
+    peerId: "browser-a",
+    verifySegments: false,
+    peerConnectionFactory: () => {
+      throw new Error("no connection expected");
+    },
+  });
+  context.mock.method(plugin.wsClient, "start", async () => {});
+  context.mock.method(plugin.wsClient, "stop", () => {});
+  context.mock.method(plugin.wsClient, "enablePeerStateReporting", () => {});
+  class OriginalLoader {}
+  const hls = { config: { loader: OriginalLoader } } as unknown as Hls;
+
+  plugin.attach(hls);
+  const webRtcPeer = (plugin as unknown as {
+    webRtcPeer: { setIssuedIceServers(servers: RTCIceServer[]): void };
+  }).webRtcPeer;
+  context.mock.method(webRtcPeer, "setIssuedIceServers", (servers: RTCIceServer[]) => {
+    issued.push(servers);
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  plugin.detach();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(issued, [[
+    {
+      urls: ["turns:turn.example.com:5349"],
+      username: "4070908800:browser-a",
+      credential: "issued-credential",
+    },
+  ]]);
+});
