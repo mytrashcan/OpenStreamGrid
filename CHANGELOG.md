@@ -23,6 +23,9 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Fixed
 
+- README SDK examples set `originBaseUrl` to `/hls` instead of `/hls/low`;
+  with the master playlist, segment verification rejected the medium and
+  high renditions.
 - The React integration example compiles again: it narrows `SdkEvent` before
   reading `segment`, which `scheduler_decision` events do not carry. CI now
   builds the example so SDK type changes cannot break it silently.
