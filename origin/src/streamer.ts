@@ -11,11 +11,16 @@ import {
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
-import { createLogger } from "@openstreamgrid/common";
+import { createLogger, isMediaSegmentPath } from "@openstreamgrid/common";
 
 export const DEFAULT_HASH_INTERVAL_MS = 250;
 const STOP_TIMEOUT_MS = 5_000;
 export const DEFAULT_SEGMENT_DURATION_SECONDS = 2;
+
+/** HLS media segment container: MPEG-TS (`.ts`) or CMAF/fMP4 (`.m4s`). */
+export type HlsSegmentType = "mpegts" | "fmp4";
+export const HLS_SEGMENT_TYPES: readonly HlsSegmentType[] = ["mpegts", "fmp4"];
+
 export const DEFAULT_PLAYLIST_SIZE = 8;
 const TEST_PATTERN_FRAME_RATE = 30;
 const TEST_AUDIO_FREQUENCY_HZ = 1_000;
@@ -83,6 +88,7 @@ export interface StreamerOptions {
   segmentDurationSeconds?: number;
   playlistSize?: number;
   hashIntervalMs?: number;
+  segmentType?: HlsSegmentType;
 }
 
 /** Runtime configuration for a group of independent HLS streams. */
@@ -129,6 +135,7 @@ export class HlsStreamer implements StreamController {
   private stopping = false;
   private lastFailure: string | undefined;
   private segmentEpoch = "";
+  private readonly segmentType: HlsSegmentType;
   private readonly pendingHashes = new Map<string, Promise<string>>();
 
   constructor(private readonly options: StreamerOptions) {
@@ -145,6 +152,7 @@ export class HlsStreamer implements StreamController {
     if (this.ffmpegPath.trim() === "") {
       throw new Error("FFmpeg path must not be empty");
     }
+    this.segmentType = options.segmentType ?? "mpegts";
     this.segmentDurationSeconds =
       options.segmentDurationSeconds ?? DEFAULT_SEGMENT_DURATION_SECONDS;
     this.playlistSize = options.playlistSize ?? DEFAULT_PLAYLIST_SIZE;
@@ -276,7 +284,7 @@ export class HlsStreamer implements StreamController {
   }
 
   async ensureHash(segmentName: string): Promise<string> {
-    if (!/^[-A-Za-z0-9_./]+\.ts$/.test(segmentName)) {
+    if (!isMediaSegmentPath(segmentName)) {
       throw new Error("Invalid segment name");
     }
     const outputDirectory = path.resolve(this.options.outputDirectory);
@@ -413,8 +421,17 @@ export class HlsStreamer implements StreamController {
       varStreamMap,
       "-master_pl_name",
       path.basename(this.playlistPath),
+      ...(this.segmentType === "fmp4"
+        ? [
+            "-hls_segment_type",
+            "fmp4",
+            // One immutable init segment per rendition and epoch.
+            "-hls_fmp4_init_filename",
+            `${this.segmentEpoch}_init_%v.mp4`,
+          ]
+        : []),
       "-hls_segment_filename",
-      `%v/${this.segmentEpoch}_segment_%06d.ts`,
+      `%v/${this.segmentEpoch}_segment_%06d.${this.segmentType === "fmp4" ? "m4s" : "ts"}`,
       "%v/stream.m3u8",
     ];
   }
@@ -470,7 +487,7 @@ export class HlsStreamer implements StreamController {
           .split("\n")
           .map((line) => line.trim())
           .filter(
-            (line) => line !== "" && !line.startsWith("#") && line.endsWith(".ts"),
+            (line) => line !== "" && !line.startsWith("#") && isMediaSegmentPath(line),
           );
         await Promise.all(
           segmentNames.map(async (segmentName) => {
@@ -494,6 +511,9 @@ export class HlsStreamer implements StreamController {
             entry.endsWith(".m3u8") ||
             entry.endsWith(".ts") ||
             entry.endsWith(".ts.sha256") ||
+            entry.endsWith(".m4s") ||
+            entry.endsWith(".m4s.sha256") ||
+            entry.endsWith(".mp4") ||
             entry.endsWith(".tmp"),
         )
         .map((entry) =>
@@ -558,6 +578,7 @@ export class MultiHlsStreamer implements MultiStreamController {
           ...(options.hashIntervalMs !== undefined
             ? { hashIntervalMs: options.hashIntervalMs }
             : {}),
+          ...(options.segmentType ? { segmentType: options.segmentType } : {}),
         }),
       );
     }

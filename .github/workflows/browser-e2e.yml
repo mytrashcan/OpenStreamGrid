@@ -21,6 +21,10 @@ jobs:
   p2p-playback:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        segment-type: [mpegts, fmp4]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -40,6 +44,8 @@ jobs:
           npm run build --prefix sdk
 
       - name: Start tracker and origin
+        env:
+          HLS_SEGMENT_TYPE: ${{ matrix.segment-type }}
         run: docker compose -p osg-e2e up --detach --build --wait tracker origin
 
       - name: Install Playwright and Chromium
@@ -50,13 +56,15 @@ jobs:
 
       - name: Run browser E2E
         working-directory: e2e/browser
+        env:
+          EXPECTED_SEGMENT_TYPE: ${{ matrix.segment-type }}
         run: npx playwright test
 
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.segment-type }}
           path: |
             e2e/browser/playwright-report
             e2e/browser/test-results

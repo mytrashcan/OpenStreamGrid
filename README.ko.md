@@ -12,12 +12,14 @@
 
 ## 프로젝트 소개
 
-OpenStreamGrid는 MPEG-TS HLS 스트리밍 서비스에 피어 기반
+OpenStreamGrid는 MPEG-TS(`.ts`) 또는 CMAF/fMP4(`.m4s`) 세그먼트를 쓰는 HLS 스트리밍 서비스에 피어 기반
 세그먼트 전송을 추가합니다. 같은 라이브 방송을 시청하는 클라이언트가 이미
 받은 영상 세그먼트를 서로 공유하므로 Origin 서버와 CDN의 전송량을 줄일 수
 있습니다.
 
-LL-HLS와 CMAF/fMP4는 로드맵 항목이며 이 릴리스에서는 지원하지 않습니다.
+피어는 미디어 세그먼트를 공유하고 SHA-256으로 검증하며, fMP4 init 세그먼트와
+플레이리스트는 항상 Origin 또는 CDN에서 받습니다. LL-HLS의 부분 세그먼트(partial
+segment)는 로드맵 항목이며 아직 지원하지 않습니다.
 
 P2P 전송이 불가능하거나 재생 기한 안에 완료되지 않으면 즉시 Origin/CDN으로
 전환합니다. 따라서 피어가 접속을 종료하거나 응답이 느려져도 재생 경로를
@@ -252,6 +254,7 @@ WebSocket의 `sessionToken` 쿼리로 사용합니다.
 | `PUBLIC_ORIGIN_URL` | `http://origin:<PORT>` | 클라이언트에 알릴 Origin URL |
 | `HLS_DIRECTORY` | `/tmp/openstreamgrid-hls` | 생성된 HLS 파일 디렉터리 |
 | `SEGMENT_DURATION_SECONDS` | `2` | HLS 목표 세그먼트 길이(초) |
+| `HLS_SEGMENT_TYPE` | `mpegts` | `.ts` 세그먼트는 `mpegts`, CMAF/fMP4(`.m4s`와 렌디션별 init 세그먼트)는 `fmp4` |
 | `PLAYLIST_SIZE` | `8` | 미디어 플레이리스트별 유지 세그먼트 수 |
 | `HASH_INTERVAL_MS` | `250` | 해시 파일 탐색 주기(ms) |
 | `FFMPEG_PATH` | `PATH`의 `ffmpeg` | FFmpeg 실행 파일 경로 |

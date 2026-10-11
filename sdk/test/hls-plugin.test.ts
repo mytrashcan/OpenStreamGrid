@@ -638,3 +638,61 @@ test("replaces TURN credentials when the peer session is refreshed", async (cont
   assert.equal(registrations, 2);
   assert.deepEqual(issued, ["credential-1", "credential-2"]);
 });
+
+test("routes CMAF/fMP4 media segments through P2P and keeps init segments on origin", () => {
+  const plugin = new OpenStreamGridHlsPlugin({
+    trackerUrl: "ws://tracker.example/ws",
+    broadcastId: "live",
+    verifySegments: false,
+    peerParticipation: false,
+  });
+  class OriginalLoader {}
+  const hls = { config: { loader: OriginalLoader } } as unknown as Hls;
+  plugin.attach(hls);
+  const LoaderClass = hls.config.loader as unknown as new (config: unknown) => {
+    isMediaSegmentUrl(url: string): boolean;
+  };
+  const loader = new LoaderClass(hls.config);
+  try {
+    assert.equal(loader.isMediaSegmentUrl("https://origin.example/hls/low/e_segment_000001.m4s"), true);
+    assert.equal(loader.isMediaSegmentUrl("https://origin.example/hls/low/e_segment_000001.ts"), true);
+    assert.equal(loader.isMediaSegmentUrl("https://origin.example/hls/low/e_init_low.mp4"), false);
+    assert.equal(loader.isMediaSegmentUrl("https://origin.example/hls/low/stream.m3u8"), false);
+  } finally {
+    plugin.detach();
+  }
+  const internals = plugin as unknown as { segmentPeerId(url: string): string };
+  assert.match(
+    internals.segmentPeerId("https://origin.example/hls/low/e_segment_000001.m4s?token=abc"),
+    /^hls\/low\/e_segment_000001~q-[^/]+\.m4s$/,
+  );
+});
+
+test("sends byte-range segment requests to the default loader", () => {
+  const plugin = new OpenStreamGridHlsPlugin({
+    trackerUrl: "ws://tracker.example/ws",
+    broadcastId: "live",
+    verifySegments: false,
+    peerParticipation: false,
+  });
+  const defaultLoads: unknown[] = [];
+  class DefaultLoader {
+    stats = {};
+    load(context: unknown): void {
+      defaultLoads.push(context);
+    }
+  }
+  const hls = { config: { loader: DefaultLoader } } as unknown as Hls;
+  plugin.attach(hls);
+  const LoaderClass = hls.config.loader as unknown as new (config: unknown) => {
+    load(context: unknown, config: unknown, callbacks: unknown): void;
+  };
+  const config = { timeout: 1_000, loadPolicy: { maxLoadTimeMs: 1_000 } };
+  try {
+    const ranged = { url: "https://origin.example/hls/low/media.m4s", rangeStart: 1_024, rangeEnd: 4_096 };
+    new LoaderClass(hls.config).load(ranged, config, {});
+    assert.deepEqual(defaultLoads, [ranged]);
+  } finally {
+    plugin.detach();
+  }
+});

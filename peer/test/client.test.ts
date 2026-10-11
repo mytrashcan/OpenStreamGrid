@@ -164,3 +164,21 @@ test("validates required peer environment configuration", () => {
     /Cache TTL must be a positive integer/,
   );
 });
+
+test("lists MPEG-TS and fMP4 media segments but not init segments", async () => {
+  const { playlistSegments } = await import("../src/client.js");
+  const playlist = [
+    "#EXTM3U",
+    '#EXT-X-MAP:URI="epoch_init_low.mp4"',
+    "#EXTINF:2.0,",
+    "epoch_segment_000001.m4s",
+    "#EXTINF:2.0,",
+    "https://origin.example/hls/low/epoch_segment_000002.m4s",
+    "legacy_segment_000003.ts",
+    "notes.txt",
+  ].join("\n");
+  assert.deepEqual(
+    playlistSegments(playlist, new URL("https://origin.example/hls/low/stream.m3u8")),
+    ["epoch_segment_000001.m4s", "epoch_segment_000002.m4s", "legacy_segment_000003.ts"],
+  );
+});

@@ -3,7 +3,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
-import { createLogger, type HealthStatus } from "@openstreamgrid/common";
+import { createLogger, isMediaSegmentFileName, type HealthStatus } from "@openstreamgrid/common";
 import type { SegmentCache } from "./cache.js";
 import type { TrafficStats } from "./stats.js";
 import { BandwidthLimiter } from "./bandwidth-limiter.js";
@@ -136,7 +136,7 @@ export class UploadServer {
         this.sendJson(response, 400, { error: "Invalid segment name" });
         return;
       }
-      if (!/^[-A-Za-z0-9_.]+\.ts$/.test(segmentName)) {
+      if (!isMediaSegmentFileName(segmentName)) {
         this.sendJson(response, 400, { error: "Invalid segment name" });
         return;
       }
@@ -149,7 +149,7 @@ export class UploadServer {
       this.activeConnections += 1;
       try {
         response.writeHead(200, {
-          "content-type": "video/mp2t",
+          "content-type": segmentName.endsWith(".m4s") ? "video/iso.segment" : "video/mp2t",
           "content-length": lease.data.byteLength,
           "cache-control": "private, max-age=60",
           "access-control-allow-origin": "*",

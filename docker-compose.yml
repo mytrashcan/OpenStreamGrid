@@ -70,6 +70,7 @@ services:
       PUBLIC_ORIGIN_URL: http://origin:8080
       HLS_DIRECTORY: /tmp/openstreamgrid-hls
       SEGMENT_DURATION_SECONDS: "${SEGMENT_DURATION_SECONDS:-2}"
+      HLS_SEGMENT_TYPE: "${HLS_SEGMENT_TYPE:-mpegts}"
     depends_on:
       tracker:
         condition: service_healthy

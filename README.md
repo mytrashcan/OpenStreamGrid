@@ -10,8 +10,10 @@ Universal hybrid P2P-CDN middleware for standards-based live streaming.
 
 [English](README.md) | [한국어](README.ko.md)
 
-OpenStreamGrid adds peer-assisted delivery to MPEG-TS HLS streams. LL-HLS and
-CMAF/fMP4 are roadmap items, not supported media formats in this release. Your
+OpenStreamGrid adds peer-assisted delivery to HLS streams with MPEG-TS (`.ts`)
+or CMAF/fMP4 (`.m4s`) media segments; LL-HLS partial segments are a roadmap
+item. Peers share and SHA-256-verify media segments, while fMP4 init segments
+and playlists always load from your origin or CDN. Your
 origin continues to encode and publish media while OpenStreamGrid discovers
 peers, verifies segments, limits resource use, reports delivery metrics, and
 immediately falls back to the origin when P2P cannot meet the playback deadline.
@@ -259,6 +261,7 @@ codes, and origin/peer endpoints.
 | `PUBLIC_ORIGIN_URL` | `http://origin:<PORT>` | URL advertised to clients |
 | `HLS_DIRECTORY` | `/tmp/openstreamgrid-hls` | Generated HLS directory |
 | `SEGMENT_DURATION_SECONDS` | `2` | HLS target duration |
+| `HLS_SEGMENT_TYPE` | `mpegts` | `mpegts` for `.ts` segments or `fmp4` for CMAF/fMP4 (`.m4s` plus a per-rendition init segment) |
 | `PLAYLIST_SIZE` | `8` | Segments retained per media playlist |
 | `HASH_INTERVAL_MS` | `250` | Sidecar hash discovery interval |
 | `FFMPEG_PATH` | `ffmpeg` on `PATH` | FFmpeg executable override |

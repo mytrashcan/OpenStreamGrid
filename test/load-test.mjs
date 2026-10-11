@@ -415,7 +415,8 @@ const waitForMediaPlaylist = async (masterUrl, quality, signal) => {
 const mediaSegments = (playlist, playlistUrl, originBaseUrl) =>
   playlistLines(playlist)
     .map((line) => new URL(line, playlistUrl))
-    .filter((url) => url.pathname.endsWith(".ts"))
+    // MPEG-TS and CMAF/fMP4 media segments; init segments are not shared.
+    .filter((url) => /\.(?:ts|m4s)$/.test(url.pathname))
     .map((url) => {
       const relativePath = url.pathname.startsWith(originBaseUrl.pathname)
         ? url.pathname.slice(originBaseUrl.pathname.length)
@@ -424,7 +425,7 @@ const mediaSegments = (playlist, playlistUrl, originBaseUrl) =>
       if (
         key === "" ||
         key.split("/").includes("..") ||
-        !/^[-A-Za-z0-9_./]+\.ts$/.test(key)
+        !/^[-A-Za-z0-9_./]+\.(?:ts|m4s)$/.test(key)
       ) {
         return undefined;
       }

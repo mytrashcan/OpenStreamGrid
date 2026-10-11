@@ -28,6 +28,7 @@ import {
   type SegmentScheduler,
   type SegmentSchedulingContext,
   type SegmentSchedulingPlan,
+  MEDIA_SEGMENT_EXTENSION_PATTERN,
 } from "@openstreamgrid/common";
 import type {
   default as Hls,
@@ -238,8 +239,11 @@ class OpenStreamGridLoader implements Loader<LoaderContext> {
       return;
     }
 
-    // Only intercept .ts segments, let playlists pass through to default loader
-    if (!this.isTransportStreamUrl(url)) {
+    // Only intercept whole media segments. Playlists, init segments, and
+    // byte-range requests (EXT-X-BYTERANGE) use the default loader, because
+    // the grid caches and shares complete files.
+    const ranged = (context.rangeStart ?? 0) > 0 || (context.rangeEnd ?? 0) > 0;
+    if (!this.isMediaSegmentUrl(url) || ranged) {
       this.fallbackToOrigin(context, config, callbacks);
       return;
     }
@@ -329,9 +333,10 @@ class OpenStreamGridLoader implements Loader<LoaderContext> {
     fallback.load(context, config, callbacks);
   }
 
-  private isTransportStreamUrl(url: string): boolean {
+  /** MPEG-TS (.ts) and CMAF/fMP4 (.m4s) media segments; init segments and playlists use the default loader. */
+  private isMediaSegmentUrl(url: string): boolean {
     try {
-      return new URL(url, globalThis.location?.href).pathname.endsWith(".ts");
+      return MEDIA_SEGMENT_EXTENSION_PATTERN.test(new URL(url, globalThis.location?.href).pathname);
     } catch {
       return false;
     }
@@ -1212,8 +1217,9 @@ export class OpenStreamGridHlsPlugin {
       const pathname = url.pathname.replace(/^\/+/, "");
       if (!url.search) return pathname;
       const suffix = urlFingerprint(url.search);
-      return pathname.endsWith(".ts")
-        ? `${pathname.slice(0, -3)}~q-${suffix}.ts`
+      const extension = MEDIA_SEGMENT_EXTENSION_PATTERN.exec(pathname)?.[0];
+      return extension
+        ? `${pathname.slice(0, -extension.length)}~q-${suffix}${extension}`
         : `${pathname}~q-${suffix}`;
     } catch {
       return segmentUrl.replace(/^\/+/, "");

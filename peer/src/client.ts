@@ -2,7 +2,7 @@
 import { randomBytes } from "node:crypto";
 import { hostname } from "node:os";
 import { pathToFileURL } from "node:url";
-import { createLogger } from "@openstreamgrid/common";
+import { createLogger, isMediaSegmentFileName } from "@openstreamgrid/common";
 import WebSocket from "ws";
 import { SegmentCache } from "./cache.js";
 import { HybridSegmentFetcher } from "./fetcher.js";
@@ -70,7 +70,8 @@ const delay = async (milliseconds: number, signal: AbortSignal): Promise<void> =
   });
 };
 
-const playlistSegments = (playlist: string, playlistUrl: URL): string[] =>
+/** Media segment names listed in an HLS media playlist. */
+export const playlistSegments = (playlist: string, playlistUrl: URL): string[] =>
   playlist
     .split("\n")
     .map((line) => line.trim())
@@ -80,7 +81,8 @@ const playlistSegments = (playlist: string, playlistUrl: URL): string[] =>
 
 const pathName = (url: URL): string | undefined => {
   const name = url.pathname.split("/").at(-1);
-  return name && /^[-A-Za-z0-9_.]+\.ts$/.test(name) ? name : undefined;
+  // Media segments only; init segments stay on the origin.
+  return name && isMediaSegmentFileName(name) ? name : undefined;
 };
 
 class PeerApplication {

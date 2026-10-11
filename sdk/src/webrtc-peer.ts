@@ -1,4 +1,4 @@
-import { createLogger } from "@openstreamgrid/common";
+import { createLogger, isMediaSegmentPath } from "@openstreamgrid/common";
 import type { WebRtcSignalMessage } from "./types.js";
 
 const DATA_CHANNEL_LABEL = "segment-request";
@@ -84,7 +84,8 @@ const binaryBytes = (value: unknown): Uint8Array | undefined => {
 
 const isSegmentId = (value: string): boolean =>
   value.length <= 1024 &&
-  /^(?!.*(?:^|\/)\.\.(?:\/|$))[-A-Za-z0-9_./]+\.ts$/.test(value);
+  !/(?:^|\/)\.\.(?:\/|$)/.test(value) &&
+  isMediaSegmentPath(value);
 
 const requestId = (): string => {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
