@@ -65,6 +65,7 @@ test("uses absolute tracker peer addresses and reports the winning peer", async 
   );
   assert.equal(plugin.stats.p2pRequests, 1);
   assert.equal(plugin.stats.p2pSuccesses, 1);
+  assert.equal(events.some((event) => event.type === "peer_failed"), false);
 });
 
 test("reports failed peer attempts with the reason before falling back", async (context) => {
@@ -99,6 +100,112 @@ test("reports failed peer attempts with the reason before falling back", async (
     message: "Peer returned HTTP 503",
   });
   assert.ok(events.some((event) => event.type === "origin_fallback"));
+});
+
+test("keeps the WebRTC failure reason in peer_failed events", async (context) => {
+  const events: SdkEvent[] = [];
+  context.mock.method(globalThis, "fetch", async (input: RequestInfo | URL) =>
+    String(input).endsWith(".sha256")
+      ? new Response(`${digest}  segment.ts\n`)
+      : new Response(segmentData));
+  const plugin = new OpenStreamGridHlsPlugin({
+    trackerUrl: "ws://tracker.example/ws",
+    broadcastId: "live",
+    originBaseUrl: "https://origin.example/hls",
+    peerParticipation: false,
+    peerConnectionFactory: () => {
+      throw new Error("no connection expected");
+    },
+    onEvent: (event) => events.push(event),
+  });
+  class OriginalLoader {}
+  plugin.attach({ config: { loader: OriginalLoader } } as unknown as Hls);
+  const webRtcPeer = (plugin as unknown as {
+    webRtcPeer: { requestSegment(...args: unknown[]): Promise<Uint8Array> };
+  }).webRtcPeer;
+  context.mock.method(webRtcPeer, "requestSegment", async () => {
+    throw new Error("ICE connection failed");
+  });
+  context.mock.method(plugin.wsClient, "getPeersWithSegment", () => [
+    { ...peer("webrtc://peer-a"), metadata: { transport: "webrtc" } },
+  ]);
+  try {
+    await plugin.loadSegment(
+      "segment.ts",
+      "https://origin.example/hls/low/segment.ts",
+      new AbortController().signal,
+    );
+  } finally {
+    plugin.detach();
+  }
+
+  const failure = events.find((event) => event.type === "peer_failed");
+  assert.ok(failure && "message" in failure);
+  assert.equal(failure.message, "WebRTC peer unavailable: ICE connection failed");
+});
+
+test("reports peer timeouts but not attempts cancelled by a winning peer", async (context) => {
+  const events: SdkEvent[] = [];
+  const hangUntilAborted = (init?: RequestInit): Promise<Response> =>
+    new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(init.signal?.reason ?? new Error("aborted")), {
+        once: true,
+      });
+    });
+  let slowPeerAborted = false;
+  context.mock.method(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.host === "slow.example:9090") {
+      return hangUntilAborted(init).finally(() => {
+        slowPeerAborted = true;
+      });
+    }
+    if (url.pathname.endsWith(".sha256")) return new Response(`${digest}  segment.ts\n`);
+    return new Response(segmentData);
+  });
+  const plugin = new OpenStreamGridHlsPlugin({
+    trackerUrl: "ws://tracker.example/ws",
+    broadcastId: "live",
+    originBaseUrl: "https://origin.example/hls",
+    peerTimeoutMs: 50,
+    onEvent: (event) => events.push(event),
+  });
+
+  // A lone slow peer times out: that is a real failure.
+  context.mock.method(plugin.wsClient, "getPeersWithSegment", () => [
+    { ...peer("http://slow.example:9090"), id: "slow" },
+  ]);
+  await plugin.loadSegment("segment.ts", "https://origin.example/hls/low/segment.ts", new AbortController().signal);
+  const timeout = events.find((event) => event.type === "peer_failed");
+  assert.ok(timeout && "peerId" in timeout);
+  assert.equal(timeout.peerId, "slow");
+
+  // A slow peer racing a fast one is cancelled when the fast one wins.
+  events.length = 0;
+  slowPeerAborted = false;
+  const racingPlugin = new OpenStreamGridHlsPlugin({
+    trackerUrl: "ws://tracker.example/ws",
+    broadcastId: "live",
+    originBaseUrl: "https://origin.example/hls",
+    peerTimeoutMs: 5_000,
+    onEvent: (event) => events.push(event),
+  });
+  context.mock.method(racingPlugin.wsClient, "getPeersWithSegment", () => [
+    { ...peer("http://slow.example:9090"), id: "slow" },
+    { ...peer("http://fast.example:9090"), id: "fast" },
+  ]);
+  const result = await racingPlugin.loadSegment(
+    "segment-2.ts",
+    "https://origin.example/hls/low/segment-2.ts",
+    new AbortController().signal,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(result.data, segmentData);
+  const fetched = events.find((event) => event.type === "peer_fetched");
+  assert.ok(fetched && "peerId" in fetched);
+  assert.equal(fetched.peerId, "fast");
+  assert.equal(slowPeerAborted, true);
+  assert.equal(events.some((event) => event.type === "peer_failed"), false);
 });
 
 test("verifies origin fallback data before caching it", async (context) => {
