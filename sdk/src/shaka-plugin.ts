@@ -24,6 +24,7 @@ export interface ShakaResponse {
   originalRequest: ShakaRequest;
   status?: number;
   timeMs?: number;
+  fromCache?: boolean;
 }
 
 /** Shaka `IAbortableOperation`. */
@@ -65,6 +66,12 @@ export interface ShakaNamespace {
       promise: Promise<T>,
       onAbort: () => Promise<void>,
     ) => ShakaAbortableOperation<T>;
+    /** Shaka's error type; NetworkingEngine retries based on its severity and code. */
+    Error: (new (severity: number, category: number, code: number, ...data: unknown[]) => Error) & {
+      Severity: { RECOVERABLE: number };
+      Category: { NETWORK: number };
+      Code: { HTTP_ERROR: number; OPERATION_ABORTED: number };
+    };
   };
 }
 
@@ -112,10 +119,12 @@ export class OpenStreamGridShakaPlugin {
     if (!shaka) return;
     this.shaka = undefined;
     for (const scheme of SCHEMES) {
+      // Matches Shaka's own registration of its fetch plugin.
       shaka.net.NetworkingEngine.registerScheme(
         scheme,
         shaka.net.HttpFetchPlugin.parse,
         shaka.net.NetworkingEngine.PluginPriority.PREFERRED,
+        true,
       );
     }
     this.core.stopGrid();
@@ -142,15 +151,22 @@ export class OpenStreamGridShakaPlugin {
         : undefined;
       const promise = this.core
         .loadSegment(segmentName(uri), uri, controller.signal, deadline)
-        .then(({ data }) => ({
-          uri,
-          originalUri: uri,
-          data,
-          headers: {},
-          originalRequest: request,
-          status: 200,
-          timeMs: performance.now() - startedAt,
-        }));
+        .then(
+          ({ data, fromCache }) => ({
+            uri,
+            originalUri: uri,
+            data,
+            headers: {},
+            originalRequest: request,
+            status: 200,
+            timeMs: performance.now() - startedAt,
+            // Instant cache hits must not feed Shaka's bandwidth estimator.
+            ...(fromCache ? { fromCache: true } : {}),
+          }),
+          (error: unknown) => {
+            throw toShakaError(shaka, uri, requestType, error, controller.signal.aborted);
+          },
+        );
       return new shaka.util.AbortableOperation(promise, async () => {
         controller.abort(new DOMException("Shaka aborted the request", "AbortError"));
       });
@@ -183,7 +199,32 @@ const isMediaSegmentUri = (uri: string): boolean => {
   }
 };
 
-const segmentName = (uri: string): string => {
-  const pathname = new URL(uri, globalThis.location?.href).pathname;
-  return pathname.slice(pathname.lastIndexOf("/") + 1) || uri;
+/** Same derivation as the Hls.js loader, so both adapters agree on segment names. */
+const segmentName = (uri: string): string => uri.slice(uri.lastIndexOf("/") + 1) || uri;
+
+/** Converts grid failures into the error type Shaka's retry logic understands. */
+const toShakaError = (
+  shaka: ShakaNamespace,
+  uri: string,
+  requestType: number,
+  error: unknown,
+  aborted: boolean,
+): Error => {
+  const ShakaError = shaka.util.Error;
+  return aborted
+    ? new ShakaError(
+        ShakaError.Severity.RECOVERABLE,
+        ShakaError.Category.NETWORK,
+        ShakaError.Code.OPERATION_ABORTED,
+        uri,
+        requestType,
+      )
+    : new ShakaError(
+        ShakaError.Severity.RECOVERABLE,
+        ShakaError.Category.NETWORK,
+        ShakaError.Code.HTTP_ERROR,
+        uri,
+        error,
+        requestType,
+      );
 };

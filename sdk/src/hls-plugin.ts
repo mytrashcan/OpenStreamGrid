@@ -624,13 +624,13 @@ export class OpenStreamGridHlsPlugin {
     segmentUrl: string,
     signal: AbortSignal,
     deadline?: SegmentDeadline,
-  ): Promise<{ data: Uint8Array }> {
+  ): Promise<{ data: Uint8Array; fromCache?: boolean }> {
     if (signal.aborted) throw this.abortReason(signal);
     const cacheKey = this.segmentCacheKey(segmentUrl);
     const cached = this.cache.get(cacheKey);
     if (cached) {
       this.emit({ type: "cache_hit", segment: segmentName });
-      return { data: cached };
+      return { data: cached, fromCache: true };
     }
 
     let request = this.inFlightSegments.get(cacheKey);

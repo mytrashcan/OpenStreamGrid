@@ -63,11 +63,17 @@ const viewerUrl = (peerId) => {
   return `${pageOrigin}/?${params}`;
 };
 
+// Seconds actually played. currentTime is a presentation timestamp that, for
+// Shaka live playback, is already large on the first frame.
 const playbackState = (page) =>
-  page.evaluate(() => ({
-    ...window.osg,
-    currentTime: document.getElementById("video").currentTime,
-  }));
+  page.evaluate(() => {
+    const video = document.getElementById("video");
+    let playedSeconds = 0;
+    for (let index = 0; index < video.played.length; index += 1) {
+      playedSeconds += video.played.end(index) - video.played.start(index);
+    }
+    return { ...window.osg, currentTime: video.currentTime, playedSeconds };
+  });
 
 test("two zero-install browser viewers share segments over WebRTC", async ({ browser }) => {
   const viewers = [];
@@ -86,7 +92,7 @@ test("two zero-install browser viewers share segments over WebRTC", async ({ bro
 
     const first = await openViewer("a");
     // Let the first viewer cache a few live segments before the second joins.
-    await expect.poll(async () => (await playbackState(first)).currentTime, { timeout: 60_000 })
+    await expect.poll(async () => (await playbackState(first)).playedSeconds, { timeout: 60_000 })
       .toBeGreaterThan(4);
 
     const second = await openViewer("b");
@@ -101,7 +107,7 @@ test("two zero-install browser viewers share segments over WebRTC", async ({ bro
       .toBeGreaterThan(0);
     // peer_fetched can fire before Hls.js appends the bytes, so wait for
     // viewer B to actually play rather than checking once.
-    await expect.poll(async () => (await playbackState(second)).currentTime, { timeout: 60_000 })
+    await expect.poll(async () => (await playbackState(second)).playedSeconds, { timeout: 60_000 })
       .toBeGreaterThan(0);
 
     const [a, b] = await Promise.all([playbackState(first), playbackState(second)]);

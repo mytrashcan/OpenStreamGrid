@@ -9,8 +9,24 @@ import {
 const SEGMENT = 1;
 const MANIFEST = 0;
 
+class FakeShakaError extends Error {
+  static Severity = { RECOVERABLE: 1 };
+  static Category = { NETWORK: 1 };
+  static Code = { HTTP_ERROR: 1002, OPERATION_ABORTED: 7001 };
+  readonly data: unknown[];
+  constructor(readonly severity: number, readonly category: number, readonly code: number, ...data: unknown[]) {
+    super(`Shaka error ${code}`);
+    this.data = data;
+  }
+}
+
 const fakeShaka = () => {
-  const registrations: Array<{ scheme: string; plugin: ShakaSchemePlugin; priority?: number }> = [];
+  const registrations: Array<{
+    scheme: string;
+    plugin: ShakaSchemePlugin;
+    priority?: number;
+    progressSupport?: boolean;
+  }> = [];
   const fallbackCalls: string[] = [];
   const fallback: ShakaSchemePlugin = (uri) => {
     fallbackCalls.push(uri);
@@ -19,8 +35,13 @@ const fakeShaka = () => {
   const shaka: ShakaNamespace = {
     net: {
       NetworkingEngine: {
-        registerScheme: (scheme, plugin, priority) => {
-          registrations.push({ scheme, plugin, ...(priority === undefined ? {} : { priority }) });
+        registerScheme: (scheme, plugin, priority, progressSupport) => {
+          registrations.push({
+            scheme,
+            plugin,
+            ...(priority === undefined ? {} : { priority }),
+            ...(progressSupport === undefined ? {} : { progressSupport }),
+          });
         },
         RequestType: { SEGMENT },
         PluginPriority: { APPLICATION: 3, PREFERRED: 2 },
@@ -34,6 +55,7 @@ const fakeShaka = () => {
           return this.onAbort();
         }
       },
+      Error: FakeShakaError,
     },
   };
   return { shaka, registrations, fallback, fallbackCalls };
@@ -54,10 +76,18 @@ test("registers for http and https and restores Shaka's fetch plugin on detach",
   plugin.attach(shaka);
   assert.deepEqual(registrations.map(({ scheme, priority }) => [scheme, priority]), [["http", 3], ["https", 3]]);
   plugin.detach();
-  assert.deepEqual(registrations.slice(2).map(({ scheme, plugin: p, priority }) => [scheme, p === fallback, priority]), [
-    ["http", true, 2],
-    ["https", true, 2],
-  ]);
+  assert.deepEqual(
+    registrations.slice(2).map(({ scheme, plugin: p, priority, progressSupport }) => [
+      scheme,
+      p === fallback,
+      priority,
+      progressSupport,
+    ]),
+    [
+      ["http", true, 2, true],
+      ["https", true, 2, true],
+    ],
+  );
 });
 
 test("loads media segments through the grid and leaves other requests to Shaka", async (context) => {
@@ -107,7 +137,8 @@ test("aborting a Shaka request aborts the grid request", async (context) => {
   try {
     const operation = scheme("http://cdn.example/hls/low/seg_000001.ts", {}, SEGMENT, noop, noop, {});
     await operation.abort();
-    await assert.rejects(operation.promise, { name: "AbortError" });
+    await assert.rejects(operation.promise, (error: FakeShakaError) =>
+      error instanceof FakeShakaError && error.code === 7001 && error.severity === 1);
     assert.equal(observedSignal?.aborted, true);
   } finally {
     plugin.detach();
@@ -139,4 +170,32 @@ test("derives a synthetic deadline from Shaka's request timeouts", async (contex
     plugin.detach();
   }
   assert.deepEqual(deadlines, [{ kind: "synthetic", slackMs: 4_500 }, undefined, undefined]);
+});
+
+test("reports grid failures as recoverable Shaka network errors and flags cache hits", async (context) => {
+  const { shaka, registrations } = fakeShaka();
+  const plugin = pluginFor();
+  let call = 0;
+  context.mock.method(plugin.core, "loadSegment", async () => {
+    call += 1;
+    if (call === 1) throw new Error("Origin returned HTTP 404");
+    return { data: new Uint8Array([7]), fromCache: true };
+  });
+  plugin.attach(shaka);
+  const scheme = registrations[1]?.plugin;
+  assert.ok(scheme);
+  const noop = (): void => undefined;
+  const uri = "https://cdn.example/hls/low/seg_000001.m4s?token=abc";
+  try {
+    await assert.rejects(scheme(uri, {}, SEGMENT, noop, noop, {}).promise, (error: FakeShakaError) =>
+      error instanceof FakeShakaError &&
+      error.code === 1002 &&
+      error.severity === 1 &&
+      error.category === 1 &&
+      error.data[0] === uri);
+    const cached = await scheme(uri, {}, SEGMENT, noop, noop, {}).promise;
+    assert.equal(cached.fromCache, true);
+  } finally {
+    plugin.detach();
+  }
 });
