@@ -81,3 +81,13 @@ repository's MIT License.
 3. Merge the release pull request, then tag the merge commit `vX.Y.Z` and push
    the tag. The Docker publish workflow refuses tags that do not match
    `package.json` and publishes `vX.Y.Z` and `X.Y.Z` images for amd64 and arm64.
+4. Publish a GitHub release for the tag. When the `SDK_NPM_PUBLISH` repository
+   variable is `true`, this publishes `@openstreamgrid/sdk` to npm with
+   provenance (prerelease versions go to the `next` dist-tag). It skips
+   versions that are already published.
+
+One-time npm setup: create the `openstreamgrid` npm organization, then either
+add an npm automation token as the `NPM_TOKEN` repository secret or, after the
+first publish, configure npm trusted publishing for this repository and the
+`sdk-publish.yml` workflow (no token needed). Finally set the
+`SDK_NPM_PUBLISH` repository variable to `true`.

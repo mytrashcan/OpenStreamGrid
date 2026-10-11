@@ -1,0 +1,65 @@
+name: Publish SDK to npm
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Serialize publishes so overlapping runs re-check npm instead of racing.
+concurrency:
+  group: sdk-npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # Opt in with the SDK_NPM_PUBLISH repository variable once the npm scope
+    # and credentials are set up (see CONTRIBUTING.md, "Releasing").
+    if: vars.SDK_NPM_PUBLISH == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            sdk/package-lock.json
+      # npm trusted publishing (OIDC) needs npm 11.5.1 or later.
+      - run: npm install --global npm@^11.5.1
+      - run: npm ci
+      - run: npm ci --prefix sdk
+      - run: npm run build --workspace @openstreamgrid/common
+      - run: npm run build --prefix sdk
+      - name: Check that the release tag matches the SDK version
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          expected="v$(node -p "require('./sdk/package.json').version")"
+          if [ "$TAG" != "$expected" ]; then
+            echo "::error::Release $TAG does not match SDK version $expected"
+            exit 1
+          fi
+      - name: Publish unless this version already exists
+        working-directory: sdk
+        env:
+          # Optional: without it, npm uses trusted publishing via OIDC.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          name="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "$name@$version is already published; skipping."
+            exit 0
+          fi
+          dist_tag=latest
+          case "$version" in *-*) dist_tag=next ;; esac
+          npm publish --provenance --access public --tag "$dist_tag"

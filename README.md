@@ -164,7 +164,7 @@ const hls = new Hls();
 const plugin = new OpenStreamGridHlsPlugin({
   trackerUrl: "https://stream.example.com",
   broadcastId: "live",
-  originBaseUrl: "https://stream.example.com/hls/low",
+  originBaseUrl: "https://stream.example.com/hls",
   maxUploadBitrate: 1_000_000,
   maxUploadConnections: 3,
   iceServers: [
