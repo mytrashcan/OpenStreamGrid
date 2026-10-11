@@ -158,8 +158,9 @@ integrity failures, REST latency quantiles, peer churn, and rate limiting.
 
 - The default `ReadWriteOnce` SQLite volume supports exactly one tracker
   replica. The chart rejects multiple SQLite replicas and SQLite autoscaling.
-- For horizontally scaled production trackers, use a shared external store
-  instead of a single SQLite file when that store adapter is available.
+- Horizontal tracker scaling is not available yet. The options (broadcast
+  sharding or a shared store) and their trade-offs are in
+  [ADR 0001](../../docs/adr/0001-tracker-horizontal-scaling.md).
 - The HLS `emptyDir` uses node memory and is intentionally ephemeral. Its
   default size limit is 256 MiB.
 - The network policies allow inbound traffic only on tracker port 7070 and
