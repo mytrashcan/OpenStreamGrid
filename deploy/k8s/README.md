@@ -41,7 +41,12 @@ matching the published release tags. Set `tracker.image.tag` or
 
 ## Deploy with Helm
 
-Review and override the ingress host and storage class for your cluster:
+Review and override the ingress host and storage class for your cluster. With
+the ingress enabled, the tracker trusts one proxy hop (`tracker.trustProxyHops`
+defaults to 1) so per-client limits apply to viewers rather than to the ingress
+controller. Restrict `networkPolicy.trackerIngressFrom` to the ingress
+controller's namespace so in-cluster clients cannot bypass it and choose their
+own `X-Forwarded-For` address:
 
 ```bash
 helm upgrade --install openstreamgrid helm/openstreamgrid \
@@ -49,7 +54,8 @@ helm upgrade --install openstreamgrid helm/openstreamgrid \
   --create-namespace \
   --set ingress.enabled=true \
   --set ingress.host=stream.example.com \
-  --set ingress.className=nginx
+  --set ingress.className=nginx \
+  --set 'networkPolicy.trackerIngressFrom[0].namespaceSelector.matchLabels.kubernetes\.io/metadata\.name=ingress-nginx'
 ```
 
 For TLS, add a values file such as:

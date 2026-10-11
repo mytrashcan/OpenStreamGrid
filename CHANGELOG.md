@@ -6,6 +6,12 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Added
 
+- `TRACKER_WS_MAX_CONNECTIONS_PER_IP` (default 20) for viewers sharing one NAT
+  address, and `TRUST_PROXY_HOPS` to take the client address from
+  `X-Forwarded-For` behind trusted proxies. Helm `tracker.trustProxyHops`
+  defaults to 1 when the chart's ingress is enabled, and
+  `networkPolicy.trackerIngressFrom` can restrict the tracker to the ingress
+  controller and the origin.
 - `OpenStreamGridShakaPlugin` brings the same delivery core to Shaka Player
   through an HTTP(S) scheme plugin, with deadlines derived from Shaka's request
   timeouts. The browser E2E covers it.
@@ -46,6 +52,10 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Fixed
 
+- Behind a TLS proxy or Kubernetes ingress, all viewers shared the proxy's
+  address, so the per-client REST rate limit and the 20-connection WebSocket
+  limit applied to the whole audience. With `TRUST_PROXY_HOPS` set, limits
+  apply per viewer.
 - The browser SDK stops waiting for peers when a known playback deadline
   would otherwise be missed and fetches the segment from the origin in time;
   previously a slow peer transfer could run past the deadline.

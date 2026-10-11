@@ -18,6 +18,14 @@ spec:
     - ports:
         - port: {{ .Values.tracker.port }}
           protocol: TCP
+      {{- with .Values.networkPolicy.trackerIngressFrom }}
+      from:
+        - podSelector:
+            matchLabels:
+              {{- include "openstreamgrid.selectorLabels" $ | nindent 14 }}
+              app.kubernetes.io/component: origin
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
   egress:
     - ports:
         - port: 53

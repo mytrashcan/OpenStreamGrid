@@ -272,6 +272,8 @@ codes, and origin/peer endpoints.
 | `RATE_LIMIT_BURST` | `200` | Token-bucket burst capacity per client |
 | `MAX_PEERS_PER_BROADCAST` | `500` | Active-peer limit per broadcast |
 | `TRACKER_WS_ALLOWED_ORIGINS` | unset | Comma-separated http(s) origins allowed to open `/ws` from a browser; other browser origins receive 403. Upgrades without an `Origin` header, such as Node peers, still require a valid peer session |
+| `TRACKER_WS_MAX_CONNECTIONS_PER_IP` | `20` | Concurrent `/ws` connections per client address; raise it when many viewers share one NAT address |
+| `TRUST_PROXY_HOPS` | `0` | Number of trusted reverse proxies in front of the tracker; per-client limits then use the client address they record in `X-Forwarded-For`. Set to `1` behind a single ingress or TLS proxy |
 | `TURN_URLS` | unset | Comma-separated `turn:`/`turns:` URIs returned with short-lived credentials on peer join; browser and Node peers add them to their ICE servers |
 | `TURN_SHARED_SECRET` | unset | TURN server shared secret (coturn `static-auth-secret`, at least 16 bytes); required with `TURN_URLS` |
 
