@@ -34,6 +34,7 @@ export type {
   PeerInfo,
   PeerTrafficStats,
   SdkEvent,
+  SegmentInventoryUpdate,
   SegmentVerificationResult,
   WsClientMessage,
   WsServerMessage,

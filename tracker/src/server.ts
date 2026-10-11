@@ -72,6 +72,8 @@ export interface TrackerConfiguration {
   wsMaxConnectionsPerIp: number;
   trustProxyHops: number;
   turn?: TurnCredentialOptions;
+  /** Inventory batch interval for `inventory_batch` WebSocket clients. */
+  wsInventoryBatchMs?: number;
 }
 
 const parseInteger = (
@@ -1234,6 +1236,7 @@ export class TrackerServer {
           | "wsMaxConnectionsPerIp"
           | "trustProxyHops"
           | "turn"
+          | "wsInventoryBatchMs"
         >
       > = {
       rateLimitRps: DEFAULT_RATE_LIMIT_RPS,
@@ -1300,6 +1303,9 @@ export class TrackerServer {
           : {}),
         ...(configuration.trustProxyHops !== undefined
           ? { trustProxyHops: configuration.trustProxyHops }
+          : {}),
+        ...(configuration.wsInventoryBatchMs !== undefined
+          ? { inventoryBatchIntervalMs: configuration.wsInventoryBatchMs }
           : {}),
       },
     );

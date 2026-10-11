@@ -940,6 +940,144 @@ test("pushes peer and segment updates to WebSocket subscribers", async () => {
   }
 });
 
+test("batches inventory updates for subscribers that negotiate inventory_batch", async () => {
+  const server = new TrackerServer(() => new TrackerStore(), 30_000, {
+    rateLimitRps: 100,
+    rateLimitBurst: 200,
+    maxPeersPerBroadcast: 500,
+    wsInventoryBatchMs: 400,
+  });
+  const port = await server.start(0, "127.0.0.1");
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const sockets = new Map<string, WebSocket>();
+  const received = new Map<string, WsServerMessage[]>();
+  const tokens = new Map<string, string>();
+  try {
+    await fetch(`${baseUrl}/api/v1/broadcasts`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "live", playlistUrl: "http://origin/live.m3u8" }),
+    });
+    for (const id of ["peer-a", "peer-b", "peer-c"]) {
+      const join = await fetch(`${baseUrl}/api/v1/broadcasts/live/peers`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id, address: `http://${id}:9090` }),
+      });
+      tokens.set(id, (await join.json() as { sessionToken: string }).sessionToken);
+    }
+    // peer-a negotiates batching; peer-b and peer-c are legacy clients.
+    for (const [id, features] of [
+      ["peer-a", ["inventory_batch", "future_feature"]],
+      ["peer-b", undefined],
+      ["peer-c", undefined],
+    ] as const) {
+      const socket = new WebSocket(
+        `ws://127.0.0.1:${port}/ws?sessionToken=${encodeURIComponent(tokens.get(id) ?? "")}`,
+      );
+      sockets.set(id, socket);
+      const messages: WsServerMessage[] = [];
+      received.set(id, messages);
+      socket.on("message", (data: RawData) => {
+        messages.push(JSON.parse(data.toString()) as WsServerMessage);
+      });
+      await new Promise<void>((resolve) => socket.once("open", resolve));
+      const subscribed = waitForMessage(socket, (message) => message.type === "peer_list");
+      socket.send(
+        JSON.stringify({
+          type: "subscribe",
+          broadcastId: "live",
+          peerId: id,
+          ...(features ? { features } : {}),
+        }),
+      );
+      await subscribed;
+    }
+    const peerB = sockets.get("peer-b");
+    const peerC = sockets.get("peer-c");
+    assert.ok(peerB && peerC);
+    const report = (socket: WebSocket, peerId: string, added: string[], removed: string[]) =>
+      socket.send(
+        JSON.stringify({ type: "report_segments", broadcastId: "live", peerId, added, removed }),
+      );
+    const legacyDeltas = (): WsServerMessage[] =>
+      (received.get("peer-b") ?? []).filter(
+        (message) => message.type === "segment_inventory_delta",
+      );
+
+    report(peerB, "peer-b", ["s1.ts"], []);
+    report(peerB, "peer-b", ["s2.ts"], ["s1.ts"]);
+    report(peerC, "peer-c", ["c1.ts"], []);
+    const deadline = Date.now() + 1_000;
+    while (legacyDeltas().length < 3) {
+      assert.ok(Date.now() < deadline, "legacy subscriber did not receive every delta");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    // Legacy subscribers get each report as it arrives.
+    assert.deepEqual(
+      legacyDeltas().map((message) =>
+        message.type === "segment_inventory_delta"
+          ? [message.peerId, message.added, message.removed]
+          : [],
+      ),
+      [
+        ["peer-b", ["s1.ts"], []],
+        ["peer-b", ["s2.ts"], ["s1.ts"]],
+        ["peer-c", ["c1.ts"], []],
+      ],
+    );
+
+    const leave = await fetch(`${baseUrl}/api/v1/broadcasts/live/peers/peer-c`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${tokens.get("peer-c") ?? ""}` },
+    });
+    assert.equal(leave.status, 204);
+    const peerA = sockets.get("peer-a");
+    assert.ok(peerA);
+    const batch = await waitForMessage(
+      peerA,
+      (message) => message.type === "segment_inventory_batch",
+    );
+
+    // The batch carries peer-b's net change and drops peer-c, which left
+    // before the flush.
+    assert.deepEqual(batch, {
+      type: "segment_inventory_batch",
+      broadcastId: "live",
+      updates: [{ peerId: "peer-b", added: ["s2.ts"], removed: ["s1.ts"] }],
+    });
+    const batchedTypes = (received.get("peer-a") ?? []).map((message) => message.type);
+    assert.ok(!batchedTypes.includes("segment_inventory_delta"));
+    assert.ok(
+      batchedTypes.indexOf("peer_left") < batchedTypes.indexOf("segment_inventory_batch"),
+    );
+
+    // A full replacement absorbs later deltas into one replace update.
+    const replaced = await fetch(`${baseUrl}/api/v1/broadcasts/live/peers/peer-b/segments`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${tokens.get("peer-b") ?? ""}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ segments: ["r1.ts", "r2.ts"] }),
+    });
+    assert.equal(replaced.status, 200);
+    const nextBatch = waitForMessage(
+      peerA,
+      (message) => message.type === "segment_inventory_batch",
+    );
+    report(peerB, "peer-b", ["r3.ts"], ["r1.ts"]);
+    assert.deepEqual(await nextBatch, {
+      type: "segment_inventory_batch",
+      broadcastId: "live",
+      updates: [{ peerId: "peer-b", segments: ["r2.ts", "r3.ts"], replace: true }],
+    });
+  } finally {
+    for (const socket of sockets.values()) socket.close();
+    await server.stop();
+  }
+});
+
 test("authenticates WebSocket upgrades with a peer session", async () => {
   const server = new TrackerServer(
     () => new TrackerStore(),

@@ -72,7 +72,14 @@ test("supports passive subscriptions without reporting unregistered peer state",
 
   assert.deepEqual(
     socket.sent.map((message) => JSON.parse(message)),
-    [{ type: "subscribe", broadcastId: "live", peerId: "browser-viewer" }],
+    [
+      {
+        type: "subscribe",
+        broadcastId: "live",
+        peerId: "browser-viewer",
+        features: ["inventory_batch"],
+      },
+    ],
   );
 });
 
@@ -151,4 +158,68 @@ test("relays validated WebRTC signaling messages", async () => {
 
   assert.deepEqual(received, [offer]);
   assert.deepEqual(JSON.parse(socket.sent[socket.sent.length - 1] ?? "null"), answer);
+});
+
+const remotePeer = {
+  address: "webrtc://remote",
+  latencyMs: 20,
+  successRate: 1,
+  trustScore: 1,
+};
+
+test("applies batched inventory updates in order", async (context) => {
+  context.mock.method(console, "error", () => {});
+  const socket = new FakeWebSocket();
+  const available: Array<[string, string[]]> = [];
+  const client = new WsTrackerClient({
+    trackerUrl: "ws://tracker.example/ws",
+    broadcastId: "live",
+    peerId: "browser-a",
+    reportPeerState: false,
+    onSegmentAvailable: (peerId, segments) => available.push([peerId, segments]),
+    webSocketFactory: () => socket as unknown as WebSocket,
+  });
+  client.setSessionToken("test-session");
+  const started = client.start();
+  socket.open();
+  await started;
+  const deliver = (message: unknown): void =>
+    socket.onmessage?.({ data: JSON.stringify(message) } as MessageEvent);
+  deliver({
+    type: "peer_list",
+    broadcastId: "live",
+    peers: [
+      { ...remotePeer, id: "browser-b", segments: ["s1.ts", "s2.ts"] },
+      { ...remotePeer, id: "browser-c", segments: ["c1.ts"] },
+    ],
+  });
+  deliver({
+    type: "segment_inventory_batch",
+    broadcastId: "live",
+    updates: [
+      { peerId: "browser-b", added: ["s3.ts"], removed: ["s1.ts"] },
+      { peerId: "browser-c", segments: ["c2.ts"], replace: true },
+      { peerId: "browser-unknown", added: ["x.ts"], removed: [] },
+    ],
+  });
+  // A malformed batch is rejected as a whole.
+  deliver({
+    type: "segment_inventory_batch",
+    broadcastId: "live",
+    updates: [{ peerId: "browser-b", added: ["bad.ts"] }],
+  });
+  const inventories = Object.fromEntries(
+    client.getAllPeers().map((peer) => [peer.id, peer.segments]),
+  );
+  client.stop();
+
+  assert.deepEqual(inventories, {
+    "browser-b": ["s2.ts", "s3.ts"],
+    "browser-c": ["c2.ts"],
+  });
+  assert.deepEqual(available, [
+    ["browser-b", ["s3.ts"]],
+    ["browser-c", ["c2.ts"]],
+    ["browser-unknown", ["x.ts"]],
+  ]);
 });
