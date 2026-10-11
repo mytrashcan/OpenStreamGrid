@@ -84,7 +84,7 @@ const binaryBytes = (value: unknown): Uint8Array | undefined => {
 
 const isSegmentId = (value: string): boolean =>
   value.length <= 1024 &&
-  /^(?!.*(?:^|\/)\.\.(?:\/|$))[-A-Za-z0-9_./]+\.ts$/.test(value);
+  /^(?!.*(?:^|\/)\.\.(?:\/|$))[-A-Za-z0-9_./]+\.(?:ts|m4s)$/.test(value);
 
 const requestId = (): string => {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();

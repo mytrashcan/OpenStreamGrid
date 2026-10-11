@@ -638,3 +638,32 @@ test("replaces TURN credentials when the peer session is refreshed", async (cont
   assert.equal(registrations, 2);
   assert.deepEqual(issued, ["credential-1", "credential-2"]);
 });
+
+test("routes CMAF/fMP4 media segments through P2P and keeps init segments on origin", () => {
+  const plugin = new OpenStreamGridHlsPlugin({
+    trackerUrl: "ws://tracker.example/ws",
+    broadcastId: "live",
+    verifySegments: false,
+    peerParticipation: false,
+  });
+  class OriginalLoader {}
+  const hls = { config: { loader: OriginalLoader } } as unknown as Hls;
+  plugin.attach(hls);
+  const LoaderClass = hls.config.loader as unknown as new (config: unknown) => {
+    isMediaSegmentUrl(url: string): boolean;
+  };
+  const loader = new LoaderClass(hls.config);
+  try {
+    assert.equal(loader.isMediaSegmentUrl("https://origin.example/hls/low/e_segment_000001.m4s"), true);
+    assert.equal(loader.isMediaSegmentUrl("https://origin.example/hls/low/e_segment_000001.ts"), true);
+    assert.equal(loader.isMediaSegmentUrl("https://origin.example/hls/low/e_init_low.mp4"), false);
+    assert.equal(loader.isMediaSegmentUrl("https://origin.example/hls/low/stream.m3u8"), false);
+  } finally {
+    plugin.detach();
+  }
+  const internals = plugin as unknown as { segmentPeerId(url: string): string };
+  assert.match(
+    internals.segmentPeerId("https://origin.example/hls/low/e_segment_000001.m4s?token=abc"),
+    /^hls\/low\/e_segment_000001~q-[^/]+\.m4s$/,
+  );
+});

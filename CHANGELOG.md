@@ -6,6 +6,10 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Added
 
+- CMAF/fMP4 HLS: `HLS_SEGMENT_TYPE=fmp4` makes the origin emit `.m4s` media
+  segments with an immutable per-rendition init segment and SHA-256
+  sidecars; Node peers and the browser SDK share `.m4s` segments, while init
+  segments load from the origin. The browser E2E runs for both formats.
 - `sdk-publish.yml` publishes `@openstreamgrid/sdk` to npm with provenance
   when a GitHub release is published (opt-in via the `SDK_NPM_PUBLISH`
   repository variable). The SDK package now has repository metadata and a

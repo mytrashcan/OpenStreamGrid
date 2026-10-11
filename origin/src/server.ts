@@ -17,6 +17,8 @@ import {
   DEFAULT_HASH_INTERVAL_MS,
   DEFAULT_PLAYLIST_SIZE,
   DEFAULT_SEGMENT_DURATION_SECONDS,
+  HLS_SEGMENT_TYPES,
+  type HlsSegmentType,
   MultiHlsStreamer,
   type MultiStreamController,
   type StreamController,
@@ -71,6 +73,7 @@ export interface OriginConfiguration {
   segmentDurationSeconds: number;
   playlistSize: number;
   hashIntervalMs: number;
+  segmentType: HlsSegmentType;
   ffmpegPath?: string;
 }
 
@@ -119,6 +122,14 @@ const httpUrl = (value: string, label: string): string => {
     throw new Error(`${label} must use HTTP or HTTPS`);
   }
   return url.href;
+};
+
+const parseSegmentType = (value: string | undefined): HlsSegmentType => {
+  const segmentType = (value ?? "mpegts").trim().toLowerCase();
+  if (!(HLS_SEGMENT_TYPES as readonly string[]).includes(segmentType)) {
+    throw new Error(`HLS_SEGMENT_TYPE must be one of ${HLS_SEGMENT_TYPES.join(", ")}`);
+  }
+  return segmentType as HlsSegmentType;
 };
 
 /** Parses and validates origin process configuration before startup. */
@@ -183,6 +194,7 @@ export const parseOriginConfiguration = (
       environment.HASH_INTERVAL_MS ?? String(DEFAULT_HASH_INTERVAL_MS),
       "HASH_INTERVAL_MS",
     ),
+    segmentType: parseSegmentType(environment.HLS_SEGMENT_TYPE),
     ...(ffmpegPath ? { ffmpegPath } : {}),
   };
 };
@@ -190,6 +202,8 @@ export const parseOriginConfiguration = (
 const contentTypes: Record<string, string> = {
   ".m3u8": "application/vnd.apple.mpegurl",
   ".ts": "video/mp2t",
+  ".m4s": "video/iso.segment",
+  ".mp4": "video/mp4",
   ".sha256": "text/plain; charset=utf-8",
 };
 
@@ -621,6 +635,7 @@ const run = async (): Promise<void> => {
     segmentDurationSeconds: configuration.segmentDurationSeconds,
     playlistSize: configuration.playlistSize,
     hashIntervalMs: configuration.hashIntervalMs,
+    segmentType: configuration.segmentType,
     ...(configuration.ffmpegPath
       ? { ffmpegPath: configuration.ffmpegPath }
       : {}),

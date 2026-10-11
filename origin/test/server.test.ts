@@ -67,7 +67,13 @@ test("validates origin environment configuration", () => {
     segmentDurationSeconds: 2,
     playlistSize: 8,
     hashIntervalMs: 250,
+    segmentType: "mpegts",
   });
+  assert.equal(parseOriginConfiguration({ HLS_SEGMENT_TYPE: " FMP4 " }).segmentType, "fmp4");
+  assert.throws(
+    () => parseOriginConfiguration({ HLS_SEGMENT_TYPE: "cmaf" }),
+    /HLS_SEGMENT_TYPE must be one of mpegts, fmp4/,
+  );
   assert.throws(
     () => parseOriginConfiguration({ PORT: "8080x" }),
     /PORT must be an integer between 1 and 65535/,
@@ -399,4 +405,46 @@ test("creates hashes for nested variant segments without allowing traversal", as
     streamer.ensureHash("../outside.ts"),
     /Invalid segment name/,
   );
+});
+
+test("generates CMAF/fMP4 segments with per-rendition init segments", () => {
+  const argumentsFor = (streamer: HlsStreamer): string[] =>
+    (streamer as unknown as { ffmpegArguments(): string[] }).ffmpegArguments();
+
+  const mpegts = argumentsFor(new HlsStreamer({ outputDirectory: "/tmp/hls" }));
+  assert.equal(mpegts.includes("-hls_segment_type"), false);
+  assert.match(mpegts[mpegts.indexOf("-hls_segment_filename") + 1] ?? "", /_segment_%06d\.ts$/);
+
+  const fmp4 = argumentsFor(new HlsStreamer({ outputDirectory: "/tmp/hls", segmentType: "fmp4" }));
+  assert.equal(fmp4[fmp4.indexOf("-hls_segment_type") + 1], "fmp4");
+  assert.match(fmp4[fmp4.indexOf("-hls_fmp4_init_filename") + 1] ?? "", /_init_%v\.mp4$/);
+  assert.match(fmp4[fmp4.indexOf("-hls_segment_filename") + 1] ?? "", /_segment_%06d\.m4s$/);
+});
+
+test("hashes and serves fMP4 media and init segments", async (context) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "openstreamgrid-fmp4-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const streamer = new FakeStreamer(directory);
+  const handler = createOriginHandler(directory, streamer);
+  await streamer.start();
+  await writeFile(
+    streamer.playlistPath,
+    '#EXTM3U\n#EXT-X-MAP:URI="epoch_init_low.mp4"\nsegment_000001.m4s\n',
+  );
+  await writeFile(path.join(directory, "epoch_init_low.mp4"), "init-data");
+  await writeFile(path.join(directory, "segment_000001.m4s"), "fmp4-segment");
+
+  let response = await invoke(handler, "/hls/segment_000001.m4s");
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.headers["content-type"], "video/iso.segment");
+  assert.equal(response.body.toString(), "fmp4-segment");
+  response = await invoke(handler, "/hls/epoch_init_low.mp4");
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.headers["content-type"], "video/mp4");
+  response = await invoke(handler, "/hls/segment_000001.m4s.sha256");
+  assert.equal(
+    response.body.toString(),
+    `${createHash("sha256").update("fmp4-segment").digest("hex")}  segment_000001.m4s\n`,
+  );
+  await streamer.stop();
 });

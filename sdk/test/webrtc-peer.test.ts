@@ -126,3 +126,24 @@ test("applies tracker-issued ICE servers to new connections", async () => {
     [{ urls: "stun:stun.example.com:3478" }],
   ]);
 });
+
+test("accepts CMAF/fMP4 segment identifiers", async () => {
+  const peer = new BrowserWebRtcPeer({
+    broadcastId: "live",
+    peerId: "browser-a",
+    sendSignal: () => undefined,
+    segmentProvider: () => undefined,
+    iceServers: [],
+    peerConnectionFactory,
+  });
+  const controller = new AbortController();
+  controller.abort(new Error("cancelled before transfer"));
+  try {
+    await assert.rejects(
+      peer.requestSegment("browser-b", "hls/low/e_segment_000001.m4s", controller.signal),
+      (error: Error) => !/Invalid WebRTC segment ID/.test(error.message),
+    );
+  } finally {
+    peer.stop();
+  }
+});

@@ -61,6 +61,7 @@ const DEFAULT_ORIGIN_LATENCY_ESTIMATE_MS = 500;
 const ORIGIN_LATENCY_EMA_ALPHA = 0.3;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const logger = createLogger("sdk");
+const MEDIA_SEGMENT_EXTENSION = /\.(?:ts|m4s)$/;
 
 /** Keeps only well-formed ICE servers from a tracker registration response. */
 const parseIssuedIceServers = (value: unknown): RTCIceServer[] => {
@@ -238,8 +239,8 @@ class OpenStreamGridLoader implements Loader<LoaderContext> {
       return;
     }
 
-    // Only intercept .ts segments, let playlists pass through to default loader
-    if (!this.isTransportStreamUrl(url)) {
+    // Only intercept media segments; playlists and init segments use the default loader.
+    if (!this.isMediaSegmentUrl(url)) {
       this.fallbackToOrigin(context, config, callbacks);
       return;
     }
@@ -329,9 +330,10 @@ class OpenStreamGridLoader implements Loader<LoaderContext> {
     fallback.load(context, config, callbacks);
   }
 
-  private isTransportStreamUrl(url: string): boolean {
+  /** MPEG-TS (.ts) and CMAF/fMP4 (.m4s) media segments; init segments and playlists use the default loader. */
+  private isMediaSegmentUrl(url: string): boolean {
     try {
-      return new URL(url, globalThis.location?.href).pathname.endsWith(".ts");
+      return MEDIA_SEGMENT_EXTENSION.test(new URL(url, globalThis.location?.href).pathname);
     } catch {
       return false;
     }
@@ -1212,8 +1214,9 @@ export class OpenStreamGridHlsPlugin {
       const pathname = url.pathname.replace(/^\/+/, "");
       if (!url.search) return pathname;
       const suffix = urlFingerprint(url.search);
-      return pathname.endsWith(".ts")
-        ? `${pathname.slice(0, -3)}~q-${suffix}.ts`
+      const extension = MEDIA_SEGMENT_EXTENSION.exec(pathname)?.[0];
+      return extension
+        ? `${pathname.slice(0, -extension.length)}~q-${suffix}${extension}`
         : `${pathname}~q-${suffix}`;
     } catch {
       return segmentUrl.replace(/^\/+/, "");

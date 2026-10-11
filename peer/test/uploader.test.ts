@@ -144,3 +144,13 @@ test("coalesces lifecycle calls and cannot restart after shutdown", async () => 
     /cannot be started after shutdown begins/,
   );
 });
+
+test("serves CMAF/fMP4 segments with the ISO segment content type", async (context) => {
+  const { baseUrl, cache } = await startServer(context);
+  cache.set("epoch_segment_000001.m4s", Buffer.from("fmp4-data"));
+
+  const response = await fetch(`${baseUrl}/segments/epoch_segment_000001.m4s`);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-type"), "video/iso.segment");
+  assert.equal(await response.text(), "fmp4-data");
+});

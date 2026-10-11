@@ -704,7 +704,7 @@ export class WebRtcTransport implements TransportAdapter {
           if (
             message.type !== "segment_request" ||
             typeof message.segmentName !== "string" ||
-            !/^[-A-Za-z0-9_.]+\.ts$/.test(message.segmentName)
+            !/^[-A-Za-z0-9_.]+\.(?:ts|m4s)$/.test(message.segmentName)
           ) {
             throw new Error("Invalid DataChannel segment request");
           }

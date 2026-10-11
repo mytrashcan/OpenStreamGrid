@@ -70,7 +70,8 @@ const delay = async (milliseconds: number, signal: AbortSignal): Promise<void> =
   });
 };
 
-const playlistSegments = (playlist: string, playlistUrl: URL): string[] =>
+/** Media segment names listed in an HLS media playlist. */
+export const playlistSegments = (playlist: string, playlistUrl: URL): string[] =>
   playlist
     .split("\n")
     .map((line) => line.trim())
@@ -80,7 +81,8 @@ const playlistSegments = (playlist: string, playlistUrl: URL): string[] =>
 
 const pathName = (url: URL): string | undefined => {
   const name = url.pathname.split("/").at(-1);
-  return name && /^[-A-Za-z0-9_.]+\.ts$/.test(name) ? name : undefined;
+  // MPEG-TS (.ts) and CMAF/fMP4 (.m4s) media segments; init segments stay on origin.
+  return name && /^[-A-Za-z0-9_.]+\.(?:ts|m4s)$/.test(name) ? name : undefined;
 };
 
 class PeerApplication {
