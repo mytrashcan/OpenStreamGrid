@@ -114,7 +114,12 @@ export type SdkEvent =
 /** Message types for tracker WebSocket communication. */
 /** Messages emitted by the browser SDK to the tracker. */
 export type WsClientMessage =
-  | { type: "subscribe"; broadcastId: string; peerId: string }
+  | {
+      type: "subscribe";
+      broadcastId: string;
+      peerId: string;
+      features?: string[];
+    }
   | {
       type: "heartbeat";
       broadcastId: string;
@@ -139,6 +144,11 @@ export type WsClientMessage =
       stats: PeerTrafficStats;
     }
   | WebRtcSignalMessage;
+
+/** Net change to one peer's segment inventory within a batch. */
+export type SegmentInventoryUpdate =
+  | { peerId: string; added: string[]; removed: string[] }
+  | { peerId: string; segments: string[]; replace: true };
 
 /** WebRTC offer or answer relayed by the tracker. */
 export interface WebRtcSignalMessage {
@@ -167,6 +177,11 @@ export type WsServerMessage =
       peerId: string;
       added: string[];
       removed: string[];
+    }
+  | {
+      type: "segment_inventory_batch";
+      broadcastId: string;
+      updates: SegmentInventoryUpdate[];
     }
   | { type: "stats_update"; broadcastId: string; peerId: string; stats: unknown }
   | { type: "peer_list"; broadcastId: string; peers: PeerInfo[] }

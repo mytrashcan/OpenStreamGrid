@@ -4,10 +4,11 @@
  * Implements exponential-backoff reconnection and periodic status reporting.
  */
 
-import { createLogger } from "@openstreamgrid/common";
+import { createLogger, WS_FEATURE_INVENTORY_BATCH } from "@openstreamgrid/common";
 import type {
   PeerInfo,
   PeerTrafficStats,
+  SegmentInventoryUpdate,
   WebRtcSignalMessage,
   WsClientMessage,
   WsServerMessage,
@@ -91,6 +92,22 @@ const parsePeer = (value: unknown): PeerInfo => {
   };
 };
 
+const parseInventoryUpdate = (value: unknown): SegmentInventoryUpdate => {
+  if (!isObject(value) || typeof value.peerId !== "string") {
+    throw new TypeError("Segment inventory update is invalid");
+  }
+  if (value.replace === true) {
+    if (!isStringArray(value.segments)) {
+      throw new TypeError("Segment inventory update is invalid");
+    }
+    return { peerId: value.peerId, segments: value.segments, replace: true };
+  }
+  if (!isStringArray(value.added) || !isStringArray(value.removed)) {
+    throw new TypeError("Segment inventory update is invalid");
+  }
+  return { peerId: value.peerId, added: value.added, removed: value.removed };
+};
+
 const parseServerMessage = (raw: unknown): WsServerMessage => {
   if (typeof raw !== "string") {
     throw new TypeError("WebSocket message must be text");
@@ -145,6 +162,15 @@ const parseServerMessage = (raw: unknown): WsServerMessage => {
         peerId: value.peerId,
         added: value.added,
         removed: value.removed,
+      };
+    case "segment_inventory_batch":
+      if (!Array.isArray(value.updates)) {
+        throw new TypeError("Segment inventory batch is invalid");
+      }
+      return {
+        type: "segment_inventory_batch",
+        broadcastId,
+        updates: value.updates.map(parseInventoryUpdate),
       };
     case "stats_update":
       if (typeof value.peerId !== "string") {
@@ -409,6 +435,7 @@ export class WsTrackerClient {
         type: "subscribe",
         broadcastId: this.options.broadcastId,
         peerId: this.options.peerId,
+        features: [WS_FEATURE_INVENTORY_BATCH],
       });
 
       if (this.reportPeerState) this.reportStatusSafely();
@@ -512,28 +539,22 @@ export class WsTrackerClient {
           break;
         }
         case "segment_available": {
-          const peer = this.peers.get(msg.peerId);
-          if (peer) {
-            peer.segments = msg.replace
-              ? [...msg.segments]
-              : [...new Set([...peer.segments, ...msg.segments])];
-          }
-          callSafely("onSegmentAvailable", () =>
-            this.options.onSegmentAvailable?.(msg.peerId, msg.segments),
-          );
+          if (msg.replace) this.replaceInventory(msg.peerId, msg.segments);
+          else this.applyInventoryDelta(msg.peerId, msg.segments, []);
           break;
         }
         case "segment_inventory_delta": {
-          const peer = this.peers.get(msg.peerId);
-          if (peer) {
-            const segments = new Set(peer.segments);
-            for (const segment of msg.removed) segments.delete(segment);
-            for (const segment of msg.added) segments.add(segment);
-            peer.segments = [...segments];
+          this.applyInventoryDelta(msg.peerId, msg.added, msg.removed);
+          break;
+        }
+        case "segment_inventory_batch": {
+          for (const update of msg.updates) {
+            if ("replace" in update) {
+              this.replaceInventory(update.peerId, update.segments);
+            } else {
+              this.applyInventoryDelta(update.peerId, update.added, update.removed);
+            }
           }
-          callSafely("onSegmentAvailable", () =>
-            this.options.onSegmentAvailable?.(msg.peerId, msg.added),
-          );
           break;
         }
         case "webrtc_offer":
@@ -548,6 +569,31 @@ export class WsTrackerClient {
     } catch (error) {
       logger.error("invalid_tracker_message", error);
     }
+  }
+
+  private replaceInventory(peerId: string, segments: string[]): void {
+    const peer = this.peers.get(peerId);
+    if (peer) peer.segments = [...segments];
+    callSafely("onSegmentAvailable", () =>
+      this.options.onSegmentAvailable?.(peerId, segments),
+    );
+  }
+
+  private applyInventoryDelta(
+    peerId: string,
+    added: string[],
+    removed: string[],
+  ): void {
+    const peer = this.peers.get(peerId);
+    if (peer) {
+      const segments = new Set(peer.segments);
+      for (const segment of removed) segments.delete(segment);
+      for (const segment of added) segments.add(segment);
+      peer.segments = [...segments];
+    }
+    callSafely("onSegmentAvailable", () =>
+      this.options.onSegmentAvailable?.(peerId, added),
+    );
   }
 
   private send(msg: WsClientMessage): boolean {

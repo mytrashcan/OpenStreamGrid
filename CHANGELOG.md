@@ -6,6 +6,12 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Added
 
+- WebSocket `inventory_batch` subscribe feature: the tracker merges segment
+  inventory updates per peer and sends them every 250 ms as one
+  `segment_inventory_batch`, instead of sending each report to every peer. The
+  SDK and the Node peer declare it; clients that do not keep receiving every
+  report as before. In the capacity benchmark one tracker serves 2000 peers in
+  one broadcast at a third of a core, where legacy clients saturate it at 1000.
 - `npm run benchmark:tracker-capacity` measures one tracker's control-plane
   capacity; results are in `docs/tracker-capacity.md`.
 - `TRACKER_WS_MAX_CONNECTIONS_PER_IP` (default 20) for viewers sharing one NAT
@@ -59,6 +65,9 @@ All notable changes to OpenStreamGrid are documented in this file.
   peers in one broadcast, REST p95 latency dropped from about 1 s to 7 ms.
 - WebSocket fan-out serializes each message once and only visits the
   broadcast's own subscribers.
+- Deleting a broadcast, or letting an origin lease expire, closes its
+  WebSocket subscribers with code `4004` and drops pending inventory updates,
+  so a new broadcast that reuses the ID starts clean.
 
 ### Fixed
 

@@ -12,11 +12,15 @@
 //   node scripts/tracker-capacity.mjs --api-key ... --peers 100,250,500 \
 //     --tracker-pid <pid>
 //
+// Simulated peers declare the `inventory_batch` subscribe feature like the SDK
+// and Node peer do; pass --inventory-batch false to measure legacy clients that
+// receive one message per inventory report.
+//
 // Reports, per peer count: probe latency for a REST lookup of a segment peers
-// currently hold (p50/p95/p99) and failed probes, WebSocket messages delivered
-// per second, connection failures and drops, and tracker CPU (CPU time used
-// during the stage divided by its wall time) and peak RSS when --tracker-pid
-// is given.
+// currently hold (p50/p95/p99) and failed probes, WebSocket messages and
+// megabytes delivered per second, connection failures and drops, and tracker
+// CPU (CPU time used during the stage divided by its wall time) and peak RSS
+// when --tracker-pid is given.
 
 import { execFileSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
@@ -35,6 +39,7 @@ const durationMs = Number(args.duration ?? 30) * 1_000;
 const segmentIntervalMs = Number(args["segment-interval"] ?? 2) * 1_000;
 const reportIntervalMs = Number(args["report-interval"] ?? 5) * 1_000;
 const trackerPid = args["tracker-pid"];
+const inventoryBatch = (args["inventory-batch"] ?? "true") !== "false";
 const cachedSegments = 12;
 const CONNECT_BATCH = 50;
 
@@ -110,7 +115,7 @@ const runStage = async (peerCount) => {
       { method: "POST", body: JSON.stringify({ id: peerId, address: `webrtc://${peerId}` }) },
       index,
     );
-    peers.push({ index, peerId, sessionToken, segment: 0, received: 0, socket: undefined });
+    peers.push({ index, peerId, sessionToken, segment: 0, received: 0, receivedBytes: 0, socket: undefined });
   }
 
   let errors = 0;
@@ -126,19 +131,28 @@ const runStage = async (peerCount) => {
             },
           });
           peer.socket = socket;
-          socket.on("message", () => {
+          socket.on("message", (data) => {
             peer.received += 1;
+            peer.receivedBytes += data.length;
           });
           socket.on("error", () => {
             errors += 1;
             resolve();
           });
-          socket.on("close", (code) => {
-            if (!peer.closing) closeCodes.set(code, (closeCodes.get(code) ?? 0) + 1);
+          socket.on("close", (code, reason) => {
+            const key = `${code} ${reason.toString()}`.trim();
+            if (!peer.closing) closeCodes.set(key, (closeCodes.get(key) ?? 0) + 1);
             resolve();
           });
           socket.once("open", () => {
-            socket.send(JSON.stringify({ type: "subscribe", broadcastId, peerId: peer.peerId }));
+            socket.send(
+              JSON.stringify({
+                type: "subscribe",
+                broadcastId,
+                peerId: peer.peerId,
+                ...(inventoryBatch ? { features: ["inventory_batch"] } : {}),
+              }),
+            );
             resolve();
           });
         });
@@ -181,6 +195,7 @@ const runStage = async (peerCount) => {
   });
 
   const receivedBefore = peers.reduce((sum, peer) => sum + peer.received, 0);
+  const receivedBytesBefore = peers.reduce((sum, peer) => sum + peer.receivedBytes, 0);
   const latencies = [];
   const samples = [];
   let probeFailures = 0;
@@ -204,6 +219,7 @@ const runStage = async (peerCount) => {
   const elapsedSeconds = (Date.now() - startedAt) / 1_000;
   const endSample = sampleTracker();
   const delivered = peers.reduce((sum, peer) => sum + peer.received, 0) - receivedBefore;
+  const deliveredBytes = peers.reduce((sum, peer) => sum + peer.receivedBytes, 0) - receivedBytesBefore;
 
   const openAtEnd = peers.filter((peer) => peer.socket?.readyState === WebSocket.OPEN).length;
   for (const timer of timers) {
@@ -224,6 +240,7 @@ const runStage = async (peerCount) => {
     probeP99Ms: latencies.length ? percentile(latencies, 0.99) : undefined,
     probeFailures,
     wsMessagesPerSecond: delivered / elapsedSeconds,
+    wsMegabytesPerSecond: deliveredBytes / elapsedSeconds / 1_000_000,
     errors,
     connectFailures,
     openAtEnd,
@@ -245,12 +262,12 @@ for (const peerCount of peerCounts) {
 
 const fixed = (value, digits = 1) => (value === undefined ? "n/a" : value.toFixed(digits));
 const ms = (value) => (value === undefined ? "n/a" : `${fixed(value)} ms`);
-console.log("| Peers | Probe p50 | Probe p95 | Probe p99 | Failed probes | WS msgs/s delivered | Tracker CPU | Tracker RSS | Connect failures | Dropped during run |");
-console.log("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+console.log("| Peers | Probe p50 | Probe p95 | Probe p99 | Failed probes | WS msgs/s delivered | WS MB/s delivered | Tracker CPU | Tracker RSS | Connect failures | Dropped during run |");
+console.log("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
 for (const result of results) {
   console.log(
     `| ${result.peers} | ${ms(result.probeP50Ms)} | ${ms(result.probeP95Ms)} | ${ms(result.probeP99Ms)} | ${result.probeFailures} | ` +
-      `${fixed(result.wsMessagesPerSecond, 0)} | ${fixed(result.cpuPercent)}% | ${fixed(result.rssMaxMb, 0)} MB | ` +
+      `${fixed(result.wsMessagesPerSecond, 0)} | ${fixed(result.wsMegabytesPerSecond)} | ${fixed(result.cpuPercent)}% | ${fixed(result.rssMaxMb, 0)} MB | ` +
       `${result.connectFailures} | ${result.peers - result.connectFailures - result.openAtEnd} |`,
   );
 }

@@ -269,16 +269,32 @@ without an `Origin` header, such as Node peers, are not subject to the list.
 The first client message subscribes the connection:
 
 ```json
-{ "type": "subscribe", "broadcastId": "live", "peerId": "peer-a" }
+{
+  "type": "subscribe",
+  "broadcastId": "live",
+  "peerId": "peer-a",
+  "features": ["inventory_batch"]
+}
 ```
+
+`features` is optional, and the tracker ignores entries it does not know.
+With `inventory_batch`, the tracker merges inventory updates per peer and sends
+them every 250 ms as one `segment_inventory_batch` instead of a
+`segment_available` or `segment_inventory_delta` message for every report.
+Without it, a client receives every report as it arrives. With batching, a
+client receives four messages per second for every 256 peers whose inventory
+changed in an interval; without it, each report becomes one message to every
+peer in the broadcast. The SDK and the Node peer declare it.
+
+Deleting a broadcast closes its subscribers' connections with code `4004`.
 
 Client-to-server messages:
 
 | Type | Additional fields | Purpose |
 | --- | --- | --- |
-| `subscribe` | `broadcastId`, `peerId` | Select broadcast and peer identity |
+| `subscribe` | `broadcastId`, `peerId`, `features?` | Select broadcast and peer identity, and negotiate optional features |
 | `heartbeat` | `latencyMs?`, `uploadBandwidthBps?`, `successRate?` | Refresh health |
-| `report_segments` | `segments`, `replace?` | Update possession |
+| `report_segments` | `segments` and `replace?`, or `added` and `removed` | Update possession with a full list or a delta |
 | `report_stats` | `stats` | Replace cumulative counters |
 | `webrtc_offer` | `targetPeerId`, `requestId`, `sdp` | Forward WebRTC offer |
 | `webrtc_answer` | `targetPeerId`, `requestId`, `sdp` | Forward WebRTC answer |
@@ -290,8 +306,16 @@ Server-to-client messages:
 | `peer_list` | `broadcastId`, `peers` | Initial/current peer snapshot |
 | `peer_joined` | `broadcastId`, `peer` | Peer joined |
 | `peer_left` | `broadcastId`, `peerId` | Peer left |
-| `segment_available` | `broadcastId`, `peerId`, `segments` | Availability changed |
+| `segment_available` | `broadcastId`, `peerId`, `segments`, `replace?` | A peer reported a segment list; `replace` means it is the full inventory |
+| `segment_inventory_delta` | `broadcastId`, `peerId`, `added`, `removed` | A peer reported a delta |
+| `segment_inventory_batch` | `broadcastId`, `updates` | Net inventory changes since the last batch, for `inventory_batch` clients |
 | `webrtc_offer` / `webrtc_answer` | `peerId`, `targetPeerId`, `requestId`, `sdp` | Relayed signaling |
+
+Each entry in `updates` is either `{ "peerId", "added", "removed" }` or
+`{ "peerId", "segments", "replace": true }`. Apply entries in order, removals
+before additions, as for `segment_inventory_delta`. Updates from a peer that
+left before the batch was sent are dropped, so `peer_left` is never followed by
+a stale update. A batch carries at most 256 entries; larger batches are split.
 
 Malformed frames are rejected. Connections are closed during tracker shutdown;
 clients should reconnect with exponential backoff and resubscribe.

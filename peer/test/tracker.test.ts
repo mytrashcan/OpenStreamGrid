@@ -116,6 +116,72 @@ test("uses validated WebSocket peer updates and reconnects after disconnect", as
   }
 });
 
+test("negotiates and applies batched inventory updates", async () => {
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  const port = (server.address() as AddressInfo).port;
+  const subscriptions: WsClientMessage[] = [];
+  server.on("connection", (socket) => {
+    socket.on("message", (data) => {
+      const message = JSON.parse(data.toString()) as WsClientMessage;
+      if (message.type !== "subscribe") return;
+      subscriptions.push(message);
+      socket.send(
+        JSON.stringify({
+          type: "peer_list",
+          broadcastId: "live",
+          peers: [
+            { ...remotePeer, segments: ["s1.ts", "s2.ts"] },
+            { ...remotePeer, id: "peer-c", segments: ["c1.ts"] },
+          ],
+        }),
+      );
+      socket.send(
+        JSON.stringify({
+          type: "segment_inventory_batch",
+          broadcastId: "live",
+          updates: [
+            { peerId: "peer-b", added: ["s3.ts"], removed: ["s1.ts"] },
+            { peerId: "peer-c", segments: ["c2.ts"], replace: true },
+          ],
+        }),
+      );
+    });
+  });
+  const client = new TrackerClient({
+    trackerUrl: `http://127.0.0.1:${port}`,
+    broadcastId: "live",
+    peerId: "peer-a",
+    initialSessionToken: "test-peer-session",
+    heartbeat: () => ({}),
+    stats,
+    segments: () => [],
+  });
+
+  try {
+    await client.start();
+    await waitFor(async () => (await client.listPeers("s3.ts")).length === 1);
+    assert.deepEqual(
+      Object.fromEntries(client.allPeers().map((peer) => [peer.id, peer.segments])),
+      { "peer-b": ["s2.ts", "s3.ts"], "peer-c": ["c2.ts"] },
+    );
+    assert.deepEqual(subscriptions, [
+      {
+        type: "subscribe",
+        broadcastId: "live",
+        peerId: "peer-a",
+        features: ["inventory_batch"],
+      },
+    ]);
+  } finally {
+    client.stop();
+    for (const socket of server.clients) socket.terminate();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+});
+
 test("backs off when sockets close before a valid peer list", async (context) => {
   context.mock.method(console, "error", () => {});
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
