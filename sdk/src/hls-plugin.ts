@@ -498,6 +498,9 @@ export class OpenStreamGridHlsPlugin {
       onDisconnected: () => {
         this.emit({ type: "ws_disconnected" });
       },
+      onError: () => {
+        this.emit({ type: "ws_error", message: "Tracker WebSocket error" });
+      },
     });
   }
 
@@ -906,7 +909,17 @@ export class OpenStreamGridHlsPlugin {
       );
       await this.verifySegment(segmentName, segmentUrl, data, "peer");
       return { index, peerId: candidate.peer.id, data };
-    } catch {
+    } catch (error) {
+      // Attempts cancelled because another peer won or the request ended
+      // are not failures; report everything else for diagnosis.
+      if (!signal.aborted) {
+        this.emit({
+          type: "peer_failed",
+          segment: segmentName,
+          peerId: candidate.peer.id,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
       return { index };
     }
   }
@@ -929,8 +942,10 @@ export class OpenStreamGridHlsPlugin {
           signal,
           peer.uploadBandwidthBps,
         );
-      } catch {
-        throw new Error("WebRTC peer unavailable");
+      } catch (error) {
+        throw new Error(
+          `WebRTC peer unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     }
 
