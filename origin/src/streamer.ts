@@ -11,7 +11,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
-import { createLogger } from "@openstreamgrid/common";
+import { createLogger, isMediaSegmentPath } from "@openstreamgrid/common";
 
 export const DEFAULT_HASH_INTERVAL_MS = 250;
 const STOP_TIMEOUT_MS = 5_000;
@@ -21,8 +21,6 @@ export const DEFAULT_SEGMENT_DURATION_SECONDS = 2;
 export type HlsSegmentType = "mpegts" | "fmp4";
 export const HLS_SEGMENT_TYPES: readonly HlsSegmentType[] = ["mpegts", "fmp4"];
 
-/** Media segment names the origin hashes and peers may share. */
-export const MEDIA_SEGMENT_PATTERN = /^[-A-Za-z0-9_./]+\.(?:ts|m4s)$/;
 export const DEFAULT_PLAYLIST_SIZE = 8;
 const TEST_PATTERN_FRAME_RATE = 30;
 const TEST_AUDIO_FREQUENCY_HZ = 1_000;
@@ -286,7 +284,7 @@ export class HlsStreamer implements StreamController {
   }
 
   async ensureHash(segmentName: string): Promise<string> {
-    if (!MEDIA_SEGMENT_PATTERN.test(segmentName)) {
+    if (!isMediaSegmentPath(segmentName)) {
       throw new Error("Invalid segment name");
     }
     const outputDirectory = path.resolve(this.options.outputDirectory);
@@ -489,7 +487,7 @@ export class HlsStreamer implements StreamController {
           .split("\n")
           .map((line) => line.trim())
           .filter(
-            (line) => line !== "" && !line.startsWith("#") && MEDIA_SEGMENT_PATTERN.test(line),
+            (line) => line !== "" && !line.startsWith("#") && isMediaSegmentPath(line),
           );
         await Promise.all(
           segmentNames.map(async (segmentName) => {

@@ -446,5 +446,29 @@ test("hashes and serves fMP4 media and init segments", async (context) => {
     response.body.toString(),
     `${createHash("sha256").update("fmp4-segment").digest("hex")}  segment_000001.m4s\n`,
   );
+  // Init segments are never shared by peers and have no sidecar.
+  response = await invoke(handler, "/hls/epoch_init_low.mp4.sha256");
+  assert.equal(response.statusCode, 404);
   await streamer.stop();
+});
+
+test("pre-generates sidecars for fMP4 segments listed in variant playlists", async (context) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "openstreamgrid-fmp4-scan-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  await mkdir(path.join(directory, "low"), { recursive: true });
+  await writeFile(
+    path.join(directory, "low", "stream.m3u8"),
+    '#EXTM3U\n#EXT-X-MAP:URI="e_init_low.mp4"\n#EXTINF:2.0,\ne_segment_000001.m4s\n',
+  );
+  await writeFile(path.join(directory, "low", "e_init_low.mp4"), "init");
+  await writeFile(path.join(directory, "low", "e_segment_000001.m4s"), "media");
+  const streamer = new HlsStreamer({ outputDirectory: directory, segmentType: "fmp4" });
+
+  await (streamer as unknown as { generatePublishedHashes(): Promise<void> }).generatePublishedHashes();
+
+  assert.equal(
+    await readFile(path.join(directory, "low", "e_segment_000001.m4s.sha256"), "utf8"),
+    `${createHash("sha256").update("media").digest("hex")}  low/e_segment_000001.m4s\n`,
+  );
+  await assert.rejects(readFile(path.join(directory, "low", "e_init_low.mp4.sha256")));
 });

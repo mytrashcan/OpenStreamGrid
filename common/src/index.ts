@@ -312,6 +312,20 @@ const writeLog = (
 };
 
 /** Creates a structured logger whose entries always identify their service. */
+/**
+ * HLS media segments that peers cache and share: MPEG-TS (`.ts`) and
+ * CMAF/fMP4 (`.m4s`). Init segments and playlists always load from the origin.
+ */
+export const MEDIA_SEGMENT_EXTENSION_PATTERN = /\.(?:ts|m4s)$/;
+
+/** True for a media segment path made of safe characters (`/` allowed). */
+export const isMediaSegmentPath = (value: string): boolean =>
+  /^[-A-Za-z0-9_./]+$/.test(value) && MEDIA_SEGMENT_EXTENSION_PATTERN.test(value);
+
+/** True for a bare media segment file name made of safe characters. */
+export const isMediaSegmentFileName = (value: string): boolean =>
+  /^[-A-Za-z0-9_.]+$/.test(value) && MEDIA_SEGMENT_EXTENSION_PATTERN.test(value);
+
 export const createLogger = (service: string): Logger => ({
   info: (event, context) => writeLog(service, "info", event, context),
   warn: (event, context) => writeLog(service, "warn", event, context),

@@ -5,6 +5,8 @@ import {
   createEmptyPeerTrafficStats,
   createLogger,
   parsePeerTrafficStats,
+  isMediaSegmentFileName,
+  isMediaSegmentPath,
 } from "../src/index.js";
 
 test("creates independent traffic snapshots and adds every metric", () => {
@@ -91,4 +93,15 @@ test("writes structured logs for every severity and error shape", (context) => {
   for (const entry of parsed) {
     assert.match(String(entry.timestamp), /^\d{4}-\d{2}-\d{2}T/);
   }
+});
+
+test("classifies HLS media segment names", () => {
+  for (const name of ["seg_000001.ts", "seg_000001.m4s", "low/seg_000001.m4s"]) {
+    assert.equal(isMediaSegmentPath(name), true, name);
+  }
+  for (const name of ["init_low.mp4", "stream.m3u8", "seg.ts.sha256", "low/seg 1.ts", ""]) {
+    assert.equal(isMediaSegmentPath(name), false, name);
+  }
+  assert.equal(isMediaSegmentFileName("seg_000001.m4s"), true);
+  assert.equal(isMediaSegmentFileName("low/seg_000001.m4s"), false);
 });

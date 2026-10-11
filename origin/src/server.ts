@@ -10,6 +10,7 @@ import { pipeline } from "node:stream/promises";
 import { pathToFileURL } from "node:url";
 import {
   createLogger,
+  isMediaSegmentPath,
   type BroadcastRegistration,
   type HealthStatus,
 } from "@openstreamgrid/common";
@@ -376,6 +377,11 @@ export const createOriginHandler = (
       }
       if (extension === ".sha256" && !(await fileExists(filePath))) {
         const segmentName = resolved.assetName.slice(0, -".sha256".length);
+        // Only media segments have sidecars; init segments and playlists do not.
+        if (!isMediaSegmentPath(segmentName)) {
+          sendJson(response, 404, { error: "File not found" });
+          return;
+        }
         try {
           filePath = await resolved.streamer.ensureHash(segmentName);
         } catch (error) {

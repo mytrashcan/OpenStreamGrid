@@ -2,7 +2,7 @@
 import { randomBytes } from "node:crypto";
 import { hostname } from "node:os";
 import { pathToFileURL } from "node:url";
-import { createLogger } from "@openstreamgrid/common";
+import { createLogger, isMediaSegmentFileName } from "@openstreamgrid/common";
 import WebSocket from "ws";
 import { SegmentCache } from "./cache.js";
 import { HybridSegmentFetcher } from "./fetcher.js";
@@ -81,8 +81,8 @@ export const playlistSegments = (playlist: string, playlistUrl: URL): string[] =
 
 const pathName = (url: URL): string | undefined => {
   const name = url.pathname.split("/").at(-1);
-  // MPEG-TS (.ts) and CMAF/fMP4 (.m4s) media segments; init segments stay on origin.
-  return name && /^[-A-Za-z0-9_.]+\.(?:ts|m4s)$/.test(name) ? name : undefined;
+  // Media segments only; init segments stay on the origin.
+  return name && isMediaSegmentFileName(name) ? name : undefined;
 };
 
 class PeerApplication {

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   createLogger,
+  isMediaSegmentFileName,
   type WebRtcSignalMessage,
   type WsClientMessage,
 } from "@openstreamgrid/common";
@@ -704,7 +705,7 @@ export class WebRtcTransport implements TransportAdapter {
           if (
             message.type !== "segment_request" ||
             typeof message.segmentName !== "string" ||
-            !/^[-A-Za-z0-9_.]+\.(?:ts|m4s)$/.test(message.segmentName)
+            !isMediaSegmentFileName(message.segmentName)
           ) {
             throw new Error("Invalid DataChannel segment request");
           }

@@ -28,6 +28,7 @@ import {
   type SegmentScheduler,
   type SegmentSchedulingContext,
   type SegmentSchedulingPlan,
+  MEDIA_SEGMENT_EXTENSION_PATTERN,
 } from "@openstreamgrid/common";
 import type {
   default as Hls,
@@ -61,7 +62,6 @@ const DEFAULT_ORIGIN_LATENCY_ESTIMATE_MS = 500;
 const ORIGIN_LATENCY_EMA_ALPHA = 0.3;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const logger = createLogger("sdk");
-const MEDIA_SEGMENT_EXTENSION = /\.(?:ts|m4s)$/;
 
 /** Keeps only well-formed ICE servers from a tracker registration response. */
 const parseIssuedIceServers = (value: unknown): RTCIceServer[] => {
@@ -333,7 +333,7 @@ class OpenStreamGridLoader implements Loader<LoaderContext> {
   /** MPEG-TS (.ts) and CMAF/fMP4 (.m4s) media segments; init segments and playlists use the default loader. */
   private isMediaSegmentUrl(url: string): boolean {
     try {
-      return MEDIA_SEGMENT_EXTENSION.test(new URL(url, globalThis.location?.href).pathname);
+      return MEDIA_SEGMENT_EXTENSION_PATTERN.test(new URL(url, globalThis.location?.href).pathname);
     } catch {
       return false;
     }
@@ -1214,7 +1214,7 @@ export class OpenStreamGridHlsPlugin {
       const pathname = url.pathname.replace(/^\/+/, "");
       if (!url.search) return pathname;
       const suffix = urlFingerprint(url.search);
-      const extension = MEDIA_SEGMENT_EXTENSION.exec(pathname)?.[0];
+      const extension = MEDIA_SEGMENT_EXTENSION_PATTERN.exec(pathname)?.[0];
       return extension
         ? `${pathname.slice(0, -extension.length)}~q-${suffix}${extension}`
         : `${pathname}~q-${suffix}`;

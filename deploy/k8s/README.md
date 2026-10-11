@@ -92,6 +92,9 @@ origin:
   extraEnv:
     - name: SEGMENT_DURATION_SECONDS
       value: "4"
+    # CMAF/fMP4 (.m4s) segments instead of MPEG-TS.
+    - name: HLS_SEGMENT_TYPE
+      value: fmp4
 ```
 
 ## Deploy with Kustomize

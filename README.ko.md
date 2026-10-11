@@ -17,7 +17,9 @@ OpenStreamGrid는 MPEG-TS(`.ts`) 또는 CMAF/fMP4(`.m4s`) 세그먼트를 쓰는
 받은 영상 세그먼트를 서로 공유하므로 Origin 서버와 CDN의 전송량을 줄일 수
 있습니다.
 
-LL-HLS의 부분 세그먼트(partial segment)는 로드맵 항목이며 아직 지원하지 않습니다.
+피어는 미디어 세그먼트를 공유하고 SHA-256으로 검증하며, fMP4 init 세그먼트와
+플레이리스트는 항상 Origin 또는 CDN에서 받습니다. LL-HLS의 부분 세그먼트(partial
+segment)는 로드맵 항목이며 아직 지원하지 않습니다.
 
 P2P 전송이 불가능하거나 재생 기한 안에 완료되지 않으면 즉시 Origin/CDN으로
 전환합니다. 따라서 피어가 접속을 종료하거나 응답이 느려져도 재생 경로를
