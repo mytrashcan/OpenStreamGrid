@@ -133,7 +133,20 @@ test("validates tracker environment configuration", () => {
         TURN_URLS: "stun:stun.example.com",
         TURN_SHARED_SECRET: "north-shared-secret-01",
       }),
-    /TURN_URLS entries must be turn: or turns: URLs/,
+    /TURN_URLS entries must be turn:\/turns: URIs/,
+  );
+  assert.throws(
+    () =>
+      parseTrackerConfiguration({
+        TURN_URLS: "turn:turn.example.com:3478 transport=udp",
+        TURN_SHARED_SECRET: "north-shared-secret-01",
+      }),
+    /TURN_URLS entries must be turn:\/turns: URIs/,
+  );
+  assert.equal(
+    parseTrackerConfiguration({ TURN_SHARED_SECRET: "  " }).turn,
+    undefined,
+    "a blank TURN_SHARED_SECRET placeholder means TURN is disabled",
   );
   assert.throws(
     () =>
@@ -167,7 +180,8 @@ test("returns TURN credentials bound to the peer session on join", async () => {
     expiresAt: string;
     iceServers: Array<{ urls: string[]; username: string; credential: string }>;
   };
-  const expirySeconds = Math.floor(Date.parse(body.expiresAt) / 1_000);
+  // Credentials outlive the session by a grace period covering refresh retries.
+  const expirySeconds = Math.floor((Date.parse(body.expiresAt) + 10 * 60 * 1_000) / 1_000);
   assert.equal(body.iceServers.length, 1);
   const [server] = body.iceServers;
   assert.ok(server);

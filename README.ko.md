@@ -236,7 +236,7 @@ WebSocket의 `sessionToken` 쿼리로 사용합니다.
 | `RATE_LIMIT_BURST` | `200` | 클라이언트별 순간 요청 버스트 한도 |
 | `MAX_PEERS_PER_BROADCAST` | `500` | 방송별 최대 활성 피어 수 |
 | `TRACKER_WS_ALLOWED_ORIGINS` | 미설정 | 브라우저에서 `/ws` 연결을 허용할 http(s) origin 목록(쉼표 구분); 그 밖의 브라우저 origin은 403으로 거부. Node 피어처럼 `Origin` 헤더가 없는 연결은 유효한 피어 세션만 있으면 허용 |
-| `TURN_URLS` | 미설정 | 참여한 피어에게 단기 자격증명과 함께 내려줄 `turn:`/`turns:` URL 목록(쉼표 구분) |
+| `TURN_URLS` | 미설정 | 피어 참여 응답에 단기 자격증명과 함께 내려줄 `turn:`/`turns:` URI 목록(쉼표 구분). 브라우저 SDK가 사용(Node 피어는 `TURN_SERVER` 사용) |
 | `TURN_SHARED_SECRET` | 미설정 | TURN 서버 공유 비밀(coturn `static-auth-secret`, 16바이트 이상). `TURN_URLS`와 함께 필수 |
 
 ### Origin

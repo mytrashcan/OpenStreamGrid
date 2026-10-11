@@ -20,7 +20,11 @@ import {
   PeerSessionTokenService,
   type PeerSessionClaims,
 } from "./peer-session.js";
-import { issueTurnCredentials, type TurnCredentialOptions } from "./turn-credentials.js";
+import {
+  issueTurnCredentials,
+  TURN_CREDENTIAL_GRACE_MS,
+  type TurnCredentialOptions,
+} from "./turn-credentials.js";
 import { SQLiteStore } from "./sqlite-store.js";
 import {
   StoreError,
@@ -105,15 +109,23 @@ const parseAllowedOrigin = (value: string): string => {
 };
 
 const MIN_TURN_SHARED_SECRET_BYTES = 16;
+// RFC 7065 TURN URI: turn[s]:host[:port][?transport=udp|tcp]
+const TURN_URL_PATTERN = /^turns?:[^\s/?#]+(?:\?transport=(?:udp|tcp))?$/;
+
+const parseList = (value: string | undefined): string[] =>
+  (value ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== "");
 
 const parseTurnConfiguration = (
   environment: NodeJS.ProcessEnv,
 ): TurnCredentialOptions | undefined => {
-  const urls = (environment.TURN_URLS ?? "")
-    .split(",")
-    .map((url) => url.trim())
-    .filter((url) => url !== "");
-  const sharedSecret = environment.TURN_SHARED_SECRET;
+  const urls = parseList(environment.TURN_URLS);
+  // A blank secret (for example a placeholder in compose or Helm) means unset.
+  const sharedSecret = environment.TURN_SHARED_SECRET?.trim()
+    ? environment.TURN_SHARED_SECRET
+    : undefined;
   if (urls.length === 0 && sharedSecret === undefined) return undefined;
   if (urls.length === 0) {
     throw new Error("TURN_URLS is required when TURN_SHARED_SECRET is set");
@@ -122,8 +134,10 @@ const parseTurnConfiguration = (
     throw new Error("TURN_SHARED_SECRET is required when TURN_URLS is set");
   }
   for (const url of urls) {
-    if (!/^turns?:[^\s/]+/.test(url)) {
-      throw new Error(`TURN_URLS entries must be turn: or turns: URLs; received '${url}'`);
+    if (!TURN_URL_PATTERN.test(url)) {
+      throw new Error(
+        `TURN_URLS entries must be turn:/turns: URIs (host[:port][?transport=udp|tcp]); received '${url}'`,
+      );
     }
   }
   if (Buffer.byteLength(sharedSecret, "utf8") < MIN_TURN_SHARED_SECRET_BYTES) {
@@ -151,11 +165,9 @@ export const parseTrackerConfiguration = (
   ) {
     throw new Error("PEER_SESSION_SECRET must contain at least 32 bytes");
   }
-  const wsAllowedOrigins = (environment.TRACKER_WS_ALLOWED_ORIGINS ?? "")
-    .split(",")
-    .map((origin) => origin.trim())
-    .filter((origin) => origin !== "")
-    .map(parseAllowedOrigin);
+  const wsAllowedOrigins = parseList(environment.TRACKER_WS_ALLOWED_ORIGINS).map(
+    parseAllowedOrigin,
+  );
   const turn = parseTurnConfiguration(environment);
   return {
     port: parseInteger(
@@ -1052,15 +1064,15 @@ export const createTrackerHandler = (
             peer,
             sessionToken: issuedSession.token,
             expiresAt: issuedSession.expiresAt,
-            // TURN credentials expire with the session; peers refresh both
-            // by rejoining before expiry.
+            // TURN credentials expire shortly after the session; peers renew
+            // both by rejoining before the session expires.
             ...(options.turn
               ? {
                   iceServers: [
                     issueTurnCredentials(
                       options.turn,
                       join.id,
-                      Date.parse(issuedSession.expiresAt),
+                      Date.parse(issuedSession.expiresAt) + TURN_CREDENTIAL_GRACE_MS,
                     ),
                   ],
                 }

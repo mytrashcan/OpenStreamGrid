@@ -156,7 +156,8 @@ Returns `201` for a new peer or `200` for an authenticated refresh:
 ```
 
 When the tracker has `TURN_URLS` and `TURN_SHARED_SECRET`, the response also
-includes TURN credentials that expire with the session, in the coturn
+includes TURN credentials that expire ten minutes after the session (covering
+refresh retries), in the coturn
 `use-auth-secret` format: the username is `<expiry unix seconds>:<peer id>`
 and the credential is `base64(HMAC-SHA1(secret, username))`.
 
@@ -165,7 +166,7 @@ and the credential is `base64(HMAC-SHA1(secret, username))`.
   "iceServers": [
     {
       "urls": ["turns:turn.example.com:5349"],
-      "username": "1784520000:peer-a",
+      "username": "1784520600:peer-a",
       "credential": "<base64-hmac>"
     }
   ]

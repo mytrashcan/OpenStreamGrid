@@ -6,6 +6,12 @@ export interface TurnCredentialOptions {
   sharedSecret: string;
 }
 
+/**
+ * TURN credentials outlive the peer session by this margin so a peer whose
+ * session refresh is being retried can still open relayed connections.
+ */
+export const TURN_CREDENTIAL_GRACE_MS = 10 * 60 * 1_000;
+
 /** RTCIceServer entry carrying short-lived TURN credentials. */
 export interface TurnIceServer {
   urls: string[];
