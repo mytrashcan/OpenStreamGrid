@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import test from "node:test";
@@ -108,6 +109,116 @@ test("validates tracker environment configuration", () => {
     () => createConfiguredStore({ STORE_TYPE: "sqlite", DB_PATH: " " }),
     /DB_PATH must not be empty/,
   );
+  assert.deepEqual(
+    parseTrackerConfiguration({
+      TURN_URLS: "turn:turn.example.com:3478?transport=udp, turns:turn.example.com:5349",
+      TURN_SHARED_SECRET: "north-shared-secret-01",
+    }).turn,
+    {
+      urls: ["turn:turn.example.com:3478?transport=udp", "turns:turn.example.com:5349"],
+      sharedSecret: "north-shared-secret-01",
+    },
+  );
+  assert.throws(
+    () => parseTrackerConfiguration({ TURN_URLS: "turn:turn.example.com" }),
+    /TURN_SHARED_SECRET is required/,
+  );
+  assert.throws(
+    () => parseTrackerConfiguration({ TURN_SHARED_SECRET: "north-shared-secret-01" }),
+    /TURN_URLS is required/,
+  );
+  assert.throws(
+    () =>
+      parseTrackerConfiguration({
+        TURN_URLS: "stun:stun.example.com",
+        TURN_SHARED_SECRET: "north-shared-secret-01",
+      }),
+    /TURN_URLS entries must be turn:\/turns: URIs/,
+  );
+  for (const invalid of [
+    "turn:turn.example.com:3478 transport=udp",
+    "turn:turn.example.com:notaport",
+    "turn::",
+    "turn:turn.example.com:70000",
+    "turn:turn.example.com:0",
+    "turn:-bad-.example.com",
+  ]) {
+    assert.throws(
+      () =>
+        parseTrackerConfiguration({
+          TURN_URLS: invalid,
+          TURN_SHARED_SECRET: "north-shared-secret-01",
+        }),
+      /TURN_URLS entries must be turn:\/turns: URIs/,
+      invalid,
+    );
+  }
+  assert.deepEqual(
+    parseTrackerConfiguration({
+      TURN_URLS: "turn:203.0.113.7:3478, turns:[2001:db8::1]:5349?transport=tcp, turn:turn.example.com",
+      TURN_SHARED_SECRET: "north-shared-secret-01",
+    }).turn?.urls,
+    ["turn:203.0.113.7:3478", "turns:[2001:db8::1]:5349?transport=tcp", "turn:turn.example.com"],
+  );
+  assert.equal(
+    parseTrackerConfiguration({ TURN_SHARED_SECRET: "  " }).turn,
+    undefined,
+    "a blank TURN_SHARED_SECRET placeholder means TURN is disabled",
+  );
+  assert.throws(
+    () =>
+      parseTrackerConfiguration({
+        TURN_URLS: "turn:turn.example.com",
+        TURN_SHARED_SECRET: "short",
+      }),
+    /TURN_SHARED_SECRET must contain at least 16 bytes/,
+  );
+});
+
+test("returns TURN credentials bound to the peer session on join", async () => {
+  const turn = {
+    urls: ["turns:turn.example.com:5349"],
+    sharedSecret: "north-shared-secret-01",
+  };
+  const registerBroadcast = (store: TrackerStore): TrackerStore => {
+    store.registerBroadcast({ id: "live", playlistUrl: "http://origin/live.m3u8" });
+    return store;
+  };
+  const withTurn = createTrackerHandler(registerBroadcast(new TrackerStore()), {}, undefined, { turn });
+  const joined = await invokeRaw(
+    withTurn,
+    "POST",
+    "/api/v1/broadcasts/live/peers",
+    { id: "peer-a", address: "http://peer-a:9090" },
+    "192.0.2.40",
+  );
+  assert.equal(joined.status, 201);
+  const body = JSON.parse(joined.body) as {
+    expiresAt: string;
+    iceServers: Array<{ urls: string[]; username: string; credential: string }>;
+  };
+  // Credentials outlive the session by a grace period covering refresh retries.
+  const expirySeconds = Math.floor((Date.parse(body.expiresAt) + 10 * 60 * 1_000) / 1_000);
+  assert.equal(body.iceServers.length, 1);
+  const [server] = body.iceServers;
+  assert.ok(server);
+  assert.deepEqual(server.urls, turn.urls);
+  assert.equal(server.username, `${expirySeconds}:peer-a`);
+  assert.equal(
+    server.credential,
+    createHmac("sha1", turn.sharedSecret).update(`${expirySeconds}:peer-a`).digest("base64"),
+  );
+
+  const withoutTurn = createTrackerHandler(registerBroadcast(new TrackerStore()));
+  const plain = await invokeRaw(
+    withoutTurn,
+    "POST",
+    "/api/v1/broadcasts/live/peers",
+    { id: "peer-a", address: "http://peer-a:9090" },
+    "192.0.2.41",
+  );
+  assert.equal(plain.status, 201);
+  assert.equal("iceServers" in JSON.parse(plain.body), false);
 });
 
 const invoke = async (

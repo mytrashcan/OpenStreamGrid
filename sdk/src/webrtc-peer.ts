@@ -14,6 +14,12 @@ const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
 ];
 const logger = createLogger("sdk");
 
+const copyIceServers = (servers: RTCIceServer[]): RTCIceServer[] =>
+  servers.map((server) => ({
+    ...server,
+    urls: Array.isArray(server.urls) ? [...server.urls] : server.urls,
+  }));
+
 type SegmentProvider = (
   segmentId: string,
 ) => Uint8Array | undefined | Promise<Uint8Array | undefined>;
@@ -89,7 +95,8 @@ const requestId = (): string => {
 /** Browser-native WebRTC requester and cache uploader. */
 export class BrowserWebRtcPeer {
   private readonly timeoutMs: number;
-  private readonly iceServers: RTCIceServer[];
+  private readonly baseIceServers: RTCIceServer[];
+  private iceServers: RTCIceServer[];
   private readonly maxUploadConnections: number;
   private readonly maxUploadBitrate: number;
   private readonly maxSegmentBytes: number;
@@ -118,12 +125,8 @@ export class BrowserWebRtcPeer {
         throw new Error(`${label} must be a positive integer`);
       }
     }
-    this.iceServers = (options.iceServers ?? DEFAULT_ICE_SERVERS).map(
-      (server) => ({
-        ...server,
-        urls: Array.isArray(server.urls) ? [...server.urls] : server.urls,
-      }),
-    );
+    this.baseIceServers = copyIceServers(options.iceServers ?? DEFAULT_ICE_SERVERS);
+    this.iceServers = this.baseIceServers;
     this.peerConnectionFactory =
       options.peerConnectionFactory ??
       ((configuration) => new RTCPeerConnection(configuration));
@@ -244,6 +247,15 @@ export class BrowserWebRtcPeer {
     this.pendingAnswers.clear();
     for (const connection of this.connections) connection.close();
     this.connections.clear();
+  }
+
+  /**
+   * Appends short-lived ICE servers issued by the tracker, such as TURN
+   * credentials, to the configured servers. Replaces any previously issued
+   * set and applies to connections created afterwards.
+   */
+  setIssuedIceServers(servers: RTCIceServer[]): void {
+    this.iceServers = [...this.baseIceServers, ...copyIceServers(servers)];
   }
 
   private createConnection(): RTCPeerConnection {

@@ -20,6 +20,11 @@ import {
   PeerSessionTokenService,
   type PeerSessionClaims,
 } from "./peer-session.js";
+import {
+  issueTurnCredentials,
+  TURN_CREDENTIAL_GRACE_MS,
+  type TurnCredentialOptions,
+} from "./turn-credentials.js";
 import { SQLiteStore } from "./sqlite-store.js";
 import {
   StoreError,
@@ -63,6 +68,7 @@ export interface TrackerConfiguration {
   rateLimitBurst: number;
   maxPeersPerBroadcast: number;
   wsAllowedOrigins?: string[];
+  turn?: TurnCredentialOptions;
 }
 
 const parseInteger = (
@@ -102,6 +108,55 @@ const parseAllowedOrigin = (value: string): string => {
   return url.origin;
 };
 
+const MIN_TURN_SHARED_SECRET_BYTES = 16;
+// RFC 7065 TURN URI: turn[s]:host[:port][?transport=udp|tcp]
+// Host is a DNS name, IPv4 address, or bracketed IPv6 address.
+const TURN_URL_PATTERN =
+  /^turns?:(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?)(?::(\d{1,5}))?(?:\?transport=(?:udp|tcp))?$/;
+
+const isValidTurnUrl = (url: string): boolean => {
+  const match = TURN_URL_PATTERN.exec(url);
+  if (!match) return false;
+  const port = match[2];
+  return port === undefined || (Number(port) >= 1 && Number(port) <= 65_535);
+};
+
+const parseList = (value: string | undefined): string[] =>
+  (value ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== "");
+
+const parseTurnConfiguration = (
+  environment: NodeJS.ProcessEnv,
+): TurnCredentialOptions | undefined => {
+  const urls = parseList(environment.TURN_URLS);
+  // A blank secret (for example a placeholder in compose or Helm) means unset.
+  const sharedSecret = environment.TURN_SHARED_SECRET?.trim()
+    ? environment.TURN_SHARED_SECRET
+    : undefined;
+  if (urls.length === 0 && sharedSecret === undefined) return undefined;
+  if (urls.length === 0) {
+    throw new Error("TURN_URLS is required when TURN_SHARED_SECRET is set");
+  }
+  if (sharedSecret === undefined) {
+    throw new Error("TURN_SHARED_SECRET is required when TURN_URLS is set");
+  }
+  for (const url of urls) {
+    if (!isValidTurnUrl(url)) {
+      throw new Error(
+        `TURN_URLS entries must be turn:/turns: URIs (host[:port][?transport=udp|tcp]); received '${url}'`,
+      );
+    }
+  }
+  if (Buffer.byteLength(sharedSecret, "utf8") < MIN_TURN_SHARED_SECRET_BYTES) {
+    throw new Error(
+      `TURN_SHARED_SECRET must contain at least ${MIN_TURN_SHARED_SECRET_BYTES} bytes`,
+    );
+  }
+  return { urls, sharedSecret };
+};
+
 /** Parses and validates tracker process configuration before startup. */
 export const parseTrackerConfiguration = (
   environment: NodeJS.ProcessEnv = process.env,
@@ -119,11 +174,10 @@ export const parseTrackerConfiguration = (
   ) {
     throw new Error("PEER_SESSION_SECRET must contain at least 32 bytes");
   }
-  const wsAllowedOrigins = (environment.TRACKER_WS_ALLOWED_ORIGINS ?? "")
-    .split(",")
-    .map((origin) => origin.trim())
-    .filter((origin) => origin !== "")
-    .map(parseAllowedOrigin);
+  const wsAllowedOrigins = parseList(environment.TRACKER_WS_ALLOWED_ORIGINS).map(
+    parseAllowedOrigin,
+  );
+  const turn = parseTurnConfiguration(environment);
   return {
     port: parseInteger(
       environment.PORT ?? String(DEFAULT_PORT),
@@ -161,6 +215,7 @@ export const parseTrackerConfiguration = (
       1,
     ),
     ...(wsAllowedOrigins.length > 0 ? { wsAllowedOrigins } : {}),
+    ...(turn ? { turn } : {}),
   };
 };
 
@@ -723,6 +778,7 @@ export interface TrackerHttpOptions {
   maxPeersPerBroadcast?: number;
   metrics?: TrackerMetrics;
   rateLimiter?: IpRateLimiter;
+  turn?: TurnCredentialOptions;
 }
 
 /** Creates the REST and dashboard request handler for a tracker store. */
@@ -1017,6 +1073,19 @@ export const createTrackerHandler = (
             peer,
             sessionToken: issuedSession.token,
             expiresAt: issuedSession.expiresAt,
+            // TURN credentials expire shortly after the session; peers renew
+            // both by rejoining before the session expires.
+            ...(options.turn
+              ? {
+                  iceServers: [
+                    issueTurnCredentials(
+                      options.turn,
+                      join.id,
+                      Date.parse(issuedSession.expiresAt) + TURN_CREDENTIAL_GRACE_MS,
+                    ),
+                  ],
+                }
+              : {}),
           });
           if (alreadyJoined) events.peerListChanged?.(broadcastId);
           else events.peerJoined?.(broadcastId, peer);
@@ -1143,6 +1212,7 @@ export class TrackerServer {
           | "peerSessionSecret"
           | "peerSessionTtlMs"
           | "wsAllowedOrigins"
+          | "turn"
         >
       > = {
       rateLimitRps: DEFAULT_RATE_LIMIT_RPS,
@@ -1185,6 +1255,7 @@ export class TrackerServer {
           : {}),
         peerSessions,
         metrics,
+        ...(configuration.turn ? { turn: configuration.turn } : {}),
       }),
     );
     this.server.headersTimeout = 10_000;

@@ -80,6 +80,14 @@ tracker:
       value: https://player.example
     - name: MAX_PEERS_PER_BROADCAST
       value: "1000"
+    # Issue short-lived TURN credentials to peers (coturn use-auth-secret).
+    - name: TURN_URLS
+      value: turns:turn.example.com:5349
+    - name: TURN_SHARED_SECRET
+      valueFrom:
+        secretKeyRef:
+          name: openstreamgrid-turn
+          key: shared-secret
 origin:
   extraEnv:
     - name: SEGMENT_DURATION_SECONDS

@@ -155,6 +155,27 @@ Returns `201` for a new peer or `200` for an authenticated refresh:
 }
 ```
 
+When the tracker has `TURN_URLS` and `TURN_SHARED_SECRET`, the response also
+includes TURN credentials that expire ten minutes after the session (covering
+refresh retries), in the coturn
+`use-auth-secret` format: the username is `<expiry unix seconds>:<peer id>`
+and the credential is `base64(HMAC-SHA1(secret, username))`.
+
+```json
+{
+  "iceServers": [
+    {
+      "urls": ["turns:turn.example.com:5349"],
+      "username": "1784520600:peer-a",
+      "credential": "<base64-hmac>"
+    }
+  ]
+}
+```
+
+The browser SDK appends these to its configured `iceServers` and replaces them
+on every session refresh.
+
 Returns `429` when the configured per-broadcast peer capacity is exhausted.
 
 Zero-install browser peers use a signaling-only address and identify their

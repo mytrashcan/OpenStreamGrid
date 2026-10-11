@@ -27,7 +27,15 @@ prototype releases are not maintained unless a release notice says otherwise.
   container images.
 - Use `wss://` and `https://` for traffic outside a trusted development network.
 - Operate an authenticated TURN service for production; public STUN provides
-  discovery, not confidentiality or relay authorization.
+  discovery, not confidentiality or relay authorization. Prefer
+  `TURN_URLS`/`TURN_SHARED_SECRET` on the tracker, which issues per-peer
+  credentials that expire shortly after the session, over static TURN
+  passwords in client code, and keep the shared secret out of browsers and
+  peers.
+- Peer joins are open to any client, so anyone who can join can obtain relay
+  credentials. Harden the TURN server accordingly: deny relaying to private and
+  loopback ranges (coturn `denied-peer-ip`), and set per-user allocation and
+  bandwidth quotas (`user-quota`, `total-quota`, `max-bps`).
 - Restrict tracker, origin, peer upload, dashboard, and metrics ports with
   firewalls or Kubernetes `NetworkPolicy` resources.
 - Keep request, peer, upload, and connection limits enabled. Size them against
