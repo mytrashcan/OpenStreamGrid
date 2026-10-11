@@ -34,6 +34,9 @@ export const issueTurnCredentials = (
   return {
     urls: [...options.urls],
     username,
+    // HMAC-SHA1 is fixed by the TURN REST API / coturn use-auth-secret format;
+    // TURN servers cannot verify any other algorithm. SHA-1 collision attacks
+    // do not weaken HMAC, and the credential expires with the session.
     credential: createHmac("sha1", options.sharedSecret)
       .update(username)
       .digest("base64"),
