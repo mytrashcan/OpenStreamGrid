@@ -435,3 +435,50 @@ test("passes tracker-issued TURN credentials to the browser WebRTC peer", async 
     },
   ]]);
 });
+
+test("replaces TURN credentials when the peer session is refreshed", async (context) => {
+  let registrations = 0;
+  context.mock.method(globalThis, "fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method !== "POST") return new Response(null, { status: 204 });
+    registrations += 1;
+    return Response.json({
+      sessionToken: `session-${registrations}`,
+      // Expires just over the 60 s refresh margin, so the refresh fires in ~1.5 s.
+      expiresAt: new Date(Date.now() + 61_500).toISOString(),
+      iceServers: [{
+        urls: ["turns:turn.example.com:5349"],
+        username: `expiry-${registrations}:browser-a`,
+        credential: `credential-${registrations}`,
+      }],
+    }, { status: registrations === 1 ? 201 : 200 });
+  });
+  const issued: string[] = [];
+  const plugin = new OpenStreamGridHlsPlugin({
+    trackerUrl: "https://tracker.example",
+    broadcastId: "live",
+    peerId: "browser-a",
+    verifySegments: false,
+    peerConnectionFactory: () => {
+      throw new Error("no connection expected");
+    },
+  });
+  context.mock.method(plugin.wsClient, "start", async () => {});
+  context.mock.method(plugin.wsClient, "stop", () => {});
+  context.mock.method(plugin.wsClient, "enablePeerStateReporting", () => {});
+  class OriginalLoader {}
+  const hls = { config: { loader: OriginalLoader } } as unknown as Hls;
+
+  plugin.attach(hls);
+  const webRtcPeer = (plugin as unknown as {
+    webRtcPeer: { setIssuedIceServers(servers: RTCIceServer[]): void };
+  }).webRtcPeer;
+  context.mock.method(webRtcPeer, "setIssuedIceServers", (servers: RTCIceServer[]) => {
+    issued.push(servers.map((server) => server.credential ?? "").join(","));
+  });
+  await new Promise((resolve) => setTimeout(resolve, 2_500));
+  plugin.detach();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(registrations, 2);
+  assert.deepEqual(issued, ["credential-1", "credential-2"]);
+});

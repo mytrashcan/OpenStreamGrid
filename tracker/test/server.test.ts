@@ -135,13 +135,30 @@ test("validates tracker environment configuration", () => {
       }),
     /TURN_URLS entries must be turn:\/turns: URIs/,
   );
-  assert.throws(
-    () =>
-      parseTrackerConfiguration({
-        TURN_URLS: "turn:turn.example.com:3478 transport=udp",
-        TURN_SHARED_SECRET: "north-shared-secret-01",
-      }),
-    /TURN_URLS entries must be turn:\/turns: URIs/,
+  for (const invalid of [
+    "turn:turn.example.com:3478 transport=udp",
+    "turn:turn.example.com:notaport",
+    "turn::",
+    "turn:turn.example.com:70000",
+    "turn:turn.example.com:0",
+    "turn:-bad-.example.com",
+  ]) {
+    assert.throws(
+      () =>
+        parseTrackerConfiguration({
+          TURN_URLS: invalid,
+          TURN_SHARED_SECRET: "north-shared-secret-01",
+        }),
+      /TURN_URLS entries must be turn:\/turns: URIs/,
+      invalid,
+    );
+  }
+  assert.deepEqual(
+    parseTrackerConfiguration({
+      TURN_URLS: "turn:203.0.113.7:3478, turns:[2001:db8::1]:5349?transport=tcp, turn:turn.example.com",
+      TURN_SHARED_SECRET: "north-shared-secret-01",
+    }).turn?.urls,
+    ["turn:203.0.113.7:3478", "turns:[2001:db8::1]:5349?transport=tcp", "turn:turn.example.com"],
   );
   assert.equal(
     parseTrackerConfiguration({ TURN_SHARED_SECRET: "  " }).turn,

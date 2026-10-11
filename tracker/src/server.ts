@@ -110,7 +110,16 @@ const parseAllowedOrigin = (value: string): string => {
 
 const MIN_TURN_SHARED_SECRET_BYTES = 16;
 // RFC 7065 TURN URI: turn[s]:host[:port][?transport=udp|tcp]
-const TURN_URL_PATTERN = /^turns?:[^\s/?#]+(?:\?transport=(?:udp|tcp))?$/;
+// Host is a DNS name, IPv4 address, or bracketed IPv6 address.
+const TURN_URL_PATTERN =
+  /^turns?:(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?)(?::(\d{1,5}))?(?:\?transport=(?:udp|tcp))?$/;
+
+const isValidTurnUrl = (url: string): boolean => {
+  const match = TURN_URL_PATTERN.exec(url);
+  if (!match) return false;
+  const port = match[2];
+  return port === undefined || (Number(port) >= 1 && Number(port) <= 65_535);
+};
 
 const parseList = (value: string | undefined): string[] =>
   (value ?? "")
@@ -134,7 +143,7 @@ const parseTurnConfiguration = (
     throw new Error("TURN_SHARED_SECRET is required when TURN_URLS is set");
   }
   for (const url of urls) {
-    if (!TURN_URL_PATTERN.test(url)) {
+    if (!isValidTurnUrl(url)) {
       throw new Error(
         `TURN_URLS entries must be turn:/turns: URIs (host[:port][?transport=udp|tcp]); received '${url}'`,
       );
