@@ -6,6 +6,7 @@ updates:
       - /
       - /sdk
       - /examples/react-integration
+      - /e2e/browser
     schedule:
       interval: weekly
     commit-message:

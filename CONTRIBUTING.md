@@ -21,6 +21,18 @@ npm run lint
 Run `npm run test:coverage` to execute the same suite with a c8 coverage report
 (text output plus `coverage/lcov.info`); CI publishes this report for Node 22.
 
+Browser peer changes are covered by a Playwright test in which two real
+Chromium viewers play the Compose stream and must exchange at least one verified
+segment over WebRTC:
+
+```bash
+npm run build --prefix sdk
+docker compose -p osg-e2e up --detach --build --wait tracker origin
+npm ci --prefix e2e/browser && npx --prefix e2e/browser playwright install chromium
+(cd e2e/browser && npx playwright test)   # on macOS: PLAYWRIGHT_CHANNEL=chrome
+docker compose -p osg-e2e down --volumes
+```
+
 Use `bash test/docker-test.sh` for delivery/fallback changes and
 `bash scripts/benchmark.sh` for performance-sensitive changes. Docker tests use
 isolated Compose projects but bind the documented local ports.
