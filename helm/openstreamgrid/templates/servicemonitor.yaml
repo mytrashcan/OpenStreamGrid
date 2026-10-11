@@ -1,0 +1,29 @@
+{{- if .Values.tracker.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "openstreamgrid.trackerName" . }}
+  labels:
+    {{- include "openstreamgrid.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tracker
+    {{- with .Values.tracker.metrics.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "openstreamgrid.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: tracker
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.tracker.metrics.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.tracker.metrics.serviceMonitor.scrapeTimeout }}
+      {{- if .Values.tracker.auth.existingSecret }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ .Values.tracker.auth.existingSecret | quote }}
+          key: {{ .Values.tracker.auth.apiKeyKey | quote }}
+      {{- end }}
+{{- end }}

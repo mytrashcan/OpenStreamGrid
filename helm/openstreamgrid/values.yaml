@@ -35,6 +35,15 @@ tracker:
     enabled: false
     maxReplicas: 6
     targetCPUUtilizationPercentage: 60
+  metrics:
+    serviceMonitor:
+      # Requires the Prometheus Operator CRDs. When auth.existingSecret is set,
+      # the tracker API key is sent to /metrics as a Bearer token.
+      enabled: false
+      interval: 30s
+      scrapeTimeout: 10s
+      # Extra labels, for example to match a Prometheus serviceMonitorSelector.
+      labels: {}
 
 origin:
   image:
@@ -70,6 +79,14 @@ ingress:
 
 networkPolicy:
   enabled: true
+
+grafanaDashboard:
+  # Ships dashboards/openstreamgrid.json in a ConfigMap for the Grafana
+  # dashboard sidecar (for example the one in kube-prometheus-stack).
+  enabled: false
+  labels:
+    grafana_dashboard: "1"
+  annotations: {}
 
 nameOverride: ""
 fullnameOverride: ""

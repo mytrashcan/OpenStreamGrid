@@ -767,16 +767,19 @@ export const createTrackerHandler = (
       }
 
       const providedApiKey = request.headers?.["x-api-key"];
+      const providedBearer = bearerToken(request.headers?.authorization);
       const hasAdminAccess =
         apiKey === undefined ||
-        (typeof providedApiKey === "string" && apiKeysMatch(apiKey, providedApiKey));
-      const session = peerSessions.verify(
-        bearerToken(request.headers?.authorization),
-      );
+        (typeof providedApiKey === "string" && apiKeysMatch(apiKey, providedApiKey)) ||
+        // Scrapers such as Prometheus can send credentials only as a Bearer token.
+        (providedBearer !== undefined && apiKeysMatch(apiKey, providedBearer));
+      const session = peerSessions.verify(providedBearer);
       const requireAdminAccess = (): void => {
         if (hasAdminAccess) return;
         throw new RequestError(
-          providedApiKey === undefined ? "Missing API key" : "Invalid API key",
+          providedApiKey === undefined && providedBearer === undefined
+            ? "Missing API key"
+            : "Invalid API key",
           401,
         );
       };
