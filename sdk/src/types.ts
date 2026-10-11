@@ -77,6 +77,7 @@ export type SdkEvent =
   | {
       type:
         | "peer_fetched"
+        | "peer_failed"
         | "origin_fallback"
         | "cache_hit"
         | "cache_miss"

@@ -67,6 +67,40 @@ test("uses absolute tracker peer addresses and reports the winning peer", async 
   assert.equal(plugin.stats.p2pSuccesses, 1);
 });
 
+test("reports failed peer attempts with the reason before falling back", async (context) => {
+  const events: SdkEvent[] = [];
+  context.mock.method(globalThis, "fetch", async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.startsWith("http://peer-a.example")) return new Response(null, { status: 503 });
+    if (url.endsWith(".sha256")) return new Response(`${digest}  segment.ts\n`);
+    return new Response(segmentData);
+  });
+  const plugin = new OpenStreamGridHlsPlugin({
+    trackerUrl: "ws://tracker.example/ws",
+    broadcastId: "live",
+    originBaseUrl: "https://origin.example/hls",
+    onEvent: (event) => events.push(event),
+  });
+  context.mock.method(plugin.wsClient, "getPeersWithSegment", () => [
+    peer("http://peer-a.example:9090"),
+  ]);
+
+  const result = await plugin.loadSegment(
+    "segment.ts",
+    "https://origin.example/hls/low/segment.ts",
+    new AbortController().signal,
+  );
+
+  assert.deepEqual(result.data, segmentData);
+  assert.deepEqual(events.find((event) => event.type === "peer_failed"), {
+    type: "peer_failed",
+    segment: "segment.ts",
+    peerId: "peer-a",
+    message: "Peer returned HTTP 503",
+  });
+  assert.ok(events.some((event) => event.type === "origin_fallback"));
+});
+
 test("verifies origin fallback data before caching it", async (context) => {
   context.mock.method(globalThis, "fetch", async (input: RequestInfo | URL) => {
     if (String(input).endsWith(".sha256")) {

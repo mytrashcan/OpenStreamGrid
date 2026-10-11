@@ -297,6 +297,23 @@ Server-to-client messages:
 Malformed frames are rejected. Connections are closed during tracker shutdown;
 clients should reconnect with exponential backoff and resubscribe.
 
+## Browser SDK events
+
+`OpenStreamGridHlsPlugin` reports diagnostics through the `onEvent` option.
+Delivery events carry optional `segment`, `peerId`, `durationMs`, and
+`message` fields.
+
+| Type | Meaning |
+| --- | --- |
+| `cache_hit` / `cache_miss` | The segment was or was not in the local cache |
+| `peer_fetched` | A peer delivered the segment and it passed verification |
+| `peer_failed` | A peer attempt failed; `message` gives the reason (HTTP status, WebRTC error, timeout, integrity). Attempts cancelled because another peer won are not reported |
+| `origin_fallback` | The segment was served by the origin/CDN |
+| `integrity_ok` / `integrity_fail` | SHA-256 verification passed or failed |
+| `ws_connected` / `ws_disconnected` / `ws_error` | Tracker signaling connection state |
+| `scheduler_decision` | Delivery plan: `policy`, `mode`, `reason`, `candidateCount`, `selectedPeerCount` |
+| `scheduler_warning` | A scheduler error or invalid plan was contained: `policy`, `code`, `message` |
+
 ## Origin HTTP API
 
 | Method | Path | Response |
