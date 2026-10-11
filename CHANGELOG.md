@@ -57,6 +57,8 @@ All notable changes to OpenStreamGrid are documented in this file.
 - The tracker no longer sends `stats_update` to every peer on each stats
   report (the SDK and Node peer ignored it; the dashboard uses SSE). At 500
   peers in one broadcast, REST p95 latency dropped from about 1 s to 7 ms.
+- WebSocket fan-out serializes each message once and only visits the
+  broadcast's own subscribers.
 
 ### Fixed
 

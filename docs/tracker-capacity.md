@@ -54,15 +54,30 @@ peer uses.
 | 500 | 4.7 ms | 6.8 ms | 8.0 ms | 124,984 | 48.7% | 0 |
 | 1000 | 967.2 ms | 15,780.5 ms | 15,780.5 ms | 283,644 | 99.0% | 0 |
 
+### After: plus per-broadcast subscriber index and one serialization per fan-out
+
+| Peers | Probe p50 | Probe p95 | Probe p99 | WS msgs/s | Tracker CPU | Dropped |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 100 | 4.0 ms | 6.0 ms | 6.5 ms | 4,998 | 11.3% | 0 |
+| 250 | 4.3 ms | 5.4 ms | 6.0 ms | 31,246 | 23.7% | 0 |
+| 500 | 4.3 ms | 6.6 ms | 7.6 ms | 124,975 | 45.3% | 0 |
+| 1000 | 752.2 ms | 5,043.6 ms | 5,043.6 ms | 281,916 | 99.0% | 0 |
+
+The fan-out serialized the same message once per recipient and scanned the
+subscribers of every broadcast. Serializing once and indexing subscribers by
+broadcast saves a few percent of CPU at 500 peers and cuts p95 at 1000 peers
+from 15.8 s to 5.0 s, but per-recipient sends still dominate.
+
 ## Findings
 
 - One tracker comfortably serves **about 500 active peers in one broadcast**
   (p95 under 10 ms at roughly half a core), which matches the default
   `MAX_PEERS_PER_BROADCAST=500`.
-- At 1000 peers the tracker saturates a core. The remaining cost is the
-  `segment_available` fan-out: each segment report goes to every other peer,
+- At 1000 peers the tracker saturates a core at about 280,000 delivered
+  WebSocket messages per second. The remaining cost is the number of
+  `segment_available` messages: each segment report goes to every other peer,
   so messages grow with the square of the peer count (about 500 reports/s
-  times 1000 recipients).
+  times 1000 recipients). Cheaper per-message work does not change that.
 - The next optimization is to batch segment availability per broadcast, for
   example one aggregated update per segment interval, which turns the fan-out
   from one message per report into one message per interval per peer.
