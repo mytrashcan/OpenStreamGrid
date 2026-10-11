@@ -69,7 +69,11 @@ wait_for_stat_greater_than p2pSuccesses 0 60
 p2p_stats="$(curl --fail --silent --show-error --header "X-API-Key: $TRACKER_API_KEY" http://127.0.0.1:7070/api/v1/broadcasts/live/stats)"
 fallbacks_before="$(stat_value fallbacks)"
 echo "Forcing a stale-peer request to exercise origin fallback"
-"${COMPOSE[@]}" kill peer-b peer-a
+# Stop peer-b cleanly so it leaves the tracker: a killed peer stays registered
+# until STALE_PEER_MS expires, and only its session holder may rejoin under the
+# same ID. Then crash peer-a so it stays advertised while unreachable.
+"${COMPOSE[@]}" stop peer-b
+"${COMPOSE[@]}" kill peer-a
 "${COMPOSE[@]}" up --detach --no-deps peer-b
 wait_for_url peer-b http://127.0.0.1:9092/health 20
 wait_for_stat_greater_than fallbacks "$fallbacks_before" 20
