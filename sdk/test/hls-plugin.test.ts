@@ -5,6 +5,7 @@ import type {
   SegmentSchedulingPlan,
 } from "@openstreamgrid/common";
 import type Hls from "hls.js";
+import { DeadlineAwareScheduler } from "../src/deadline-aware-scheduler.js";
 import { OpenStreamGridHlsPlugin } from "../src/hls-plugin.js";
 import type { PeerInfo, SdkEvent } from "../src/types.js";
 
@@ -695,4 +696,105 @@ test("sends byte-range segment requests to the default loader", () => {
   } finally {
     plugin.detach();
   }
+});
+
+test("stops waiting for a slow peer in time to meet a known deadline", async (context) => {
+  const events: SdkEvent[] = [];
+  let peerAborted = false;
+  context.mock.method(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.host === "slow.example:9090") {
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          peerAborted = true;
+          reject(init.signal?.reason);
+        }, { once: true });
+      });
+    }
+    if (url.pathname.endsWith(".sha256")) return new Response(`${digest}  segment.ts\n`);
+    return new Response(segmentData);
+  });
+  const plugin = new OpenStreamGridHlsPlugin({
+    trackerUrl: "ws://tracker.example/ws",
+    broadcastId: "live",
+    originBaseUrl: "https://origin.example/hls",
+    // Peer timeouts far beyond the deadline: only the deadline can stop the peer phase.
+    peerTimeoutMs: 30_000,
+    scheduler: new DeadlineAwareScheduler({
+      maximumPeerProbeWindowMs: 100,
+      originLatencyEstimator: { estimateMs: 50 },
+    }),
+    onEvent: (event) => events.push(event),
+  });
+  context.mock.method(plugin.wsClient, "getPeersWithSegment", () => [
+    { ...peer("http://slow.example:9090"), id: "slow" },
+  ]);
+
+  const startedAt = Date.now();
+  const result = await plugin.loadSegment(
+    "segment.ts",
+    "https://origin.example/hls/low/segment.ts",
+    new AbortController().signal,
+    { kind: "synthetic", slackMs: 1_000 },
+  );
+  const elapsedMs = Date.now() - startedAt;
+
+  assert.deepEqual(result.data, segmentData);
+  assert.equal(peerAborted, true);
+  // Budget = 1000 ms slack - 500 ms origin estimate - 200 ms margin.
+  // Far below the 30 s peer timeout; generous for loaded CI runners.
+  assert.ok(elapsedMs >= 250 && elapsedMs < 10_000, `elapsed ${elapsedMs} ms`);
+  assert.equal(
+    events.find((event) => event.type === "scheduler_decision" && "reason" in event)?.reason,
+    "deadline_relaxed_p2p",
+  );
+  assert.ok(events.some(
+    (event) => event.type === "origin_fallback" && "message" in event && /deadline/.test(event.message ?? ""),
+  ));
+});
+
+test("a stalled hash sidecar cannot hold the peer phase past the deadline", async (context) => {
+  let sidecarRequests = 0;
+  let stalledSidecarAborted = false;
+  context.mock.method(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith(".sha256")) {
+      sidecarRequests += 1;
+      if (sidecarRequests === 1) {
+        // The peer copy's verification stalls until cancelled.
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            stalledSidecarAborted = true;
+            reject(init.signal?.reason);
+          }, { once: true });
+        });
+      }
+      return new Response(`${digest}  segment.ts\n`);
+    }
+    return new Response(segmentData);
+  });
+  const plugin = new OpenStreamGridHlsPlugin({
+    trackerUrl: "ws://tracker.example/ws",
+    broadcastId: "live",
+    originBaseUrl: "https://origin.example/hls",
+    peerTimeoutMs: 30_000,
+    scheduler: new DeadlineAwareScheduler({
+      maximumPeerProbeWindowMs: 100,
+      originLatencyEstimator: { estimateMs: 50 },
+    }),
+  });
+  context.mock.method(plugin.wsClient, "getPeersWithSegment", () => [
+    { ...peer("http://fast.example:9090"), id: "fast" },
+  ]);
+
+  const result = await plugin.loadSegment(
+    "segment.ts",
+    "https://origin.example/hls/low/segment.ts",
+    new AbortController().signal,
+    { kind: "synthetic", slackMs: 1_000 },
+  );
+
+  assert.deepEqual(result.data, segmentData);
+  assert.equal(stalledSidecarAborted, true);
+  assert.equal(plugin.stats.originRequests, 1);
 });

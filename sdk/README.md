@@ -32,6 +32,9 @@ hls.loadSource("https://stream.example.com/hls/stream.m3u8");
 hls.attachMedia(document.querySelector("video")!);
 ```
 
+For Shaka Player, use `OpenStreamGridShakaPlugin` with the same options and call
+`plugin.attach(shaka)` before loading the stream.
+
 Each viewer registers with the tracker and receives a short-lived peer session.
 When the tracker is configured for TURN, it also issues short-lived TURN
 credentials. Never put the tracker administrator API key in viewer code.

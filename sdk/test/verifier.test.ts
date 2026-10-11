@@ -93,3 +93,19 @@ test("verifies a variant segment against its adjacent sidecar", async (context) 
     /outside the configured origin base URL/,
   );
 });
+
+test("cancels a sidecar request when the caller aborts", async (context) => {
+  context.mock.method(globalThis, "fetch", (_input: RequestInfo | URL, init?: RequestInit) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+    }));
+  const verifier = new OriginHashVerifier("https://origin.example/hls");
+  const controller = new AbortController();
+  const verification = verifier.verifyUrl(
+    "https://origin.example/hls/low/segment.ts",
+    new Uint8Array([1]),
+    controller.signal,
+  );
+  controller.abort(new DOMException("cancelled", "AbortError"));
+  await assert.rejects(verification, { name: "AbortError" });
+});

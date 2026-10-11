@@ -196,6 +196,33 @@ Browser peers automatically receive a short-lived, identity-scoped session when
 they register. Do not pass or embed `TRACKER_API_KEY` in viewer code; reserve the
 administrator credential for trusted origin and operations components.
 
+### Shaka Player
+
+`OpenStreamGridShakaPlugin` provides the same delivery core for Shaka Player. It
+registers an HTTP(S) scheme plugin, so media segment requests go through the
+grid and every other request uses Shaka's fetch plugin:
+
+```ts
+import shaka from "shaka-player";
+import { OpenStreamGridShakaPlugin } from "@openstreamgrid/sdk";
+
+const plugin = new OpenStreamGridShakaPlugin({
+  trackerUrl: "https://stream.example.com",
+  broadcastId: "live",
+  originBaseUrl: "https://stream.example.com/hls",
+});
+plugin.attach(shaka);
+const player = new shaka.Player();
+await player.attach(document.querySelector("video")!);
+await player.load("https://stream.example.com/hls/stream.m3u8");
+```
+
+It takes the same options as the Hls.js plugin. Shaka scheme plugins are global,
+so attach one instance per page; `detach()` restores Shaka's fetch plugin.
+Shaka does not expose the playback position to network plugins, so the adapter
+derives a deadline from each request's retry and stall timeouts: peers get the
+first part of that budget, and the origin is used before Shaka would abort.
+
 ## Tracker API
 
 Tracker resources are under `/api/v1`. Administrators send `X-API-Key: <key>`
