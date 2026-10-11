@@ -23,7 +23,19 @@ export const clientAddress = (
   const header = request.headers["x-forwarded-for"];
   const hops = (Array.isArray(header) ? header.join(",") : header ?? "")
     .split(",")
-    .map((hop) => hop.trim())
+    .map((hop) => withoutPort(hop.trim()))
     .filter((hop) => hop !== "");
   return hops[hops.length - trustedProxyHops] ?? hops[0] ?? socketAddress;
+};
+
+/**
+ * Some proxies record `ip:port`; keying limits on the port would give every
+ * connection its own bucket. Strips the port from `a.b.c.d:port` and
+ * `[ipv6]:port` and leaves bare IPv6 addresses alone.
+ */
+const withoutPort = (hop: string): string => {
+  const bracketed = /^\[([^\]]+)\](?::\d+)?$/.exec(hop);
+  if (bracketed?.[1]) return bracketed[1];
+  const ipv4WithPort = /^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/.exec(hop);
+  return ipv4WithPort?.[1] ?? hop;
 };

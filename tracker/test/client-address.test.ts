@@ -23,3 +23,9 @@ test("falls back when the header is missing or shorter than the proxy chain", ()
   assert.equal(clientAddress(request("10.0.0.5"), 1), "10.0.0.5");
   assert.equal(clientAddress(request("10.0.0.5", "203.0.113.9"), 2), "203.0.113.9");
 });
+
+test("ignores ports recorded by proxies", () => {
+  assert.equal(clientAddress(request("10.0.0.5", "203.0.113.9:51234"), 1), "203.0.113.9");
+  assert.equal(clientAddress(request("10.0.0.5", "[2001:db8::1]:443"), 1), "2001:db8::1");
+  assert.equal(clientAddress(request("10.0.0.5", "2001:db8::1"), 1), "2001:db8::1");
+});

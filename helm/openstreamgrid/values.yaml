@@ -10,9 +10,9 @@ tracker:
   # less important workloads after a node failure.
   priorityClassName: ""
   # Reverse proxies in front of the tracker (ingress controller, TLS proxy, CDN)
-  # whose X-Forwarded-For is trusted for per-client limits. Use 1 with the
-  # chart's ingress; keep 0 when clients reach the Service directly.
-  trustProxyHops: 0
+  # whose X-Forwarded-For is trusted for per-client limits. Unset means 1 when
+  # the chart's ingress is enabled and 0 otherwise; set a number to override.
+  trustProxyHops: null
   port: 7070
   env:
     STORE_TYPE: sqlite
@@ -86,6 +86,11 @@ ingress:
 
 networkPolicy:
   enabled: true
+  # NetworkPolicyPeer entries allowed to reach the tracker in addition to the
+  # origin, for example the ingress controller's namespace. Empty allows any
+  # source. Restrict it when trusting X-Forwarded-For so in-cluster clients
+  # cannot bypass the ingress and choose their own address.
+  trackerIngressFrom: []
 
 grafanaDashboard:
   # Ships dashboards/openstreamgrid.json in a ConfigMap for the Grafana

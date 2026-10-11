@@ -49,3 +49,15 @@ empty image tag resolves to the chart appVersion with a "v" prefix.
 {{- $tag := .image.tag | default (printf "v%s" .context.Chart.AppVersion) -}}
 {{- printf "%s:%s" .image.repository $tag -}}
 {{- end }}
+
+{{/*
+Trusted reverse proxy hops for the tracker: explicit value, or 1 when the
+chart's ingress is enabled and 0 otherwise.
+*/}}
+{{- define "openstreamgrid.trustProxyHops" -}}
+{{- if kindIs "invalid" .Values.tracker.trustProxyHops -}}
+{{- ternary 1 0 .Values.ingress.enabled -}}
+{{- else -}}
+{{- .Values.tracker.trustProxyHops -}}
+{{- end -}}
+{{- end }}

@@ -46,7 +46,7 @@ spec:
             - name: DB_PATH
               value: {{ .Values.tracker.env.DB_PATH | quote }}
             - name: TRUST_PROXY_HOPS
-              value: {{ .Values.tracker.trustProxyHops | quote }}
+              value: {{ include "openstreamgrid.trustProxyHops" . | quote }}
             {{- if .Values.tracker.auth.existingSecret }}
             - name: TRACKER_API_KEY
               valueFrom:
