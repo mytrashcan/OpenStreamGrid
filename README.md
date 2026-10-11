@@ -398,6 +398,7 @@ If OpenStreamGrid is useful to you, consider
 - [Release notes](RELEASE_NOTES.md)
 - [Changelog](CHANGELOG.md)
 - [Kubernetes deployment guide](deploy/k8s/README.md)
+- [ADR 0001: Tracker horizontal scaling](docs/adr/0001-tracker-horizontal-scaling.md)
 - [Browser SDK example](sdk/examples/basic.html)
 
 ## License
