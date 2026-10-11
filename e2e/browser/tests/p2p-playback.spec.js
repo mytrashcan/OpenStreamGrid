@@ -8,7 +8,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = join(here, "..", "..", "..");
 const trackerUrl = process.env.TRACKER_URL ?? "http://127.0.0.1:7070";
 // A single rendition keeps both viewers on the same segments.
-const originBaseUrl = process.env.ORIGIN_BASE_URL ?? "http://127.0.0.1:8080/hls/low";
+const originBaseUrl = "http://127.0.0.1:8080/hls/low";
 const playlistUrl = `${originBaseUrl}/stream.m3u8`;
 // The origin's HLS_SEGMENT_TYPE; the test checks that this format is played and shared.
 const segmentType = process.env.EXPECTED_SEGMENT_TYPE ?? "mpegts";
