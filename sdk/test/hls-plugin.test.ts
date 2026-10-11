@@ -208,6 +208,19 @@ test("reports peer timeouts but not attempts cancelled by a winning peer", async
   assert.equal(events.some((event) => event.type === "peer_failed"), false);
 });
 
+test("forwards tracker WebSocket errors as ws_error events", () => {
+  const events: SdkEvent[] = [];
+  const plugin = new OpenStreamGridHlsPlugin({
+    trackerUrl: "ws://tracker.example/ws",
+    broadcastId: "live",
+    verifySegments: false,
+    onEvent: (event) => events.push(event),
+  });
+  const options = (plugin.wsClient as unknown as { options: { onError?: (event: Event) => void } }).options;
+  options.onError?.(new Event("error"));
+  assert.deepEqual(events, [{ type: "ws_error", message: "Tracker WebSocket error" }]);
+});
+
 test("verifies origin fallback data before caching it", async (context) => {
   context.mock.method(globalThis, "fetch", async (input: RequestInfo | URL) => {
     if (String(input).endsWith(".sha256")) {

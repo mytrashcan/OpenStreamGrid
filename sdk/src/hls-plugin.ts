@@ -498,6 +498,9 @@ export class OpenStreamGridHlsPlugin {
       onDisconnected: () => {
         this.emit({ type: "ws_disconnected" });
       },
+      onError: () => {
+        this.emit({ type: "ws_error", message: "Tracker WebSocket error" });
+      },
     });
   }
 
