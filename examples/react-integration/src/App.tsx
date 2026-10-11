@@ -25,7 +25,7 @@ export default function App() {
   const [latestEvent, setLatestEvent] = useState("Waiting for segment delivery");
 
   const handleEvent = useCallback((event: SdkEvent) => {
-    const segment = event.segment ? ` · ${event.segment}` : "";
+    const segment = "segment" in event && event.segment ? ` · ${event.segment}` : "";
     setLatestEvent(`${event.type.replaceAll("_", " ")}${segment}`);
   }, []);
 
