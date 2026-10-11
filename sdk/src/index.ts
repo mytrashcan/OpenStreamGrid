@@ -6,6 +6,7 @@
  * ## Exports
  *
  * - `OpenStreamGridHlsPlugin` — main plugin class that attaches to Hls.js
+ * - `OpenStreamGridShakaPlugin` — the same delivery core for Shaka Player
  * - `SegmentCache` — browser-compatible LRU cache (Uint8Array-based)
  * - `WsTrackerClient` — WebSocket client for tracker communication
  * - `OriginHashVerifier`, `sha256Hex`, `verifySegmentHash` — segment integrity tools
@@ -13,6 +14,7 @@
  */
 
 export { OpenStreamGridHlsPlugin } from "./hls-plugin.js";
+export { OpenStreamGridShakaPlugin } from "./shaka-plugin.js";
 export { DeadlineAwareScheduler } from "./deadline-aware-scheduler.js";
 export { TrustLatencyProbeScheduler } from "./trust-latency-probe-scheduler.js";
 export { SegmentCache } from "./cache.js";
@@ -37,6 +39,11 @@ export type {
   WsServerMessage,
 } from "./types.js";
 export type { BrowserWebRtcPeerOptions } from "./webrtc-peer.js";
+export type {
+  ShakaNamespace,
+  ShakaPluginConfig,
+  ShakaSchemePlugin,
+} from "./shaka-plugin.js";
 export type {
   DeadlineAwareSchedulerOptions,
   OriginLatencyEstimate,

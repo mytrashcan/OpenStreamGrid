@@ -59,6 +59,7 @@ import type {
 const DEFAULT_MAX_CACHE_BYTES = 100 * 1024 * 1024;
 const DEFAULT_PEER_TIMEOUT_MS = 3_000;
 const DEFAULT_ORIGIN_LATENCY_ESTIMATE_MS = 500;
+const PEER_PHASE_SAFETY_MARGIN_MS = 200;
 const ORIGIN_LATENCY_EMA_ALPHA = 0.3;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const logger = createLogger("sdk");
@@ -416,6 +417,8 @@ export class OpenStreamGridHlsPlugin {
   private registrationRetry: ReturnType<typeof setTimeout> | undefined;
   private sessionRefresh: ReturnType<typeof setTimeout> | undefined;
   private attachedHls: Hls | undefined;
+  /** Whether the grid (peer registration, signaling, WebRTC) is running for a player. */
+  private active = false;
   private originalLoader: HlsConfig["loader"] | undefined;
   private installedLoader: HlsConfig["loader"] | undefined;
   private deadlineContinuityCounter: number | undefined;
@@ -520,15 +523,24 @@ export class OpenStreamGridHlsPlugin {
       throw new Error("Plugin is already attached to another Hls.js instance");
     }
     if (this.attachedHls === hls) return;
+    if (this.active) throw new Error("Plugin is already attached to another player");
     const DefaultLoader = hls.config.loader;
     const loader = createP2PLoader(this, DefaultLoader);
     this.attachedHls = hls;
     this.originalLoader = DefaultLoader;
     this.installedLoader = loader;
     hls.config.loader = loader;
+    this.startGrid();
+  }
 
+  /**
+   * @internal Starts peer registration, signaling, and WebRTC for a player
+   * adapter. Hls.js users call {@link attach} instead.
+   */
+  startGrid(): void {
+    if (this.active) return;
+    this.active = true;
     this.webRtcPeer = this.createWebRtcPeer();
-
     if (this.peerParticipation) {
       this.startPeerRegistration();
     }
@@ -538,6 +550,23 @@ export class OpenStreamGridHlsPlugin {
    * Detach from Hls.js and clean up.
    */
   detach(): void {
+    this.stopGrid();
+    if (
+      this.attachedHls &&
+      this.originalLoader &&
+      this.attachedHls.config.loader === this.installedLoader
+    ) {
+      this.attachedHls.config.loader = this.originalLoader;
+    }
+    this.attachedHls = undefined;
+    this.originalLoader = undefined;
+    this.installedLoader = undefined;
+    this.deadlineContinuityCounter = undefined;
+  }
+
+  /** @internal Stops in-flight requests, signaling, WebRTC, and unregisters the peer. */
+  stopGrid(): void {
+    this.active = false;
     for (const request of this.inFlightSegments.values()) {
       request.controller.abort(new DOMException("Plugin detached", "AbortError"));
     }
@@ -557,17 +586,6 @@ export class OpenStreamGridHlsPlugin {
     this.registrationRetry = undefined;
     this.sessionRefresh = undefined;
     if (this.registered) void this.unregisterPeer();
-    if (
-      this.attachedHls &&
-      this.originalLoader &&
-      this.attachedHls.config.loader === this.installedLoader
-    ) {
-      this.attachedHls.config.loader = this.originalLoader;
-    }
-    this.attachedHls = undefined;
-    this.originalLoader = undefined;
-    this.installedLoader = undefined;
-    this.deadlineContinuityCounter = undefined;
   }
 
   /** @internal Playback element used by the Hls.js loader deadline adapter. */
@@ -696,20 +714,43 @@ export class OpenStreamGridHlsPlugin {
     }
 
     if (planned && planned.candidates.length > 0) {
+      // With a known deadline, stop waiting for peers in time to fetch the
+      // segment from the origin before playback needs it.
+      const p2pBudgetMs = this.peerPhaseBudgetMs(planned.plan.execution?.deadlineSlackMs);
+      const peerController = new AbortController();
+      const onAbort = (): void => peerController.abort(signal.reason);
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) onAbort();
+      const budgetTimer =
+        p2pBudgetMs === undefined
+          ? undefined
+          : setTimeout(
+              () => peerController.abort(new DOMException("P2P exceeded the deadline", "TimeoutError")),
+              p2pBudgetMs,
+            );
       try {
         const result = await this.fetchFromPeers(
           planned.candidates,
           segmentName,
           segmentUrl,
-          signal,
+          peerController.signal,
         );
-        if (result && !signal.aborted) {
+        if (result && !signal.aborted && !peerController.signal.aborted) {
           return this.completeSegmentLoad(
             { ...result, source: "p2p" },
             segmentName,
             segmentUrl,
             segmentId,
           );
+        }
+        if (!signal.aborted && peerController.signal.aborted) {
+          this.stats.p2pFailures++;
+          this.stats.fallbacks++;
+          this.emit({
+            type: "origin_fallback",
+            segment: segmentName,
+            message: "P2P exceeded the playback deadline, falling back to origin",
+          });
         }
       } catch {
         this.stats.p2pFailures++;
@@ -719,6 +760,9 @@ export class OpenStreamGridHlsPlugin {
           segment: segmentName,
           message: "P2P failed, falling back to origin",
         });
+      } finally {
+        if (budgetTimer) clearTimeout(budgetTimer);
+        signal.removeEventListener("abort", onAbort);
       }
     }
 
@@ -1080,6 +1124,12 @@ export class OpenStreamGridHlsPlugin {
     return { data: result.data };
   }
 
+  /** Time the peer phase may use before the origin must start, given the deadline slack. */
+  private peerPhaseBudgetMs(deadlineSlackMs: number | undefined): number | undefined {
+    if (deadlineSlackMs === undefined || !Number.isFinite(deadlineSlackMs)) return undefined;
+    return Math.max(0, deadlineSlackMs - this.originLatencyEstimateMs - PEER_PHASE_SAFETY_MARGIN_MS);
+  }
+
   private async hedgedLoad(
     candidates: PeerCandidate[],
     segmentName: string,
@@ -1307,7 +1357,7 @@ export class OpenStreamGridHlsPlugin {
     this.scheduleSessionRefresh(Date.parse((payload as { expiresAt: string }).expiresAt));
     this.wsClient.setSessionToken(this.peerSessionToken);
     this.registered = true;
-    if (!this.attachedHls) {
+    if (!this.active) {
       await this.unregisterPeer();
       return;
     }
@@ -1321,10 +1371,10 @@ export class OpenStreamGridHlsPlugin {
         error: error instanceof Error ? error.message : String(error),
         fallback: "origin",
       });
-      if (!this.attachedHls || this.registrationRetry) return;
+      if (!this.active || this.registrationRetry) return;
       this.registrationRetry = setTimeout(() => {
         this.registrationRetry = undefined;
-        if (this.attachedHls && !this.registered) this.startPeerRegistration();
+        if (this.active && !this.registered) this.startPeerRegistration();
       }, 5_000);
     });
   }
@@ -1354,12 +1404,12 @@ export class OpenStreamGridHlsPlugin {
         this.scheduleSessionRefresh(expiresAt);
         return;
       }
-      if (!this.attachedHls || !this.registered) return;
+      if (!this.active || !this.registered) return;
       void this.registerPeer().catch((error: unknown) => {
         logger.warn("browser_peer_session_refresh_failed", {
           error: error instanceof Error ? error.message : String(error),
         });
-        if (this.attachedHls && this.registered) {
+        if (this.active && this.registered) {
           this.scheduleSessionRefresh(Date.now() + 65_000);
         }
       });

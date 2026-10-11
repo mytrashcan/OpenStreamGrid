@@ -6,6 +6,9 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Added
 
+- `OpenStreamGridShakaPlugin` brings the same delivery core to Shaka Player
+  through an HTTP(S) scheme plugin, with deadlines derived from Shaka's request
+  timeouts. The browser E2E covers it.
 - CMAF/fMP4 HLS: `HLS_SEGMENT_TYPE=fmp4` makes the origin emit `.m4s` media
   segments with an immutable per-rendition init segment and SHA-256
   sidecars; Node peers and the browser SDK share `.m4s` segments, while init
@@ -38,6 +41,9 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Fixed
 
+- The browser SDK stops waiting for peers when a known playback deadline
+  would otherwise be missed and fetches the segment from the origin in time;
+  previously a slow peer transfer could run past the deadline.
 - README SDK examples set `originBaseUrl` to `/hls` instead of `/hls/low`;
   with the master playlist, segment verification rejected the medium and
   high renditions.

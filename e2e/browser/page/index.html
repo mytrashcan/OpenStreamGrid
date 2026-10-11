@@ -11,10 +11,11 @@
     <video id="video" muted autoplay playsinline></video>
     <script type="module">
       import Hls from "hls.js";
-      import { OpenStreamGridHlsPlugin } from "/sdk/sdk.js";
+      import { OpenStreamGridHlsPlugin, OpenStreamGridShakaPlugin } from "/sdk/sdk.js";
 
       const params = new URLSearchParams(location.search);
       const state = {
+        peerId: params.get("peer"),
         peerFetched: 0,
         peerFetchedSegments: [],
         originFallbacks: 0,
@@ -24,13 +25,16 @@
       };
       window.osg = state;
 
-      const plugin = new OpenStreamGridHlsPlugin({
+      const options = {
         trackerUrl: params.get("tracker"),
         broadcastId: params.get("broadcast") ?? "live",
         peerId: params.get("peer"),
         originBaseUrl: params.get("originBase"),
         // Host candidates only: both viewers run on the same machine.
         iceServers: [],
+        // The test stream is ~3 Mbps; the 1 Mbps default upload cap could
+        // never deliver a segment before its playback deadline on this LAN.
+        maxUploadBitrate: 50_000_000,
         onEvent: (event) => {
           state.events[event.type] = (state.events[event.type] ?? 0) + 1;
           if (event.type === "peer_fetched") {
@@ -39,16 +43,44 @@
           }
           if (event.type === "origin_fallback") state.originFallbacks += 1;
           // Keep the latest diagnostic events for failure reports.
-          state.recent = [...state.recent.slice(-19), event];
+          state.recent = [...state.recent.slice(-49), { t: Math.round(performance.now()), ...event }];
         },
-      });
-      const hls = new Hls({ liveSyncDurationCount: 3 });
-      hls.on(Hls.Events.ERROR, (_event, data) => {
-        if (data.fatal) state.fatalErrors.push(data.details);
-      });
-      plugin.attach(hls);
-      hls.loadSource(params.get("playlist"));
-      hls.attachMedia(document.getElementById("video"));
+      };
+      const video = document.getElementById("video");
+
+      if (params.get("player") === "shaka") {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = "/vendor/shaka-player.compiled.js";
+          script.onload = resolve;
+          script.onerror = reject;
+          document.head.append(script);
+        });
+        const { shaka } = window;
+        shaka.polyfill.installAll();
+        new OpenStreamGridShakaPlugin(options).attach(shaka);
+        const player = new shaka.Player();
+        player.addEventListener("error", (event) => {
+          if (event.detail?.severity === shaka.util.Error.Severity.CRITICAL) {
+            state.fatalErrors.push(`shaka-${event.detail.code}`);
+          }
+        });
+        try {
+          await player.attach(video);
+          await player.load(params.get("playlist"));
+        } catch (error) {
+          state.fatalErrors.push(`shaka-load-${error?.code ?? error}`);
+        }
+      } else {
+        const plugin = new OpenStreamGridHlsPlugin(options);
+        const hls = new Hls({ liveSyncDurationCount: 3 });
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          if (data.fatal) state.fatalErrors.push(data.details);
+        });
+        plugin.attach(hls);
+        hls.loadSource(params.get("playlist"));
+        hls.attachMedia(video);
+      }
     </script>
   </body>
 </html>

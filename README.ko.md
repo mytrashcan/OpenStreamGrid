@@ -190,6 +190,33 @@ TURN 자격증명을 시청자 코드에 넣는 대신 트래커에 `TURN_URLS`�
 시청자 코드에 `TRACKER_API_KEY`를 전달하거나 포함하지 말고, 관리자 키는 신뢰할
 수 있는 Origin과 운영 구성 요소에서만 사용하세요.
 
+### Shaka Player
+
+`OpenStreamGridShakaPlugin`은 같은 전송 코어를 Shaka Player에 연결합니다.
+HTTP(S) 스킴 플러그인을 등록해서 미디어 세그먼트 요청은 그리드를 거치고, 그 밖의
+요청은 Shaka의 fetch 플러그인을 사용합니다.
+
+```ts
+import shaka from "shaka-player";
+import { OpenStreamGridShakaPlugin } from "@openstreamgrid/sdk";
+
+const plugin = new OpenStreamGridShakaPlugin({
+  trackerUrl: "https://stream.example.com",
+  broadcastId: "live",
+  originBaseUrl: "https://stream.example.com/hls",
+});
+plugin.attach(shaka);
+const player = new shaka.Player();
+await player.attach(document.querySelector("video")!);
+await player.load("https://stream.example.com/hls/stream.m3u8");
+```
+
+옵션은 Hls.js 플러그인과 같습니다. Shaka의 스킴 플러그인은 전역이므로 페이지당
+인스턴스 하나만 연결하고, `detach()`를 호출하면 Shaka의 fetch 플러그인이
+복원됩니다. Shaka는 네트워크 플러그인에 재생 위치를 알려 주지 않으므로, 어댑터는
+요청의 재시도·정체(stall) 제한 시간에서 기한을 계산합니다. 피어는 그 예산의 앞부분만
+쓰고, Shaka가 요청을 중단하기 전에 Origin을 사용합니다.
+
 ## API 요약
 
 Tracker 리소스는 `/api/v1` 아래에 있습니다. 관리 요청은 `X-API-Key`를

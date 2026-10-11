@@ -14,11 +14,18 @@ const playlistUrl = `${originBaseUrl}/stream.m3u8`;
 const segmentType = process.env.EXPECTED_SEGMENT_TYPE ?? "mpegts";
 const segmentExtension = { mpegts: ".ts", fmp4: ".m4s" }[segmentType];
 if (!segmentExtension) throw new Error(`Unknown EXPECTED_SEGMENT_TYPE '${segmentType}'`);
+// Player integration under test: the Hls.js plugin or the Shaka Player adapter.
+const player = process.env.E2E_PLAYER ?? "hlsjs";
+if (!["hlsjs", "shaka"].includes(player)) throw new Error(`Unknown E2E_PLAYER '${player}'`);
 
 const routes = {
   "/": [join(here, "..", "page", "index.html"), "text/html; charset=utf-8"],
   "/sdk/sdk.js": [join(repositoryRoot, "sdk", "dist", "sdk.js"), "text/javascript"],
   "/vendor/hls.mjs": [join(here, "..", "node_modules", "hls.js", "dist", "hls.mjs"), "text/javascript"],
+  "/vendor/shaka-player.compiled.js": [
+    join(here, "..", "node_modules", "shaka-player", "dist", "shaka-player.compiled.js"),
+    "text/javascript",
+  ],
 };
 
 let server;
@@ -51,6 +58,7 @@ const viewerUrl = (peerId) => {
     playlist: playlistUrl,
     originBase: originBaseUrl,
     peer: peerId,
+    player,
   });
   return `${pageOrigin}/?${params}`;
 };
