@@ -319,6 +319,37 @@ test("authenticates protected HTTP routes when an API key is configured", async 
   assert.equal(wrongBearer.status, 401);
   assert.deepEqual(JSON.parse(wrongBearer.body), { error: "Invalid API key" });
 
+  // A peer session token shares the Authorization header but must never grant
+  // admin access, while still working on the peer's own routes.
+  const joined = await invokeRaw(
+    handler,
+    "POST",
+    "/api/v1/broadcasts/live/peers",
+    { id: "peer-a", address: "http://peer-a:9090" },
+    "192.0.2.27",
+  );
+  assert.equal(joined.status, 201);
+  const { sessionToken } = JSON.parse(joined.body) as { sessionToken: string };
+  const peerMetrics = await invokeRaw(
+    handler,
+    "GET",
+    "/metrics",
+    undefined,
+    "192.0.2.28",
+    { authorization: `Bearer ${sessionToken}` },
+  );
+  assert.equal(peerMetrics.status, 401);
+  assert.deepEqual(JSON.parse(peerMetrics.body), { error: "Invalid API key" });
+  const peerHeartbeat = await invokeRaw(
+    handler,
+    "PUT",
+    "/api/v1/broadcasts/live/peers/peer-a/heartbeat",
+    {},
+    "192.0.2.29",
+    { authorization: `Bearer ${sessionToken}` },
+  );
+  assert.equal(peerHeartbeat.status, 200);
+
   const publicHealth = await invokeRaw(
     handler,
     "GET",
