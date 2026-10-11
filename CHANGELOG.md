@@ -14,14 +14,13 @@ All notable changes to OpenStreamGrid are documented in this file.
   `TURN_SHARED_SECRET`, coturn `use-auth-secret` format) with each peer
   session; the browser SDK adds them to its ICE servers and renews them with
   the session, so viewer code no longer needs static TURN passwords. Node peers
-  keep using `TURN_SERVER`.
+  use the issued credentials too, alongside any `TURN_SERVER` they configure.
 - Browser E2E test (Playwright): two real Chromium viewers play the Compose
   stream through the Hls.js plugin and must exchange a verified segment over
   WebRTC. It runs in CI for SDK, tracker, and origin changes.
 - Browser SDK `peer_failed` events report why a peer attempt failed (HTTP
   status, WebRTC error, timeout, or integrity); WebRTC errors keep their
   underlying message. API_REFERENCE documents all SDK events.
-  use the issued credentials too, alongside any `TURN_SERVER` they configure.
 - Helm `tracker.extraEnv` and `origin.extraEnv` pass additional environment
   variables (including `valueFrom`) to the containers, so settings such as
   `TRACKER_WS_ALLOWED_ORIGINS` and rate limits are configurable in Kubernetes.
