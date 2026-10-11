@@ -93,10 +93,13 @@ operating point.
 | 2000 | 22.9 ms | 43.4 ms | 57.6 ms | 13,713 | 127.0 | 32.5% | 0 |
 
 The tracker merges inventory updates per peer and sends each subscriber one
-`segment_inventory_batch` every 250 ms (two when a batch exceeds 256 entries,
-as at 2000 peers). Messages per subscriber no longer grow with the audience, so
-CPU at 1000 peers drops from a saturated core to under a quarter of one, and
-2000 peers run without drops.
+`segment_inventory_batch` every 250 ms for every 256 peers that changed in that
+interval. With 2 s segments that is four messages per second per subscriber
+until about 2000 active peers (some batches split in two at 2000), after which
+it grows in steps. Total messages still grow with the square of the audience,
+but about 256 times more slowly than one message per report. CPU at 1000 peers
+drops from a saturated core to under a quarter of one, and 2000 peers run
+without drops.
 
 Probe latency is higher than with legacy clients at the same peer count (p50
 11.9 ms against 4.7 ms at 500 peers) and grows with the audience. Each flush
@@ -116,7 +119,7 @@ trade some of that wait for batch delay.
   at roughly 260,000 to 310,000 delivered WebSocket messages per second,
   because each inventory report goes to every peer and messages grow with the
   square of the peer count.
-- Batching bounds messages, not bytes: every update still reaches every peer,
+- Batching cuts messages, not bytes: every update still reaches every peer,
   so delivered bytes grow with the square of the peer count (127 MB/s at 2000
   peers, about 1 Gbit/s). That is the next limit within one broadcast. Sending
   each peer only the inventory of the peers it may connect to would remove it.

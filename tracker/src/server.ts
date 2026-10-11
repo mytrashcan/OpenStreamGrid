@@ -1147,6 +1147,7 @@ export const createTrackerHandler = (
           store.unregisterBroadcast(broadcastId);
           metrics.synchronizeTraffic(store);
           sendEmpty(response, 204);
+          events.broadcastRemoved?.(broadcastId);
           events.broadcastListChanged?.();
           return;
         }
@@ -1268,6 +1269,7 @@ export class TrackerServer {
       peerListChanged: (broadcastId) =>
         webSockets?.peerListChanged(broadcastId),
       broadcastListChanged: () => webSockets?.broadcastListChanged(),
+      broadcastRemoved: (broadcastId) => webSockets?.broadcastRemoved(broadcastId),
     };
     this.server = createServer(
       createTrackerHandler(store, events, this.statsEvents, {
@@ -1408,6 +1410,7 @@ export class TrackerServer {
       const lease = broadcast.metadata?.leaseExpiresAt;
       if (broadcast.metadata?.owner === "origin" && lease && Date.parse(lease) <= nowMs) {
         this.store.unregisterBroadcast(broadcast.id);
+        this.webSockets.broadcastRemoved(broadcast.id);
         this.webSockets.broadcastListChanged();
       }
     }

@@ -64,6 +64,7 @@ const MESSAGE_RATE_PER_SECOND = 20;
 const MESSAGE_BURST = 40;
 const MAX_CONNECTIONS_PER_IP = 20;
 const INVALID_MESSAGE_CLOSE_CODE = 1_008;
+const BROADCAST_REMOVED_CLOSE_CODE = 4_004;
 const UNSUPPORTED_DATA_CLOSE_CODE = 1_003;
 const MAX_CLOSE_REASON_LENGTH = 120;
 const logger = createLogger("tracker");
@@ -71,6 +72,7 @@ const logger = createLogger("tracker");
 /** Optional tracker lifecycle callbacks for downstream event consumers. */
 export interface TrackerEvents {
   broadcastListChanged?(): void;
+  broadcastRemoved?(broadcastId: string): void;
   peerJoined?(broadcastId: string, peer: Peer): void;
   peerLeft?(broadcastId: string, peerId: string): void;
   segmentsAvailable?(broadcastId: string, peerId: string, segments: string[]): void;
@@ -260,6 +262,24 @@ export class TrackerWebSocketHub implements TrackerEvents {
 
   broadcastListChanged(): void {
     this.downstreamEvents.broadcastListChanged?.();
+  }
+
+  broadcastRemoved(broadcastId: string): void {
+    // The broadcast's peers are gone. Drop its pending batch and close its
+    // subscribers so neither can leak into a new broadcast that reuses the ID.
+    const batch = this.pendingInventory.get(broadcastId);
+    if (batch) clearTimeout(batch.timer);
+    this.pendingInventory.delete(broadcastId);
+    for (const socket of [...this.subscribersOf(broadcastId)]) {
+      this.unindexSubscription(socket);
+      this.subscriptions.set(socket, {
+        broadcastId: "",
+        peerId: "",
+        inventoryBatch: false,
+      });
+      socket.close(BROADCAST_REMOVED_CLOSE_CODE, "Broadcast removed");
+    }
+    this.downstreamEvents.broadcastRemoved?.(broadcastId);
   }
 
   async stop(): Promise<void> {
@@ -585,8 +605,8 @@ export class TrackerWebSocketHub implements TrackerEvents {
    * Sends an inventory update to legacy subscribers right away and merges it
    * into the next batch for subscribers that negotiated `inventory_batch`.
    * Every report otherwise costs one message per peer in the broadcast, so
-   * messages grow with the square of the audience; batching bounds them to
-   * one per subscriber per interval.
+   * messages grow with the square of the audience; batching sends each
+   * subscriber one message per interval for every 256 peers that changed.
    */
   private publishInventory(message: InventoryMessage): void {
     const subscribers = this.subscribersByBroadcast.get(message.broadcastId);

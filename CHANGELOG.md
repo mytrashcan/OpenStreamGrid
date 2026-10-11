@@ -65,6 +65,9 @@ All notable changes to OpenStreamGrid are documented in this file.
   peers in one broadcast, REST p95 latency dropped from about 1 s to 7 ms.
 - WebSocket fan-out serializes each message once and only visits the
   broadcast's own subscribers.
+- Deleting a broadcast, or letting an origin lease expire, closes its
+  WebSocket subscribers with code `4004` and drops pending inventory updates,
+  so a new broadcast that reuses the ID starts clean.
 
 ### Fixed
 

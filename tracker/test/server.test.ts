@@ -1078,6 +1078,94 @@ test("batches inventory updates for subscribers that negotiate inventory_batch",
   }
 });
 
+test("drops pending inventory and closes subscribers when a broadcast is deleted", async () => {
+  const server = new TrackerServer(() => new TrackerStore(), 30_000, {
+    rateLimitRps: 100,
+    rateLimitBurst: 200,
+    maxPeersPerBroadcast: 500,
+    wsInventoryBatchMs: 500,
+  });
+  const port = await server.start(0, "127.0.0.1");
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const register = () =>
+    fetch(`${baseUrl}/api/v1/broadcasts`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "live", playlistUrl: "http://origin/live.m3u8" }),
+    });
+  const join = async (id: string): Promise<string> => {
+    const response = await fetch(`${baseUrl}/api/v1/broadcasts/live/peers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, address: `http://${id}:9090` }),
+    });
+    return (await response.json() as { sessionToken: string }).sessionToken;
+  };
+  const listSegments = async (): Promise<string[][]> => {
+    const response = await fetch(`${baseUrl}/api/v1/broadcasts/live/peers`);
+    const body = await response.json() as { peers: Array<{ segments: string[] }> };
+    return body.peers.map((peer) => peer.segments);
+  };
+  const sockets: WebSocket[] = [];
+  const batches: WsServerMessage[] = [];
+  const subscribe = async (token: string): Promise<WebSocket> => {
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${port}/ws?sessionToken=${encodeURIComponent(token)}`,
+    );
+    sockets.push(socket);
+    socket.on("message", (data: RawData) => {
+      const message = JSON.parse(data.toString()) as WsServerMessage;
+      if (message.type === "segment_inventory_batch") batches.push(message);
+    });
+    await new Promise<void>((resolve) => socket.once("open", resolve));
+    const subscribed = waitForMessage(socket, (message) => message.type === "peer_list");
+    socket.send(
+      JSON.stringify({
+        type: "subscribe",
+        broadcastId: "live",
+        peerId: "peer-a",
+        features: ["inventory_batch"],
+      }),
+    );
+    await subscribed;
+    return socket;
+  };
+  try {
+    await register();
+    const oldSocket = await subscribe(await join("peer-a"));
+    const closed = new Promise<number>((resolve) => oldSocket.once("close", resolve));
+    // Queue an update, then delete the broadcast before the batch is sent.
+    oldSocket.send(
+      JSON.stringify({
+        type: "report_segments",
+        broadcastId: "live",
+        peerId: "peer-a",
+        added: ["old.ts"],
+        removed: [],
+      }),
+    );
+    const deadline = Date.now() + 1_000;
+    while (!(await listSegments()).flat().includes("old.ts")) {
+      assert.ok(Date.now() < deadline, "the report was not applied");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const deleted = await fetch(`${baseUrl}/api/v1/broadcasts/live`, { method: "DELETE" });
+    assert.equal(deleted.status, 204);
+    assert.equal(await closed, 4_004);
+
+    // A new broadcast that reuses the ID, and a subscriber that joins it
+    // before the old batch would have been sent, see no old inventory.
+    await register();
+    await subscribe(await join("peer-a"));
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    assert.deepEqual(batches, []);
+    assert.deepEqual(await listSegments(), [[]]);
+  } finally {
+    for (const socket of sockets) socket.close();
+    await server.stop();
+  }
+});
+
 test("authenticates WebSocket upgrades with a peer session", async () => {
   const server = new TrackerServer(
     () => new TrackerStore(),

@@ -281,10 +281,12 @@ The first client message subscribes the connection:
 With `inventory_batch`, the tracker merges inventory updates per peer and sends
 them every 250 ms as one `segment_inventory_batch` instead of a
 `segment_available` or `segment_inventory_delta` message for every report.
-Without it, a client receives every report as it arrives. Batching bounds
-inventory traffic to a few messages per second per client; without it, each
-report becomes one message to every peer in the broadcast. The SDK and the Node
-peer declare it.
+Without it, a client receives every report as it arrives. With batching, a
+client receives four messages per second for every 256 peers whose inventory
+changed in an interval; without it, each report becomes one message to every
+peer in the broadcast. The SDK and the Node peer declare it.
+
+Deleting a broadcast closes its subscribers' connections with code `4004`.
 
 Client-to-server messages:
 
