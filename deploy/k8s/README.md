@@ -41,7 +41,10 @@ matching the published release tags. Set `tracker.image.tag` or
 
 ## Deploy with Helm
 
-Review and override the ingress host and storage class for your cluster:
+Review and override the ingress host and storage class for your cluster. With
+the ingress enabled, also set `tracker.trustProxyHops=1`; otherwise every viewer
+appears to come from the ingress controller and shares one rate-limit and
+WebSocket-connection budget:
 
 ```bash
 helm upgrade --install openstreamgrid helm/openstreamgrid \
@@ -49,7 +52,8 @@ helm upgrade --install openstreamgrid helm/openstreamgrid \
   --create-namespace \
   --set ingress.enabled=true \
   --set ingress.host=stream.example.com \
-  --set ingress.className=nginx
+  --set ingress.className=nginx \
+  --set tracker.trustProxyHops=1
 ```
 
 For TLS, add a values file such as:

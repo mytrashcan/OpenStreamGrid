@@ -23,6 +23,10 @@ prototype releases are not maintained unless a release notice says otherwise.
 - Set a separate `PEER_SESSION_SECRET` of at least 32 random bytes. Never reuse
   the administrator API key as the session-signing secret.
 - Terminate TLS at a trusted reverse proxy in front of the tracker and origin.
+  Set `TRUST_PROXY_HOPS` to the number of proxies so per-client rate and
+  connection limits apply to viewers instead of to the proxy, and make sure
+  the tracker is reachable only through that proxy chain; otherwise clients
+  could choose their own `X-Forwarded-For` address.
   Protect private keys with filesystem permissions and never bake them into
   container images.
 - Use `wss://` and `https://` for traffic outside a trusted development network.

@@ -20,6 +20,7 @@ import {
   PeerSessionTokenService,
   type PeerSessionClaims,
 } from "./peer-session.js";
+import { clientAddress } from "./client-address.js";
 import {
   issueTurnCredentials,
   TURN_CREDENTIAL_GRACE_MS,
@@ -68,6 +69,8 @@ export interface TrackerConfiguration {
   rateLimitBurst: number;
   maxPeersPerBroadcast: number;
   wsAllowedOrigins?: string[];
+  wsMaxConnectionsPerIp: number;
+  trustProxyHops: number;
   turn?: TurnCredentialOptions;
 }
 
@@ -109,6 +112,8 @@ const parseAllowedOrigin = (value: string): string => {
 };
 
 const MIN_TURN_SHARED_SECRET_BYTES = 16;
+const DEFAULT_WS_MAX_CONNECTIONS_PER_IP = 20;
+const MAX_TRUST_PROXY_HOPS = 10;
 // RFC 7065 TURN URI: turn[s]:host[:port][?transport=udp|tcp]
 // Host is a DNS name, IPv4 address, or bracketed IPv6 address.
 const TURN_URL_PATTERN =
@@ -215,6 +220,18 @@ export const parseTrackerConfiguration = (
       1,
     ),
     ...(wsAllowedOrigins.length > 0 ? { wsAllowedOrigins } : {}),
+    wsMaxConnectionsPerIp: parseInteger(
+      environment.TRACKER_WS_MAX_CONNECTIONS_PER_IP ??
+        String(DEFAULT_WS_MAX_CONNECTIONS_PER_IP),
+      "TRACKER_WS_MAX_CONNECTIONS_PER_IP",
+      1,
+    ),
+    trustProxyHops: parseInteger(
+      environment.TRUST_PROXY_HOPS ?? "0",
+      "TRUST_PROXY_HOPS",
+      0,
+      MAX_TRUST_PROXY_HOPS,
+    ),
     ...(turn ? { turn } : {}),
   };
 };
@@ -779,6 +796,8 @@ export interface TrackerHttpOptions {
   metrics?: TrackerMetrics;
   rateLimiter?: IpRateLimiter;
   turn?: TurnCredentialOptions;
+  /** Reverse proxies in front of the tracker whose X-Forwarded-For is trusted. */
+  trustProxyHops?: number;
 }
 
 /** Creates the REST and dashboard request handler for a tracker store. */
@@ -879,7 +898,7 @@ export const createTrackerHandler = (
         (method === "POST" || method === "PUT" || method === "DELETE")
       ) {
         const retryAfter = rateLimiter.consume(
-          request.socket?.remoteAddress ?? "unknown",
+          clientAddress(request, options.trustProxyHops ?? 0),
         );
         if (retryAfter !== undefined) {
           metrics.requestRateLimited();
@@ -1212,6 +1231,8 @@ export class TrackerServer {
           | "peerSessionSecret"
           | "peerSessionTtlMs"
           | "wsAllowedOrigins"
+          | "wsMaxConnectionsPerIp"
+          | "trustProxyHops"
           | "turn"
         >
       > = {
@@ -1256,6 +1277,9 @@ export class TrackerServer {
         peerSessions,
         metrics,
         ...(configuration.turn ? { turn: configuration.turn } : {}),
+        ...(configuration.trustProxyHops !== undefined
+          ? { trustProxyHops: configuration.trustProxyHops }
+          : {}),
       }),
     );
     this.server.headersTimeout = 10_000;
@@ -1267,9 +1291,17 @@ export class TrackerServer {
       store,
       this.statsEvents,
       peerSessions,
-      configuration.wsAllowedOrigins
-        ? { allowedOrigins: configuration.wsAllowedOrigins }
-        : {},
+      {
+        ...(configuration.wsAllowedOrigins
+          ? { allowedOrigins: configuration.wsAllowedOrigins }
+          : {}),
+        ...(configuration.wsMaxConnectionsPerIp !== undefined
+          ? { maxConnectionsPerIp: configuration.wsMaxConnectionsPerIp }
+          : {}),
+        ...(configuration.trustProxyHops !== undefined
+          ? { trustProxyHops: configuration.trustProxyHops }
+          : {}),
+      },
     );
     this.webSockets = webSockets;
   }

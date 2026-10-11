@@ -9,6 +9,10 @@ tracker:
   # Optional PriorityClass so the single tracker replica is rescheduled ahead of
   # less important workloads after a node failure.
   priorityClassName: ""
+  # Reverse proxies in front of the tracker (ingress controller, TLS proxy, CDN)
+  # whose X-Forwarded-For is trusted for per-client limits. Use 1 with the
+  # chart's ingress; keep 0 when clients reach the Service directly.
+  trustProxyHops: 0
   port: 7070
   env:
     STORE_TYPE: sqlite

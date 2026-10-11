@@ -33,6 +33,8 @@ test("validates tracker environment configuration", () => {
     rateLimitRps: 100,
     rateLimitBurst: 200,
     maxPeersPerBroadcast: 500,
+    wsMaxConnectionsPerIp: 20,
+    trustProxyHops: 0,
   });
   assert.deepEqual(
     parseTrackerConfiguration({
@@ -50,6 +52,8 @@ test("validates tracker environment configuration", () => {
       rateLimitRps: 100,
       rateLimitBurst: 200,
       maxPeersPerBroadcast: 500,
+      wsMaxConnectionsPerIp: 20,
+      trustProxyHops: 0,
     },
   );
   assert.throws(
@@ -83,6 +87,20 @@ test("validates tracker environment configuration", () => {
   assert.throws(
     () => parseTrackerConfiguration({ TRACKER_API_KEY: " " }),
     /TRACKER_API_KEY must not be empty/,
+  );
+  const proxied = parseTrackerConfiguration({
+    TRACKER_WS_MAX_CONNECTIONS_PER_IP: "200",
+    TRUST_PROXY_HOPS: "1",
+  });
+  assert.equal(proxied.wsMaxConnectionsPerIp, 200);
+  assert.equal(proxied.trustProxyHops, 1);
+  assert.throws(
+    () => parseTrackerConfiguration({ TRACKER_WS_MAX_CONNECTIONS_PER_IP: "0" }),
+    /TRACKER_WS_MAX_CONNECTIONS_PER_IP must be an integer/,
+  );
+  assert.throws(
+    () => parseTrackerConfiguration({ TRUST_PROXY_HOPS: "-1" }),
+    /TRUST_PROXY_HOPS must be an integer/,
   );
   assert.deepEqual(
     parseTrackerConfiguration({
@@ -1229,6 +1247,76 @@ test("streams global, broadcast, REST, and WebSocket stats over SSE", async () =
   } finally {
     socket?.close();
     abortController.abort();
+    await server.stop();
+  }
+});
+
+test("rate limits REST mutations per forwarded client behind trusted proxies", async () => {
+  const handler = createTrackerHandler(new TrackerStore(), {}, undefined, {
+    rateLimitRps: 1,
+    rateLimitBurst: 1,
+    trustProxyHops: 1,
+  });
+  const register = (forwardedFor: string) =>
+    invokeRaw(
+      handler,
+      "POST",
+      "/api/v1/broadcasts",
+      { id: `live-${forwardedFor}`, playlistUrl: "http://origin/live.m3u8" },
+      "10.0.0.5",
+      { "x-forwarded-for": forwardedFor },
+    );
+  // Every request arrives from the ingress at 10.0.0.5; viewers are told apart
+  // by the address the ingress recorded.
+  assert.equal((await register("203.0.113.1")).status, 201);
+  assert.equal((await register("203.0.113.2")).status, 201);
+  assert.equal((await register("203.0.113.1")).status, 429);
+});
+
+test("applies a configurable WebSocket limit per forwarded client", async () => {
+  const server = new TrackerServer(() => new TrackerStore(), 30_000, {
+    rateLimitRps: 100,
+    rateLimitBurst: 200,
+    maxPeersPerBroadcast: 500,
+    wsMaxConnectionsPerIp: 1,
+    trustProxyHops: 1,
+  });
+  const port = await server.start(0, "127.0.0.1");
+  const sockets: WebSocket[] = [];
+  const upgradeStatus = (url: string, forwardedFor: string): Promise<number> =>
+    new Promise((resolve, reject) => {
+      const socket = new WebSocket(url, { headers: { "x-forwarded-for": forwardedFor } });
+      sockets.push(socket);
+      socket.once("unexpected-response", (_request, response) => {
+        response.resume();
+        resolve(response.statusCode ?? 0);
+      });
+      socket.once("open", () => resolve(101));
+      socket.once("error", reject);
+    });
+  try {
+    await fetch(`http://127.0.0.1:${port}/api/v1/broadcasts`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "live", playlistUrl: "http://origin/live.m3u8" }),
+    });
+    const tokens: string[] = [];
+    for (const id of ["peer-a", "peer-b", "peer-c"]) {
+      const join = await fetch(`http://127.0.0.1:${port}/api/v1/broadcasts/live/peers`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-forwarded-for": `203.0.113.${tokens.length + 10}` },
+        body: JSON.stringify({ id, address: `http://${id}:9090` }),
+      });
+      tokens.push((await join.json() as { sessionToken: string }).sessionToken);
+    }
+    const url = (token: string) => `ws://127.0.0.1:${port}/ws?sessionToken=${encodeURIComponent(token)}`;
+    assert.equal(await upgradeStatus(url(tokens[0] ?? ""), "203.0.113.1"), 101);
+    // A different viewer behind the same proxy gets its own slot.
+    assert.equal(await upgradeStatus(url(tokens[1] ?? ""), "203.0.113.2"), 101);
+    // A second connection from the same viewer exceeds the limit of 1.
+    assert.equal(await upgradeStatus(url(tokens[2] ?? ""), "203.0.113.1"), 429);
+  } finally {
+    for (const socket of sockets) socket.close();
     await server.stop();
   }
 });

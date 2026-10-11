@@ -1,3 +1,4 @@
+import { clientAddress } from "./client-address.js";
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
 import {
@@ -121,6 +122,10 @@ export interface TrackerWebSocketOptions {
    * still require a valid peer session.
    */
   allowedOrigins?: string[];
+  /** Concurrent WebSocket connections per client address (default 20). */
+  maxConnectionsPerIp?: number;
+  /** Reverse proxies in front of the tracker whose X-Forwarded-For is trusted. */
+  trustProxyHops?: number;
 }
 
 /** Validates tracker WebSocket messages and broadcasts peer updates. */
@@ -254,9 +259,9 @@ export class TrackerWebSocketHub implements TrackerEvents {
       );
       return;
     }
-    const clientIp = request.socket.remoteAddress ?? "unknown";
+    const clientIp = clientAddress(request, this.options.trustProxyHops ?? 0);
     const currentConnections = this.connectionsPerIp.get(clientIp) ?? 0;
-    if (currentConnections >= MAX_CONNECTIONS_PER_IP) {
+    if (currentConnections >= (this.options.maxConnectionsPerIp ?? MAX_CONNECTIONS_PER_IP)) {
       socket.end(
         "HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
       );
