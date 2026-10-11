@@ -12,9 +12,11 @@
 //   node scripts/tracker-capacity.mjs --api-key ... --peers 100,250,500 \
 //     --tracker-pid <pid>
 //
-// Reports, per peer count: probe latency for a REST peer lookup (p50/p95/p99),
-// WebSocket messages delivered per second, errors, and tracker CPU and RSS
-// (sampled with `ps` when --tracker-pid is given).
+// Reports, per peer count: probe latency for a REST lookup of a segment peers
+// currently hold (p50/p95/p99) and failed probes, WebSocket messages delivered
+// per second, connection failures and drops, and tracker CPU (CPU time used
+// during the stage divided by its wall time) and peak RSS when --tracker-pid
+// is given.
 
 import { execFileSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
@@ -47,13 +49,22 @@ const percentile = (values, fraction) => {
   return sorted[Math.min(sorted.length - 1, Math.floor(fraction * sorted.length))];
 };
 
+// `ps -o time` is cumulative CPU time ([dd-]hh:mm:ss or mm:ss.ss); `%cpu` is a
+// lifetime or decaying average and would blend stages together.
+const cpuSeconds = (value) => {
+  const [days, clock] = value.includes("-") ? value.split("-") : ["0", value];
+  return clock
+    .split(":")
+    .map(Number)
+    .reduce((total, part) => total * 60 + part, 0) + Number(days) * 86_400;
+};
+
 const sampleTracker = () => {
   if (!trackerPid) return undefined;
-  const [cpu, rssKb] = execFileSync("ps", ["-o", "%cpu=,rss=", "-p", String(trackerPid)], { encoding: "utf8" })
+  const [time, rssKb] = execFileSync("ps", ["-o", "time=,rss=", "-p", String(trackerPid)], { encoding: "utf8" })
     .trim()
-    .split(/\s+/)
-    .map(Number);
-  return { cpu, rssMb: rssKb / 1_024 };
+    .split(/\s+/);
+  return { cpuSeconds: cpuSeconds(time), rssMb: Number(rssKb) / 1_024 };
 };
 
 const forwardedFor = (index) => `198.18.${Math.floor(index / 250)}.${(index % 250) + 1}`;
@@ -172,20 +183,26 @@ const runStage = async (peerCount) => {
   const receivedBefore = peers.reduce((sum, peer) => sum + peer.received, 0);
   const latencies = [];
   const samples = [];
+  let probeFailures = 0;
+  const startSample = sampleTracker();
   const startedAt = Date.now();
   while (Date.now() - startedAt < durationMs) {
+    // Look up a segment that peers still hold, not one they already evicted.
+    const latest = Math.max(1, ...peers.map((peer) => peer.segment));
+    const probeSegment = `seg_${String(Math.max(1, latest - 1)).padStart(6, "0")}.ts`;
     const probeStarted = performance.now();
     try {
-      await json(`/api/v1/broadcasts/${broadcastId}/peers?segment=seg_000001.ts`);
+      await json(`/api/v1/broadcasts/${broadcastId}/peers?segment=${probeSegment}`);
       latencies.push(performance.now() - probeStarted);
     } catch {
-      errors += 1;
+      probeFailures += 1;
     }
     const sample = sampleTracker();
     if (sample) samples.push(sample);
     await delay(500);
   }
   const elapsedSeconds = (Date.now() - startedAt) / 1_000;
+  const endSample = sampleTracker();
   const delivered = peers.reduce((sum, peer) => sum + peer.received, 0) - receivedBefore;
 
   const openAtEnd = peers.filter((peer) => peer.socket?.readyState === WebSocket.OPEN).length;
@@ -202,15 +219,19 @@ const runStage = async (peerCount) => {
 
   return {
     peers: peerCount,
-    probeP50Ms: percentile(latencies, 0.5),
-    probeP95Ms: percentile(latencies, 0.95),
-    probeP99Ms: percentile(latencies, 0.99),
+    probeP50Ms: latencies.length ? percentile(latencies, 0.5) : undefined,
+    probeP95Ms: latencies.length ? percentile(latencies, 0.95) : undefined,
+    probeP99Ms: latencies.length ? percentile(latencies, 0.99) : undefined,
+    probeFailures,
     wsMessagesPerSecond: delivered / elapsedSeconds,
     errors,
     connectFailures,
     openAtEnd,
     closeCodes: Object.fromEntries(closeCodes),
-    cpuAvg: samples.length ? samples.reduce((sum, sample) => sum + sample.cpu, 0) / samples.length : undefined,
+    cpuPercent:
+      startSample && endSample
+        ? ((endSample.cpuSeconds - startSample.cpuSeconds) / elapsedSeconds) * 100
+        : undefined,
     rssMaxMb: samples.length ? Math.max(...samples.map((sample) => sample.rssMb)) : undefined,
   };
 };
@@ -223,12 +244,13 @@ for (const peerCount of peerCounts) {
 }
 
 const fixed = (value, digits = 1) => (value === undefined ? "n/a" : value.toFixed(digits));
-console.log("| Peers | Probe p50 | Probe p95 | Probe p99 | WS msgs/s delivered | Tracker CPU | Tracker RSS | Connect failures | Dropped during run |");
-console.log("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+const ms = (value) => (value === undefined ? "n/a" : `${fixed(value)} ms`);
+console.log("| Peers | Probe p50 | Probe p95 | Probe p99 | Failed probes | WS msgs/s delivered | Tracker CPU | Tracker RSS | Connect failures | Dropped during run |");
+console.log("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
 for (const result of results) {
   console.log(
-    `| ${result.peers} | ${fixed(result.probeP50Ms)} ms | ${fixed(result.probeP95Ms)} ms | ${fixed(result.probeP99Ms)} ms | ` +
-      `${fixed(result.wsMessagesPerSecond, 0)} | ${fixed(result.cpuAvg)}% | ${fixed(result.rssMaxMb, 0)} MB | ` +
+    `| ${result.peers} | ${ms(result.probeP50Ms)} | ${ms(result.probeP95Ms)} | ${ms(result.probeP99Ms)} | ${result.probeFailures} | ` +
+      `${fixed(result.wsMessagesPerSecond, 0)} | ${fixed(result.cpuPercent)}% | ${fixed(result.rssMaxMb, 0)} MB | ` +
       `${result.connectFailures} | ${result.peers - result.connectFailures - result.openAtEnd} |`,
   );
 }
