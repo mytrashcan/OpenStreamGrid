@@ -94,9 +94,9 @@ useful here: with one replica it would only block node drains.
    (both done; see the Kubernetes guide's *Recovery* section), and a measured
    capacity figure.
 2. **Measure:** done in [Tracker capacity](../tracker-capacity.md). One
-   instance serves about 500 active peers per broadcast with p95 under 10 ms;
-   at 1000 the `segment_available` fan-out saturates a core. Batching segment
-   availability is the next step before scaling out.
+   instance serves about 500 active peers per broadcast with p95 around 10 ms;
+   at 1000 the segment inventory fan-out saturates a core. Batching segment
+   inventory updates is the next step before scaling out.
 3. **When the deployment has many broadcasts:** adopt **option A**. It delivers
    scale-out without destabilizing admission or signaling.
 4. **Only if one broadcast outgrows one instance:** adopt **option B**, staged
