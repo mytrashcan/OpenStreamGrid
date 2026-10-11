@@ -323,3 +323,35 @@ test("tracks failures for both transports and resets usage stats", async () => {
     "recovered",
   );
 });
+
+test("applies tracker-issued ICE servers to new WebRTC connections", () => {
+  const configurations: RTCConfiguration[] = [];
+  const transport = new WebRtcTransport({
+    iceServers: [{ urls: "stun:stun.example.com:3478" }],
+    peerConnectionFactory: (configuration) => {
+      configurations.push(configuration);
+      return new wrtc.RTCPeerConnection({ iceServers: [] });
+    },
+  });
+  const createConnection = (): void => {
+    const connection = (transport as unknown as {
+      createPeerConnection(): RTCPeerConnection;
+    }).createPeerConnection();
+    connection.close();
+  };
+
+  transport.setIssuedIceServers([
+    { urls: ["turns:turn.example.com:5349"], username: "4070908800:peer-a", credential: "c1" },
+  ]);
+  createConnection();
+  transport.setIssuedIceServers([]);
+  createConnection();
+
+  assert.deepEqual(configurations.map((configuration) => configuration.iceServers), [
+    [
+      { urls: "stun:stun.example.com:3478" },
+      { urls: ["turns:turn.example.com:5349"], username: "4070908800:peer-a", credential: "c1" },
+    ],
+    [{ urls: "stun:stun.example.com:3478" }],
+  ]);
+});

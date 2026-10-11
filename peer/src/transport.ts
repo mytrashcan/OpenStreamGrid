@@ -55,4 +55,10 @@ export interface TransportAdapter {
 
   /** Reset collected statistics. */
   resetStats(): void;
+
+  /**
+   * Replaces short-lived ICE servers issued by the tracker (for example TURN
+   * credentials). Transports without ICE ignore it.
+   */
+  setIssuedIceServers?(servers: RTCIceServer[]): void;
 }

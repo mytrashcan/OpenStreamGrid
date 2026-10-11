@@ -21,6 +21,7 @@ All notable changes to OpenStreamGrid are documented in this file.
 - Browser SDK `peer_failed` events report why a peer attempt failed (HTTP
   status, WebRTC error, timeout, or integrity); WebRTC errors keep their
   underlying message. API_REFERENCE documents all SDK events.
+  use the issued credentials too, alongside any `TURN_SERVER` they configure.
 - Helm `tracker.extraEnv` and `origin.extraEnv` pass additional environment
   variables (including `valueFrom`) to the containers, so settings such as
   `TRACKER_WS_ALLOWED_ORIGINS` and rate limits are configurable in Kubernetes.

@@ -173,8 +173,8 @@ and the credential is `base64(HMAC-SHA1(secret, username))`.
 }
 ```
 
-The browser SDK appends these to its configured `iceServers` and replaces them
-on every session refresh.
+Browser SDK and Node peers append these to their configured ICE servers and
+replace them on every session refresh.
 
 Returns `429` when the configured per-broadcast peer capacity is exhausted.
 

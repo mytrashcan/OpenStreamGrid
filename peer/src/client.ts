@@ -105,6 +105,8 @@ class PeerApplication {
         : {}),
       broadcastId: configuration.broadcastId,
       peerId: configuration.peerId,
+      // Tracker-issued TURN credentials renew with every session refresh.
+      onIssuedIceServers: (servers) => this.transportManager.setIssuedIceServers(servers),
       heartbeat: () => ({
         uploadBandwidthBps: configuration.maxUploadSpeedBps,
         successRate: this.stats.p2pSuccessRate,
