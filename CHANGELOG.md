@@ -6,6 +6,10 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Added
 
+- `sdk-publish.yml` publishes `@openstreamgrid/sdk` to npm with provenance
+  when a GitHub release is published (opt-in via the `SDK_NPM_PUBLISH`
+  repository variable). The SDK package now has repository metadata and a
+  README for its npm page.
 - Helm `tracker.extraEnv` and `origin.extraEnv` pass additional environment
   variables (including `valueFrom`) to the containers, so settings such as
   `TRACKER_WS_ALLOWED_ORIGINS` and rate limits are configurable in Kubernetes.
