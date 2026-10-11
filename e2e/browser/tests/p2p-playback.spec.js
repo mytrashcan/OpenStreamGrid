@@ -58,29 +58,42 @@ const playbackState = (page) =>
   }));
 
 test("two zero-install browser viewers share segments over WebRTC", async ({ browser }) => {
-  const first = await (await browser.newContext()).newPage();
-  await first.goto(viewerUrl(`e2e-a-${Date.now()}`));
-  // Let the first viewer cache a few live segments before the second joins.
-  await expect.poll(async () => (await playbackState(first)).currentTime, { timeout: 60_000 })
-    .toBeGreaterThan(4);
+  const viewers = [];
+  const openViewer = async (name) => {
+    const page = await (await browser.newContext()).newPage();
+    viewers.push({ name, page });
+    await page.goto(viewerUrl(`e2e-${name}-${Date.now()}`));
+    return page;
+  };
+  try {
+    const first = await openViewer("a");
+    // Let the first viewer cache a few live segments before the second joins.
+    await expect.poll(async () => (await playbackState(first)).currentTime, { timeout: 60_000 })
+      .toBeGreaterThan(4);
 
-  const second = await (await browser.newContext()).newPage();
-  await second.goto(viewerUrl(`e2e-b-${Date.now()}`));
+    const second = await openViewer("b");
+    await expect
+      .poll(
+        async () => {
+          const [a, b] = await Promise.all([playbackState(first), playbackState(second)]);
+          return a.peerFetched + b.peerFetched;
+        },
+        { timeout: 90_000, intervals: [2_000] },
+      )
+      .toBeGreaterThan(0);
+    // peer_fetched can fire before Hls.js appends the bytes, so wait for
+    // viewer B to actually play rather than checking once.
+    await expect.poll(async () => (await playbackState(second)).currentTime, { timeout: 60_000 })
+      .toBeGreaterThan(0);
 
-  await expect
-    .poll(
-      async () => {
-        const [a, b] = await Promise.all([playbackState(first), playbackState(second)]);
-        return a.peerFetched + b.peerFetched;
-      },
-      { timeout: 90_000, intervals: [2_000] },
-    )
-    .toBeGreaterThan(0);
-
-  const [a, b] = await Promise.all([playbackState(first), playbackState(second)]);
-  test.info().annotations.push({ type: "viewer-a", description: JSON.stringify(a) });
-  test.info().annotations.push({ type: "viewer-b", description: JSON.stringify(b) });
-  expect(a.fatalErrors).toEqual([]);
-  expect(b.fatalErrors).toEqual([]);
-  expect(b.currentTime).toBeGreaterThan(0);
+    const [a, b] = await Promise.all([playbackState(first), playbackState(second)]);
+    expect(a.fatalErrors).toEqual([]);
+    expect(b.fatalErrors).toEqual([]);
+  } finally {
+    // Attach whatever state is available, including on timeouts.
+    for (const { name, page } of viewers) {
+      const state = await playbackState(page).catch((error) => ({ unavailable: String(error) }));
+      test.info().annotations.push({ type: `viewer-${name}`, description: JSON.stringify(state) });
+    }
+  }
 });
