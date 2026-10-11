@@ -239,8 +239,11 @@ class OpenStreamGridLoader implements Loader<LoaderContext> {
       return;
     }
 
-    // Only intercept media segments; playlists and init segments use the default loader.
-    if (!this.isMediaSegmentUrl(url)) {
+    // Only intercept whole media segments. Playlists, init segments, and
+    // byte-range requests (EXT-X-BYTERANGE) use the default loader, because
+    // the grid caches and shares complete files.
+    const ranged = (context.rangeStart ?? 0) > 0 || (context.rangeEnd ?? 0) > 0;
+    if (!this.isMediaSegmentUrl(url) || ranged) {
       this.fallbackToOrigin(context, config, callbacks);
       return;
     }

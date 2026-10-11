@@ -10,6 +10,10 @@ const trackerUrl = process.env.TRACKER_URL ?? "http://127.0.0.1:7070";
 // A single rendition keeps both viewers on the same segments.
 const originBaseUrl = process.env.ORIGIN_BASE_URL ?? "http://127.0.0.1:8080/hls/low";
 const playlistUrl = `${originBaseUrl}/stream.m3u8`;
+// The origin's HLS_SEGMENT_TYPE; the test checks that this format is played and shared.
+const segmentType = process.env.EXPECTED_SEGMENT_TYPE ?? "mpegts";
+const segmentExtension = { mpegts: ".ts", fmp4: ".m4s" }[segmentType];
+if (!segmentExtension) throw new Error(`Unknown EXPECTED_SEGMENT_TYPE '${segmentType}'`);
 
 const routes = {
   "/": [join(here, "..", "page", "index.html"), "text/html; charset=utf-8"],
@@ -66,6 +70,12 @@ test("two zero-install browser viewers share segments over WebRTC", async ({ bro
     return page;
   };
   try {
+    const playlist = await (await fetch(playlistUrl)).text();
+    const mediaLines = playlist.split("\n").filter((line) => line && !line.startsWith("#"));
+    expect(mediaLines.length).toBeGreaterThan(0);
+    expect(mediaLines.every((line) => line.endsWith(segmentExtension))).toBe(true);
+    if (segmentType === "fmp4") expect(playlist).toContain("#EXT-X-MAP:URI=");
+
     const first = await openViewer("a");
     // Let the first viewer cache a few live segments before the second joins.
     await expect.poll(async () => (await playbackState(first)).currentTime, { timeout: 60_000 })
@@ -89,6 +99,9 @@ test("two zero-install browser viewers share segments over WebRTC", async ({ bro
     const [a, b] = await Promise.all([playbackState(first), playbackState(second)]);
     expect(a.fatalErrors).toEqual([]);
     expect(b.fatalErrors).toEqual([]);
+    const shared = [...a.peerFetchedSegments, ...b.peerFetchedSegments];
+    expect(shared.length).toBeGreaterThan(0);
+    expect(shared.every((segment) => segment.endsWith(segmentExtension))).toBe(true);
   } finally {
     // Attach whatever state is available, including on timeouts.
     for (const { name, page } of viewers) {

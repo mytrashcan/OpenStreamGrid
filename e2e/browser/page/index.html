@@ -14,7 +14,14 @@
       import { OpenStreamGridHlsPlugin } from "/sdk/sdk.js";
 
       const params = new URLSearchParams(location.search);
-      const state = { peerFetched: 0, originFallbacks: 0, fatalErrors: [], events: {}, recent: [] };
+      const state = {
+        peerFetched: 0,
+        peerFetchedSegments: [],
+        originFallbacks: 0,
+        fatalErrors: [],
+        events: {},
+        recent: [],
+      };
       window.osg = state;
 
       const plugin = new OpenStreamGridHlsPlugin({
@@ -26,7 +33,10 @@
         iceServers: [],
         onEvent: (event) => {
           state.events[event.type] = (state.events[event.type] ?? 0) + 1;
-          if (event.type === "peer_fetched") state.peerFetched += 1;
+          if (event.type === "peer_fetched") {
+            state.peerFetched += 1;
+            state.peerFetchedSegments = [...state.peerFetchedSegments.slice(-9), event.segment];
+          }
           if (event.type === "origin_fallback") state.originFallbacks += 1;
           // Keep the latest diagnostic events for failure reports.
           state.recent = [...state.recent.slice(-19), event];
