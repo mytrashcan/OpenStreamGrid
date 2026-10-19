@@ -342,6 +342,15 @@ WebSocket의 `sessionToken` 쿼리로 사용합니다.
 | `TRACKER_URL` | `http://127.0.0.1:7070` | 호스트 상태 확인용 Tracker URL |
 | `ORIGIN_URL` | `http://127.0.0.1:8080` | 호스트 상태 확인용 Origin URL |
 
+### Tracker 처리 용량
+
+클라이언트가 인벤토리 배치와 이웃 뷰를 협상하면(SDK와 Node 피어는 협상합니다)
+Tracker 하나가 **방송 하나에서 활성 피어 4000명**을 CPU 코어의 약 40%로
+처리하며, REST p95 지연은 약 40 ms, 시그널링은 약 9 MB/s입니다. 이 기능 이전의
+클라이언트는 약 1000명에서 코어 하나를 다 씁니다. Apple M5에서 제어 평면
+벤치마크(`npm run benchmark:tracker-capacity`)로 측정했으며, 방법과 모든 측정
+결과는 [Tracker capacity](docs/tracker-capacity.md)에 있습니다.
+
 <!-- BENCHMARK_SCHEDULER:START -->
 ### Phase 3 스케줄러 정책 실험: `mixed-workload`
 
