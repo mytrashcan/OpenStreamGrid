@@ -13,6 +13,9 @@ All notable changes to OpenStreamGrid are documented in this file.
   instead of with its square. Neighbors that leave are replaced, and newcomers
   are linked into full views. The SDK and the Node peer declare it. One
   tracker serves 4000 peers in one broadcast at under half a core.
+- The Hls.js plugin sends LL-HLS partial segments (`EXT-X-PART`) straight to
+  the origin and shares only complete segments, instead of attempting P2P and
+  an integrity sidecar that parts do not have.
 - WebSocket `inventory_batch` subscribe feature: the tracker merges segment
   inventory updates per peer and sends them every 250 ms as one
   `segment_inventory_batch`, instead of sending each report to every peer. The
@@ -81,6 +84,10 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Fixed
 
+- An open monitoring dashboard no longer overloads the tracker: event-driven
+  SSE snapshots, which list every peer, are coalesced to at most one per
+  second. At 1000 peers, REST p95 latency with a dashboard open dropped from
+  3.9 s to 29 ms.
 - Behind a TLS proxy or Kubernetes ingress, all viewers shared the proxy's
   address, so the per-client REST rate limit and the 20-connection WebSocket
   limit applied to the whole audience. With `TRUST_PROXY_HOPS` set, limits

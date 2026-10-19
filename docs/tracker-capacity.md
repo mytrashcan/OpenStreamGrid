@@ -134,6 +134,23 @@ peer (with its segments) to find one. With single-peer lookups, 4000 peers
 join in 0.8 s and connect in 1.2 s; connecting took 24.8 s before, long enough
 for the first peers to expire.
 
+### With the monitoring dashboard open
+
+The dashboard's SSE stream sends a snapshot of every peer with its segments.
+Every stats report (one per peer every 5 s) and every join or leave used to
+rebuild and send one, so a single open dashboard dominated the tracker.
+Event-driven snapshots are now coalesced to at most one per second (the first
+at once, the rest in one trailing update). The "before" rows were measured
+with neighbor views and the "after" rows with batching only, whose signaling
+is heavier, so the improvement is if anything understated.
+
+| Peers | Dashboard | Probe p95 | Tracker CPU | SSE data in the run |
+| ---: | --- | ---: | ---: | ---: |
+| 500 | before | 534.0 ms | 28.4% | |
+| 1000 | before | 3,896.7 ms | 70.7% | 4.4 GB for both stages |
+| 500 | after | 16.3 ms | 14.3% | |
+| 1000 | after | 28.7 ms | 22.8% | 17.5 MB for both stages |
+
 ## Findings
 
 - With clients that negotiate `inventory_batch` and `neighbor_view` (the SDK
