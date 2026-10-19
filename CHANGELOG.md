@@ -98,6 +98,9 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Fixed
 
+- The dashboard's peer table shows the top 200 peers by P2P upload, with a
+  note when there are more, instead of rebuilding a row for every peer on each
+  update.
 - The load-test image (used by `scripts/benchmark.sh`) now contains the
   benchmark helper it imports; it failed at startup since 0.6.0. CI starts the
   image to catch this. The load test also negotiates inventory batching and

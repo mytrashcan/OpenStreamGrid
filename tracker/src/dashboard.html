@@ -626,7 +626,7 @@
           <div class="section-header">
             <div>
               <h2 id="peers-title">Peer traffic</h2>
-              <p class="section-note">Cumulative download and upload counters reported by each active peer</p>
+              <p id="peers-note" class="section-note">Cumulative download and upload counters reported by each active peer</p>
             </div>
           </div>
           <div id="peer-table-wrap" class="table-wrap" hidden>
@@ -700,6 +700,7 @@
           peerRows: document.getElementById("peer-rows"),
           peerTableWrap: document.getElementById("peer-table-wrap"),
           peerEmpty: document.getElementById("peer-empty"),
+          peersNote: document.getElementById("peers-note"),
           broadcastRows: document.getElementById("broadcast-rows"),
           broadcastTableWrap: document.getElementById("broadcast-table-wrap"),
           broadcastEmpty: document.getElementById("broadcast-empty"),
@@ -768,6 +769,8 @@
           })),
         );
 
+        const MAX_PEER_ROWS = 200;
+
         const renderPeers = (snapshot) => {
           const peers = selectedPeers(snapshot);
           elements.peerRows.replaceChildren();
@@ -778,9 +781,15 @@
               finiteNumber(left.stats?.bytesUploadedP2P) ||
             String(left.peer?.id).localeCompare(String(right.peer?.id)),
           );
+          // Large audiences would rebuild thousands of rows on every update;
+          // show the top uploaders, which are the peers worth watching.
+          const shown = peers.slice(0, MAX_PEER_ROWS);
+          elements.peersNote.textContent = shown.length < peers.length
+            ? `Top ${shown.length} of ${numberFormat.format(peers.length)} peers by P2P upload`
+            : "Cumulative download and upload counters reported by each active peer";
           const includeBroadcast = elements.broadcastSelector.value === "";
           const fragment = document.createDocumentFragment();
-          for (const entry of peers) {
+          for (const entry of shown) {
             const stats = entry.stats ?? {};
             const p2pBytes = finiteNumber(stats.bytesDownloadedP2P);
             const originBytes = finiteNumber(stats.bytesDownloadedOrigin);
