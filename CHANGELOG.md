@@ -6,6 +6,10 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Added
 
+- `origin/dist/sidecars.js` writes the `.sha256` sidecars peers verify
+  against for HLS output from any packager, so OpenStreamGrid works with an
+  existing origin. It hashes segments once a playlist lists them and prunes
+  sidecars of deleted segments.
 - The Hls.js plugin sends LL-HLS partial segments (`EXT-X-PART`) straight to
   the origin and shares only complete segments, instead of attempting P2P and
   an integrity sidecar that parts do not have.

@@ -224,6 +224,28 @@ Shaka does not expose the playback position to network plugins, so the adapter
 derives a deadline from each request's retry and stall timeouts: peers get the
 first part of that budget, and the origin is used before Shaka would abort.
 
+## Using your own origin
+
+Peers verify every shared segment against a `<segment>.sha256` sidecar next to
+it (`<hex digest>  <segment name>`). The bundled origin writes them; with
+another packager, run the sidecar writer next to it, pointed at the HLS
+output directory:
+
+```bash
+# From a checkout (npm run build first)
+node origin/dist/sidecars.js /var/www/hls
+# Or from the published origin image; it runs as a non-root user, so let it
+# write to the host directory with --user
+docker run --rm --user "$(id -u):$(id -g)" -v /var/www/hls:/hls \
+  ghcr.io/mytrashcan/openstreamgrid-origin:v0.6.1 origin/dist/sidecars.js /hls
+```
+
+It hashes segments once they appear in a media playlist, so it never hashes a
+segment the packager is still writing, and removes sidecars whose segment was
+deleted. `--once` runs a single pass; `--interval <ms>` sets how often it
+looks for new segments (default 1000). Serve the sidecars from the same place
+as the segments, or point the SDK's `hashUrlResolver` at them.
+
 ## Tracker API
 
 Tracker resources are under `/api/v1`. Administrators send `X-API-Key: <key>`
