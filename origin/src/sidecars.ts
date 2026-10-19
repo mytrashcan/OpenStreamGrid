@@ -20,6 +20,8 @@ import { createLogger, MEDIA_SEGMENT_EXTENSION_PATTERN } from "@openstreamgrid/c
 
 const SIDECAR_SUFFIX = ".sha256";
 const DEFAULT_INTERVAL_MS = 1_000;
+const MIN_INTERVAL_MS = 100;
+const MAX_INTERVAL_MS = 60_000;
 const URI_SCHEME_PATTERN = /^[a-z][a-z0-9+.-]*:/i;
 const logger = createLogger("sidecars");
 
@@ -129,8 +131,14 @@ const parseArguments = (
     if (argument === "--once") once = true;
     else if (argument === "--interval") {
       intervalMs = Number(argv[(index += 1)]);
-      if (!Number.isSafeInteger(intervalMs) || intervalMs < 100) {
-        throw new Error("--interval must be an integer of at least 100 (milliseconds)");
+      if (
+        !Number.isSafeInteger(intervalMs) ||
+        intervalMs < MIN_INTERVAL_MS ||
+        intervalMs > MAX_INTERVAL_MS
+      ) {
+        throw new Error(
+          `--interval must be between ${MIN_INTERVAL_MS} and ${MAX_INTERVAL_MS} milliseconds`,
+        );
       }
     } else if (argument?.startsWith("--")) {
       throw new Error(`Unknown option '${argument}'`);
@@ -161,7 +169,7 @@ const run = async (): Promise<void> => {
     if (once || stopped) break;
     await new Promise<void>((resolve) => {
       wake = resolve;
-      setTimeout(resolve, intervalMs);
+      setTimeout(resolve, Math.min(Math.max(intervalMs, MIN_INTERVAL_MS), MAX_INTERVAL_MS));
     });
   } while (!stopped);
 };

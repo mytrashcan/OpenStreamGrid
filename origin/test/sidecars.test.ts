@@ -79,4 +79,8 @@ test("the command line runs one pass with --once", async (context) => {
     `${sha256("fmp4")}  seg_1.m4s\n`,
   );
   await assert.rejects(promisify(execFile)(process.execPath, [script]), /Usage: sidecars\.js/);
+  await assert.rejects(
+    promisify(execFile)(process.execPath, [script, root, "--interval", "3600000"]),
+    /--interval must be between 100 and 60000 milliseconds/,
+  );
 });

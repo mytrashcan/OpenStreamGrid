@@ -243,7 +243,7 @@ docker run --rm --user "$(id -u):$(id -g)" -v /var/www/hls:/hls \
 It hashes segments once they appear in a media playlist, so it never hashes a
 segment the packager is still writing, and removes sidecars whose segment was
 deleted. `--once` runs a single pass; `--interval <ms>` sets how often it
-looks for new segments (default 1000). Serve the sidecars from the same place
+looks for new segments (100 to 60000, default 1000). Serve the sidecars from the same place
 as the segments, or point the SDK's `hashUrlResolver` at them.
 
 ## Tracker API
