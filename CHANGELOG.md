@@ -6,6 +6,11 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Added
 
+- `OpenStreamGridHlsPlugin.hlsJsConfig()` hands out the grid's loader as
+  hls.js configuration for players that create hls.js themselves, such as
+  Video.js 10's `<hlsjs-video>` (`source.engine.hlsJs`); `attach()` then only
+  tracks the created instance for playback deadlines. The browser E2E covers
+  Video.js 10.
 - `origin/dist/sidecars.js` writes the `.sha256` sidecars peers verify
   against for HLS output from any packager, so OpenStreamGrid works with an
   existing origin. It hashes segments once a playlist lists them and prunes

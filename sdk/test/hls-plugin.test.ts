@@ -704,6 +704,52 @@ test("sends byte-range and LL-HLS partial segment requests to the default loader
   }
 });
 
+test("hands out its loader as hls.js config for players that build hls.js", () => {
+  const plugin = new OpenStreamGridHlsPlugin({
+    trackerUrl: "ws://tracker.example/ws",
+    broadcastId: "live",
+    verifySegments: false,
+    peerParticipation: false,
+  });
+  const defaultLoads: unknown[] = [];
+  class DefaultLoader {
+    stats = {};
+    load(context: unknown): void {
+      defaultLoads.push(context);
+    }
+  }
+  try {
+    const { loader } = plugin.hlsJsConfig(
+      DefaultLoader as unknown as Parameters<typeof plugin.hlsJsConfig>[0],
+    );
+    // Repeated calls return the same loader rather than wrapping again.
+    assert.equal(plugin.hlsJsConfig(DefaultLoader as never).loader, loader);
+    const LoaderClass = loader as unknown as new (config: unknown) => {
+      load(context: unknown, config: unknown, callbacks: unknown): void;
+    };
+    const playlist = { url: "https://origin.example/hls/low/stream.m3u8" };
+    new LoaderClass({}).load(playlist, { timeout: 1_000, loadPolicy: { maxLoadTimeMs: 1_000 } }, {});
+    assert.deepEqual(defaultLoads, [playlist]);
+
+    // The player's instance uses that loader: attach only tracks it, for
+    // playback deadlines, and a recreated instance replaces it.
+    const media = {} as HTMLMediaElement;
+    const hls = { config: { loader }, media } as unknown as Hls;
+    plugin.attach(hls);
+    assert.equal(hls.config.loader, loader);
+    assert.equal(plugin.deadlineMediaElement(), media);
+    const recreated = { config: { loader }, media: null } as unknown as Hls;
+    plugin.attach(recreated);
+    assert.equal(plugin.deadlineMediaElement(), null);
+
+    // An instance built without the loader cannot be attached meanwhile.
+    const other = { config: { loader: DefaultLoader } } as unknown as Hls;
+    assert.throws(() => plugin.attach(other), /already attached/);
+  } finally {
+    plugin.detach();
+  }
+});
+
 test("stops waiting for a slow peer in time to meet a known deadline", async (context) => {
   const events: SdkEvent[] = [];
   let peerAborted = false;

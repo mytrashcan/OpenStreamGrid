@@ -14,9 +14,10 @@ const playlistUrl = `${originBaseUrl}/stream.m3u8`;
 const segmentType = process.env.EXPECTED_SEGMENT_TYPE ?? "mpegts";
 const segmentExtension = { mpegts: ".ts", fmp4: ".m4s" }[segmentType];
 if (!segmentExtension) throw new Error(`Unknown EXPECTED_SEGMENT_TYPE '${segmentType}'`);
-// Player integration under test: the Hls.js plugin or the Shaka Player adapter.
+// Player integration under test: the Hls.js plugin, the Shaka Player adapter,
+// or Video.js 10's <hlsjs-video> configured through hlsJsConfig().
 const player = process.env.E2E_PLAYER ?? "hlsjs";
-if (!["hlsjs", "shaka"].includes(player)) throw new Error(`Unknown E2E_PLAYER '${player}'`);
+if (!["hlsjs", "shaka", "videojs"].includes(player)) throw new Error(`Unknown E2E_PLAYER '${player}'`);
 
 const routes = {
   "/": [join(here, "..", "page", "index.html"), "text/html; charset=utf-8"],
@@ -26,6 +27,10 @@ const routes = {
     join(here, "..", "node_modules", "shaka-player", "dist", "shaka-player.compiled.js"),
     "text/javascript",
   ],
+  // Built by `npm run build:videojs`; only the Video.js variant needs it.
+  ...(player === "videojs"
+    ? { "/vendor/videojs.mjs": [join(here, "..", "page", "dist", "videojs.mjs"), "text/javascript"] }
+    : {}),
 };
 
 let server;
@@ -67,7 +72,9 @@ const viewerUrl = (peerId) => {
 // Shaka live playback, is already large on the first frame.
 const playbackState = (page) =>
   page.evaluate(() => {
-    const video = document.getElementById("video");
+    // Video.js renders its own <video>; the page exposes the one hls.js plays.
+    const video = window.osgMediaElement?.() ?? document.getElementById("video");
+    if (!video) return { ...window.osg, currentTime: 0, playedSeconds: 0 };
     let playedSeconds = 0;
     for (let index = 0; index < video.played.length; index += 1) {
       playedSeconds += video.played.end(index) - video.played.start(index);

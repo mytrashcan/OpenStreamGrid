@@ -224,6 +224,37 @@ Shaka does not expose the playback position to network plugins, so the adapter
 derives a deadline from each request's retry and stall timeouts: peers get the
 first part of that budget, and the origin is used before Shaka would abort.
 
+### Video.js 10 and other hls.js wrappers
+
+Players that create hls.js themselves, such as Video.js 10's `<hlsjs-video>`,
+take the grid's loader as hls.js configuration. Call `hlsJsConfig()` with
+hls.js's default loader and pass the result where the player accepts hls.js
+options:
+
+```ts
+import "@videojs/html/media/hlsjs-video";
+import { Hls } from "@videojs/hlsjs-video";
+import { OpenStreamGridHlsPlugin } from "@openstreamgrid/sdk";
+
+const grid = new OpenStreamGridHlsPlugin({
+  trackerUrl: "https://stream.example.com",
+  broadcastId: "live",
+  originBaseUrl: "https://stream.example.com/hls",
+});
+const video = document.querySelector("hlsjs-video")!;
+video.source = {
+  src: "https://stream.example.com/hls/stream.m3u8",
+  // Native HLS playback would bypass hls.js and the grid.
+  preferPlayback: "mse",
+  engine: { hlsJs: grid.hlsJsConfig(Hls.DefaultConfig.loader) },
+};
+```
+
+Once the player has created hls.js (`video.engine` for Video.js 10), pass it
+to `grid.attach()` to schedule against the playback position; attach again if
+the player recreates it. `grid.detach()` stops the grid. The browser E2E plays
+Video.js 10.0.1 this way.
+
 ## Using your own origin
 
 Peers verify every shared segment against a `<segment>.sha256` sidecar next to

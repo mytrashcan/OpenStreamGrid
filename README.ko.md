@@ -218,6 +218,36 @@ await player.load("https://stream.example.com/hls/stream.m3u8");
 요청의 재시도·정체(stall) 제한 시간에서 기한을 계산합니다. 피어는 그 예산의 앞부분만
 쓰고, Shaka가 요청을 중단하기 전에 Origin을 사용합니다.
 
+### Video.js 10 등 hls.js를 직접 만드는 플레이어
+
+Video.js 10의 `<hlsjs-video>`처럼 hls.js를 직접 생성하는 플레이어에는 그리드의
+로더를 hls.js 설정으로 넘깁니다. hls.js 기본 로더로 `hlsJsConfig()`를 호출하고,
+그 결과를 플레이어가 hls.js 옵션을 받는 곳에 넣으세요.
+
+```ts
+import "@videojs/html/media/hlsjs-video";
+import { Hls } from "@videojs/hlsjs-video";
+import { OpenStreamGridHlsPlugin } from "@openstreamgrid/sdk";
+
+const grid = new OpenStreamGridHlsPlugin({
+  trackerUrl: "https://stream.example.com",
+  broadcastId: "live",
+  originBaseUrl: "https://stream.example.com/hls",
+});
+const video = document.querySelector("hlsjs-video")!;
+video.source = {
+  src: "https://stream.example.com/hls/stream.m3u8",
+  // 네이티브 HLS 재생은 hls.js와 그리드를 거치지 않습니다.
+  preferPlayback: "mse",
+  engine: { hlsJs: grid.hlsJsConfig(Hls.DefaultConfig.loader) },
+};
+```
+
+플레이어가 hls.js를 만든 뒤(Video.js 10에서는 `video.engine`) `grid.attach()`에
+넘기면 재생 위치를 기준으로 스케줄링합니다. 플레이어가 hls.js를 다시 만들면 다시
+연결하세요. `grid.detach()`로 그리드를 멈춥니다. 브라우저 E2E가 이 방식으로
+Video.js 10.0.1을 재생합니다.
+
 ## 기존 Origin과 함께 사용하기
 
 피어는 공유되는 모든 세그먼트를 옆에 있는 `<segment>.sha256` 사이드카

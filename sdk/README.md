@@ -35,6 +35,11 @@ hls.attachMedia(document.querySelector("video")!);
 For Shaka Player, use `OpenStreamGridShakaPlugin` with the same options and call
 `plugin.attach(shaka)` before loading the stream.
 
+For players that create hls.js themselves, such as Video.js 10's
+`<hlsjs-video>`, pass `plugin.hlsJsConfig(Hls.DefaultConfig.loader)` where the
+player accepts hls.js options (`source.engine.hlsJs` in Video.js 10, with
+`preferPlayback: "mse"`), then `plugin.attach()` the instance it creates.
+
 Each viewer registers with the tracker and receives a short-lived peer session.
 When the tracker is configured for TURN, it also issues short-lived TURN
 credentials. Never put the tracker administrator API key in viewer code.
