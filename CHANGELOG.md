@@ -6,6 +6,9 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Added
 
+- The Hls.js plugin sends LL-HLS partial segments (`EXT-X-PART`) straight to
+  the origin and shares only complete segments, instead of attempting P2P and
+  an integrity sidecar that parts do not have.
 - WebSocket `inventory_batch` subscribe feature: the tracker merges segment
   inventory updates per peer and sends them every 250 ms as one
   `segment_inventory_batch`, instead of sending each report to every peer. The

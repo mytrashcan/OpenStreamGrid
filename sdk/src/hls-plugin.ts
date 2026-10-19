@@ -240,11 +240,14 @@ class OpenStreamGridLoader implements Loader<LoaderContext> {
       return;
     }
 
-    // Only intercept whole media segments. Playlists, init segments, and
-    // byte-range requests (EXT-X-BYTERANGE) use the default loader, because
-    // the grid caches and shares complete files.
+    // Only intercept whole media segments. Playlists, init segments,
+    // byte-range requests (EXT-X-BYTERANGE), and LL-HLS partial segments
+    // (EXT-X-PART) use the default loader, because the grid caches and shares
+    // complete files. Hls.js marks part loads with `context.part`; parts are
+    // short-lived and have no integrity sidecar, so peers cannot help.
     const ranged = (context.rangeStart ?? 0) > 0 || (context.rangeEnd ?? 0) > 0;
-    if (!this.isMediaSegmentUrl(url) || ranged) {
+    const partial = Boolean((context as { part?: unknown }).part);
+    if (!this.isMediaSegmentUrl(url) || ranged || partial) {
       this.fallbackToOrigin(context, config, callbacks);
       return;
     }

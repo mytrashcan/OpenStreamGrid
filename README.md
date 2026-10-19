@@ -11,7 +11,8 @@ Universal hybrid P2P-CDN middleware for standards-based live streaming.
 [English](README.md) | [한국어](README.ko.md)
 
 OpenStreamGrid adds peer-assisted delivery to HLS streams with MPEG-TS (`.ts`)
-or CMAF/fMP4 (`.m4s`) media segments; LL-HLS partial segments are a roadmap
+or CMAF/fMP4 (`.m4s`) media segments. With LL-HLS, partial segments load
+from the origin while complete segments are shared; sharing parts is a roadmap
 item. Peers share and SHA-256-verify media segments, while fMP4 init segments
 and playlists always load from your origin or CDN. Your
 origin continues to encode and publish media while OpenStreamGrid discovers
