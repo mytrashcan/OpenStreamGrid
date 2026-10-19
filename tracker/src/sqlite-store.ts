@@ -548,6 +548,11 @@ export class SQLiteStore implements TrackerStoreBackend {
     return rows.map((row) => this.mapPeer(row, segmentsByPeer.get(row.peer_id) ?? []));
   }
 
+  getPeer(broadcastId: string, peerId: string): Peer | undefined {
+    const row = this.findPeer(broadcastId, peerId);
+    return row ? this.mapPeer(row) : undefined;
+  }
+
   listPeerStats(broadcastId: string): PeerStatsSnapshot[] {
     const rows = this.statements.listPeerStats.all({ broadcastId }) as PeerTrafficRow[];
     const statsByPeer = new Map(

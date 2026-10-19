@@ -25,12 +25,15 @@ For each peer count the script reports the latency of a REST probe
 (`GET /api/v1/broadcasts/:id/peers?segment=…` every 0.5 s, for a segment the
 peers currently hold), WebSocket messages and megabytes delivered per second,
 tracker CPU (CPU time used during the stage divided by its wall time, from
-`ps`) and RSS, and connection failures.
+`ps`) and RSS, and connection failures. It also prints how long joining and
+connecting the peers took.
 
-Simulated peers declare the `inventory_batch` subscribe feature like the SDK
-and the Node peer. Pass `--inventory-batch false` to measure clients that
-receive every inventory report as its own message; the first three tables below
-predate the feature and were measured that way.
+Simulated peers declare the `inventory_batch` and `neighbor_view` subscribe
+features like the SDK and the Node peer. Pass `--neighbor-view false` to send
+every client the whole audience, or `--inventory-batch false` to measure
+clients that receive every inventory report as its own message. The first
+three tables below predate both features and were measured that way; the
+batching table predates neighbor views.
 
 ## Results
 
@@ -108,6 +111,29 @@ arrives during a flush waits for it, and the probe response itself lists every
 peer that holds the segment. Spreading a flush across several turns would
 trade some of that wait for batch delay.
 
+### After: neighbor views (`neighbor_view`, 64 neighbors)
+
+| Peers | Probe p50 | Probe p95 | Probe p99 | WS msgs/s | WS MB/s | Tracker CPU | Dropped |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 500 | 11.7 ms | 14.9 ms | 18.4 ms | 1,904 | 1.2 | 15.2% | 0 |
+| 1000 | 16.9 ms | 23.3 ms | 57.2 ms | 3,701 | 2.3 | 23.8% | 0 |
+| 2000 | 23.7 ms | 30.7 ms | 35.1 ms | 7,144 | 4.7 | 31.7% | 0 |
+| 4000 | 28.2 ms | 61.7 ms | 195.0 ms | 13,556 | 9.3 | 40.2% | 0 |
+
+Each client hears about 64 neighbors instead of the whole audience, so
+delivered bytes grow linearly: 4.7 MB/s at 2000 peers against 127 MB/s with
+batching alone, and 9.3 MB/s at 4000. CPU is about the same as with batching
+alone, because the tracker still writes the same number of messages; it is now
+the limit, at under half a core for 4000 peers. Probe latency at 4000 peers
+reflects the 4000-entry probe response as well as flush time, and its p95
+varied between 60 ms and 200 ms across runs.
+
+Measuring 4000 peers exposed per-peer work that scanned the whole audience:
+the WebSocket upgrade, `subscribe`, and the rejoin check each listed every
+peer (with its segments) to find one. With single-peer lookups, 4000 peers
+join in 0.8 s and connect in 1.2 s; connecting took 24.8 s before, long enough
+for the first peers to expire.
+
 ### With the monitoring dashboard open
 
 The dashboard's SSE stream sends a snapshot of every peer with its segments.
@@ -127,18 +153,19 @@ is heavier, so the improvement is if anything understated.
 
 ## Findings
 
-- With clients that negotiate `inventory_batch` (the SDK and the Node peer),
-  one tracker serves **2000 active peers in one broadcast** at a third of a
-  core with p95 under 50 ms. The default `MAX_PEERS_PER_BROADCAST=500` leaves
-  a wide margin; raise it after measuring on the target hardware.
+- With clients that negotiate `inventory_batch` and `neighbor_view` (the SDK
+  and the Node peer), one tracker serves **4000 active peers in one broadcast**
+  at under half a core and about 10 MB/s of signaling. The default
+  `MAX_PEERS_PER_BROADCAST=500` leaves a wide margin; raise it after measuring
+  on the target hardware.
 - With legacy clients, the limit is **about 500 active peers in one broadcast**
   (p95 around 10 ms at under half a core). At 1000 the tracker saturates a core
   at roughly 260,000 to 310,000 delivered WebSocket messages per second,
   because each inventory report goes to every peer and messages grow with the
   square of the peer count.
-- Batching cuts messages, not bytes: every update still reaches every peer,
-  so delivered bytes grow with the square of the peer count (127 MB/s at 2000
-  peers, about 1 Gbit/s). That is the next limit within one broadcast. Sending
-  each peer only the inventory of the peers it may connect to would remove it.
-  Sharding by broadcast (ADR option A) adds capacity across broadcasts but not
-  within one.
+- Batching alone cuts messages, not bytes: every update still reaches every
+  peer, so delivered bytes grow with the square of the peer count (127 MB/s at
+  2000 peers, about 1 Gbit/s). Neighbor views make bytes grow linearly.
+- The remaining limit within one broadcast is tracker CPU for writing batches
+  and serving REST, which grows linearly with the audience. Sharding by
+  broadcast (ADR option A) adds capacity across broadcasts but not within one.

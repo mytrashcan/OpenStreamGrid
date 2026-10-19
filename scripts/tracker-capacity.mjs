@@ -12,8 +12,9 @@
 //   node scripts/tracker-capacity.mjs --api-key ... --peers 100,250,500 \
 //     --tracker-pid <pid>
 //
-// Simulated peers declare the `inventory_batch` subscribe feature like the SDK
-// and Node peer do; pass --inventory-batch false to measure legacy clients that
+// Simulated peers declare the `inventory_batch` and `neighbor_view` subscribe
+// features like the SDK and Node peer do. Pass --neighbor-view false to see the
+// whole audience, or --inventory-batch false to measure legacy clients that
 // receive one message per inventory report.
 //
 // Reports, per peer count: probe latency for a REST lookup of a segment peers
@@ -40,6 +41,11 @@ const segmentIntervalMs = Number(args["segment-interval"] ?? 2) * 1_000;
 const reportIntervalMs = Number(args["report-interval"] ?? 5) * 1_000;
 const trackerPid = args["tracker-pid"];
 const inventoryBatch = (args["inventory-batch"] ?? "true") !== "false";
+const neighborView = inventoryBatch && (args["neighbor-view"] ?? "true") !== "false";
+const features = [
+  ...(inventoryBatch ? ["inventory_batch"] : []),
+  ...(neighborView ? ["neighbor_view"] : []),
+];
 const cachedSegments = 12;
 const CONNECT_BATCH = 50;
 
@@ -107,15 +113,29 @@ const runStage = async (peerCount) => {
     body: JSON.stringify({ id: broadcastId, playlistUrl: "http://origin.invalid/live.m3u8" }),
   });
 
+  // Join in concurrent batches: joining thousands of peers one by one takes
+  // longer than the tracker's stale-peer timeout, and the first peers expire
+  // before they connect.
   const peers = [];
-  for (let index = 0; index < peerCount; index += 1) {
-    const peerId = `cap-${index}`;
-    const { sessionToken } = await json(
-      `/api/v1/broadcasts/${broadcastId}/peers`,
-      { method: "POST", body: JSON.stringify({ id: peerId, address: `webrtc://${peerId}` }) },
-      index,
+  const joinStarted = Date.now();
+  for (let start = 0; start < peerCount; start += CONNECT_BATCH) {
+    const indexes = Array.from(
+      { length: Math.min(CONNECT_BATCH, peerCount - start) },
+      (_, offset) => start + offset,
     );
-    peers.push({ index, peerId, sessionToken, segment: 0, received: 0, receivedBytes: 0, socket: undefined });
+    peers.push(
+      ...(await Promise.all(
+        indexes.map(async (index) => {
+          const peerId = `cap-${index}`;
+          const { sessionToken } = await json(
+            `/api/v1/broadcasts/${broadcastId}/peers`,
+            { method: "POST", body: JSON.stringify({ id: peerId, address: `webrtc://${peerId}` }) },
+            index,
+          );
+          return { index, peerId, sessionToken, segment: 0, received: 0, receivedBytes: 0, socket: undefined };
+        }),
+      )),
+    );
   }
 
   let errors = 0;
@@ -140,7 +160,8 @@ const runStage = async (peerCount) => {
             resolve();
           });
           socket.on("close", (code, reason) => {
-            const key = `${code} ${reason.toString()}`.trim();
+            // Group reasons that differ only by a quoted peer ID.
+            const key = `${code} ${reason.toString().replace(/'[^']*'/g, "'…'")}`.trim();
             if (!peer.closing) closeCodes.set(key, (closeCodes.get(key) ?? 0) + 1);
             resolve();
           });
@@ -150,18 +171,28 @@ const runStage = async (peerCount) => {
                 type: "subscribe",
                 broadcastId,
                 peerId: peer.peerId,
-                ...(inventoryBatch ? { features: ["inventory_batch"] } : {}),
+                ...(features.length > 0 ? { features } : {}),
               }),
+            );
+            // Real clients report right after subscribing, which also keeps a
+            // slow ramp-up from expiring the first peers.
+            socket.send(
+              JSON.stringify({ type: "heartbeat", broadcastId, peerId: peer.peerId, latencyMs: 20 }),
             );
             resolve();
           });
         });
+  const connectStarted = Date.now();
   // Connect in batches like an arriving audience; a single burst of thousands
   // of handshakes overflows the OS accept queue and measures that instead.
   for (let start = 0; start < peers.length; start += CONNECT_BATCH) {
     await Promise.all(peers.slice(start, start + CONNECT_BATCH).map(connect));
   }
   const connectFailures = peers.filter((peer) => peer.socket?.readyState !== WebSocket.OPEN).length;
+  process.stderr.write(
+    `  joined in ${((connectStarted - joinStarted) / 1_000).toFixed(1)} s, ` +
+      `connected in ${((Date.now() - connectStarted) / 1_000).toFixed(1)} s\n`,
+  );
   closeCodes.clear();
 
   const send = (peer, message) => {

@@ -6,6 +6,13 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Added
 
+- WebSocket `neighbor_view` subscribe feature (with `inventory_batch`): each
+  client sees a bounded, mostly mutual set of neighbors
+  (`TRACKER_NEIGHBOR_VIEW_SIZE`, default 64) and receives peer and inventory
+  updates only for them, so inventory traffic grows linearly with the audience
+  instead of with its square. Neighbors that leave are replaced, and newcomers
+  are linked into full views. The SDK and the Node peer declare it. One
+  tracker serves 4000 peers in one broadcast at under half a core.
 - The Hls.js plugin sends LL-HLS partial segments (`EXT-X-PART`) straight to
   the origin and shares only complete segments, instead of attempting P2P and
   an integrity sidecar that parts do not have.
@@ -68,6 +75,9 @@ All notable changes to OpenStreamGrid are documented in this file.
   peers in one broadcast, REST p95 latency dropped from about 1 s to 7 ms.
 - WebSocket fan-out serializes each message once and only visits the
   broadcast's own subscribers.
+- WebSocket upgrades, `subscribe`, and peer rejoins look up one peer instead
+  of listing the whole audience, so connecting thousands of peers no longer
+  slows down quadratically.
 - Deleting a broadcast, or letting an origin lease expire, closes its
   WebSocket subscribers with code `4004` and drops pending inventory updates,
   so a new broadcast that reuses the ID starts clean.

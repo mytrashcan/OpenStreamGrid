@@ -32,7 +32,11 @@ import {
   TrackerStore,
   type TrackerStoreBackend,
 } from "./store.js";
-import { TrackerWebSocketHub, type TrackerEvents } from "./websocket.js";
+import {
+  DEFAULT_NEIGHBOR_VIEW_SIZE,
+  TrackerWebSocketHub,
+  type TrackerEvents,
+} from "./websocket.js";
 
 const DEFAULT_PORT = 7070;
 const DEFAULT_HOST = "0.0.0.0";
@@ -75,6 +79,8 @@ export interface TrackerConfiguration {
   turn?: TurnCredentialOptions;
   /** Inventory batch interval for `inventory_batch` WebSocket clients. */
   wsInventoryBatchMs?: number;
+  /** Peers each `neighbor_view` client sees; 0 sends the whole audience. */
+  neighborViewSize: number;
 }
 
 const parseInteger = (
@@ -117,6 +123,7 @@ const parseAllowedOrigin = (value: string): string => {
 const MIN_TURN_SHARED_SECRET_BYTES = 16;
 const DEFAULT_WS_MAX_CONNECTIONS_PER_IP = 20;
 const MAX_TRUST_PROXY_HOPS = 10;
+const MAX_NEIGHBOR_VIEW_SIZE = 1_000;
 // RFC 7065 TURN URI: turn[s]:host[:port][?transport=udp|tcp]
 // Host is a DNS name, IPv4 address, or bracketed IPv6 address.
 const TURN_URL_PATTERN =
@@ -234,6 +241,12 @@ export const parseTrackerConfiguration = (
       "TRUST_PROXY_HOPS",
       0,
       MAX_TRUST_PROXY_HOPS,
+    ),
+    neighborViewSize: parseInteger(
+      environment.TRACKER_NEIGHBOR_VIEW_SIZE ?? String(DEFAULT_NEIGHBOR_VIEW_SIZE),
+      "TRACKER_NEIGHBOR_VIEW_SIZE",
+      0,
+      MAX_NEIGHBOR_VIEW_SIZE,
     ),
     ...(turn ? { turn } : {}),
   };
@@ -1104,11 +1117,7 @@ export const createTrackerHandler = (
           }
           // Best-effort authorization peek for rejoin attempts; the
           // authoritative check happens on the atomic join result below.
-          if (
-            store
-              .listPeers(broadcastId)
-              .some((peer) => peer.id === join.id)
-          ) {
+          if (store.getPeer(broadcastId, join.id)) {
             requirePeerSession(broadcastId, join.id);
           }
           let joined: ReturnType<TrackerStoreBackend["joinPeerDetailed"]>;
@@ -1279,6 +1288,7 @@ export class TrackerServer {
           | "trustProxyHops"
           | "turn"
           | "wsInventoryBatchMs"
+          | "neighborViewSize"
         >
       > = {
       rateLimitRps: DEFAULT_RATE_LIMIT_RPS,
@@ -1346,6 +1356,9 @@ export class TrackerServer {
           : {}),
         ...(configuration.trustProxyHops !== undefined
           ? { trustProxyHops: configuration.trustProxyHops }
+          : {}),
+        ...(configuration.neighborViewSize !== undefined
+          ? { neighborViewSize: configuration.neighborViewSize }
           : {}),
         ...(configuration.wsInventoryBatchMs !== undefined
           ? { inventoryBatchIntervalMs: configuration.wsInventoryBatchMs }

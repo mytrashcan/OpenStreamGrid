@@ -267,6 +267,7 @@ WebSocket의 `sessionToken` 쿼리로 사용합니다.
 | `MAX_PEERS_PER_BROADCAST` | `500` | 방송별 최대 활성 피어 수 |
 | `TRACKER_WS_ALLOWED_ORIGINS` | 미설정 | 브라우저에서 `/ws` 연결을 허용할 http(s) origin 목록(쉼표 구분); 그 밖의 브라우저 origin은 403으로 거부. Node 피어처럼 `Origin` 헤더가 없는 연결은 유효한 피어 세션만 있으면 허용 |
 | `TRACKER_WS_MAX_CONNECTIONS_PER_IP` | `20` | 클라이언트 주소당 동시 `/ws` 연결 수. 많은 시청자가 하나의 NAT 주소를 공유하면 늘리세요 |
+| `TRACKER_NEIGHBOR_VIEW_SIZE` | `64` | SDK와 Node 피어 각각에 알려 주는 피어 수(`neighbor_view`). 시청자가 이 수 이하면 모두를 보고, `0`이면 모든 클라이언트에 전체 시청자를 보냅니다 |
 | `TRUST_PROXY_HOPS` | `0` | 트래커 앞단의 신뢰하는 리버스 프록시 수. 설정하면 클라이언트별 제한이 프록시가 `X-Forwarded-For`에 기록한 클라이언트 주소를 사용합니다. Ingress나 TLS 프록시 하나 뒤에서는 `1` |
 | `TURN_URLS` | 미설정 | 피어 참여 응답에 단기 자격증명과 함께 내려줄 `turn:`/`turns:` URI 목록(쉼표 구분). 브라우저와 Node 피어가 ICE 서버에 추가해 사용 |
 | `TURN_SHARED_SECRET` | 미설정 | TURN 서버 공유 비밀(coturn `static-auth-secret`, 16바이트 이상). `TURN_URLS`와 함께 필수 |
