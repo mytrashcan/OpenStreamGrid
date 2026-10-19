@@ -183,6 +183,13 @@ export interface TrackerWebSocketOptions {
   neighborViewSize?: number;
 }
 
+/** WebSocket fan-out counters exported as Prometheus metrics. */
+export interface TrackerWebSocketStats {
+  subscribers: { immediate: number; batched: number; neighborView: number };
+  messagesSent: number;
+  bytesSent: number;
+}
+
 /** Validates tracker WebSocket messages and broadcasts peer updates. */
 export class TrackerWebSocketHub implements TrackerEvents {
   private readonly webSocketServer = new WebSocketServer({
@@ -199,6 +206,8 @@ export class TrackerWebSocketHub implements TrackerEvents {
   private readonly connectionsPerIp = new Map<string, number>();
   private readonly sessionExpiryTimers = new Map<WebSocket, NodeJS.Timeout>();
   private readonly neighborViews: NeighborViews | undefined;
+  private messagesSent = 0;
+  private bytesSent = 0;
 
   constructor(
     private readonly server: Server,
@@ -319,6 +328,17 @@ export class TrackerWebSocketHub implements TrackerEvents {
       socket.close(BROADCAST_REMOVED_CLOSE_CODE, "Broadcast removed");
     }
     this.downstreamEvents.broadcastRemoved?.(broadcastId);
+  }
+
+  /** Subscribers by delivery mode, and messages and bytes sent so far. */
+  webSocketStats(): TrackerWebSocketStats {
+    const subscribers = { immediate: 0, batched: 0, neighborView: 0 };
+    for (const broadcast of this.subscribersByBroadcast.values()) {
+      subscribers.immediate += broadcast.immediate.size;
+      subscribers.batched += broadcast.batched.size;
+      for (const sockets of broadcast.viewers.values()) subscribers.neighborView += sockets.size;
+    }
+    return { subscribers, messagesSent: this.messagesSent, bytesSent: this.bytesSent };
   }
 
   async stop(): Promise<void> {
@@ -679,7 +699,8 @@ export class TrackerWebSocketHub implements TrackerEvents {
     const sockets = this.subscribersByBroadcast.get(broadcastId)?.viewers.get(peerId);
     if (!sockets || sockets.size === 0) return;
     const payload = JSON.stringify(message);
-    for (const socket of sockets) this.sendSerialized(socket, payload);
+    const bytes = Buffer.byteLength(payload);
+    for (const socket of sockets) this.sendSerialized(socket, payload, bytes);
   }
 
   private peerExists(claims: PeerSessionClaims): boolean {
@@ -726,8 +747,9 @@ export class TrackerWebSocketHub implements TrackerEvents {
     if (!subscribers || subscribers.immediate.size + subscribers.batched.size === 0) return;
     // Serialize once: fan-out sends the same payload to every subscriber.
     const payload = JSON.stringify(message);
-    for (const socket of subscribers.immediate) this.sendSerialized(socket, payload);
-    for (const socket of subscribers.batched) this.sendSerialized(socket, payload);
+    const bytes = Buffer.byteLength(payload);
+    for (const socket of subscribers.immediate) this.sendSerialized(socket, payload, bytes);
+    for (const socket of subscribers.batched) this.sendSerialized(socket, payload, bytes);
   }
 
   /**
@@ -742,7 +764,8 @@ export class TrackerWebSocketHub implements TrackerEvents {
     if (!subscribers) return;
     if (subscribers.immediate.size > 0) {
       const payload = JSON.stringify(message);
-      for (const socket of subscribers.immediate) this.sendSerialized(socket, payload);
+      const bytes = Buffer.byteLength(payload);
+      for (const socket of subscribers.immediate) this.sendSerialized(socket, payload, bytes);
     }
     if (subscribers.batched.size > 0 || subscribers.viewers.size > 0) {
       this.queueInventory(message);
@@ -828,7 +851,8 @@ export class TrackerWebSocketHub implements TrackerEvents {
         broadcastId,
         updates: updates.slice(start, start + MAX_UPDATES_PER_BATCH),
       } satisfies WsServerMessage);
-      for (const socket of recipients) this.sendSerialized(socket, payload);
+      const bytes = Buffer.byteLength(payload);
+      for (const socket of recipients) this.sendSerialized(socket, payload, bytes);
     }
   }
 
@@ -836,7 +860,11 @@ export class TrackerWebSocketHub implements TrackerEvents {
     this.sendSerialized(socket, JSON.stringify(message));
   }
 
-  private sendSerialized(socket: WebSocket, payload: string): void {
+  private sendSerialized(
+    socket: WebSocket,
+    payload: string,
+    bytes = Buffer.byteLength(payload),
+  ): void {
     if (socket.readyState === WebSocket.OPEN) {
       if (socket.bufferedAmount > MAX_BUFFERED_WEB_SOCKET_BYTES) {
         socket.terminate();
@@ -844,6 +872,8 @@ export class TrackerWebSocketHub implements TrackerEvents {
       }
       try {
         socket.send(payload);
+        this.messagesSent += 1;
+        this.bytesSent += bytes;
       } catch (error) {
         logger.error("websocket_send_failed", error);
         socket.terminate();
