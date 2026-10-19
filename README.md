@@ -381,6 +381,16 @@ figures are regression data, not a production capacity claim. See the raw
 for the full scenario and latency measurements. Run it locally with
 `bash scripts/benchmark.sh`.
 
+### Tracker capacity
+
+One tracker serves **4000 active peers in one broadcast** at about 40% of a
+CPU core, with REST p95 latency around 40 ms and about 9 MB/s of signaling,
+when clients negotiate inventory batching and neighbor views (the SDK and the
+Node peer do). Clients that predate those features saturate a core at about
+1000 peers. Measured on an Apple M5 with the control-plane benchmark
+(`npm run benchmark:tracker-capacity`); see
+[Tracker capacity](docs/tracker-capacity.md) for the method and every run.
+
 <!-- BENCHMARK_SCHEDULER:START -->
 ### Phase 3 scheduler policy lab: `mixed-workload`
 

@@ -76,6 +76,10 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Changed
 
+- Inventory flushes for neighbor-view clients are spread over event-loop turns
+  (256 viewers per turn), so they no longer block REST requests for tens of
+  milliseconds. At 4000 peers, REST p95 latency dropped from 60–200 ms to
+  about 40 ms.
 - With neighbor views enabled, REST peer listings
   (`GET /api/v1/broadcasts/:id/peers` and `GET /api/v1/broadcasts/:id`) show a
   peer-session caller only itself and its neighbors, so a viewer can no longer
