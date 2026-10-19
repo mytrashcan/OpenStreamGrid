@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import {
   createLogger,
@@ -511,8 +512,16 @@ export class TrackerMetrics {
     () => 0,
   );
 
+  /**
+   * How long callbacks waited for the event loop since the previous scrape.
+   * Everything the tracker does shares one thread, so this is the latency
+   * every REST and WebSocket message pays on top of its own work.
+   */
+  private readonly eventLoopDelay = monitorEventLoopDelay({ resolution: 10 });
+
   constructor(private readonly now: () => number = Date.now) {
     this.startedAtMs = now();
+    this.eventLoopDelay.enable();
   }
 
   broadcastCreated(): void {
@@ -675,6 +684,24 @@ export class TrackerMetrics {
         `openstreamgrid_ws_subscribers{mode="batched"} ${webSocket.subscribers.batched}`,
         `openstreamgrid_ws_subscribers{mode="neighbor_view"} ${webSocket.subscribers.neighborView}`,
       );
+    }
+
+    const delay = this.eventLoopDelay;
+    if (delay.count > 0) {
+      for (const [name, value] of [
+        ["p50", delay.percentile(50)],
+        ["p90", delay.percentile(90)],
+        ["p99", delay.percentile(99)],
+        ["max", delay.max],
+      ] as const) {
+        metric(
+          `openstreamgrid_event_loop_delay_${name}_seconds`,
+          "gauge",
+          `Event-loop delay ${name} since the previous scrape.`,
+          value / 1e9,
+        );
+      }
+      delay.reset();
     }
 
     lines.push(
@@ -1499,23 +1526,11 @@ export class TrackerServer {
   }
 
   private removeStalePeers(): void {
-    const peersBefore = new Map(
-      this.store.listBroadcasts().map((broadcast) => [
-        broadcast.id,
-        new Set(this.store.listPeers(broadcast.id).map((peer) => peer.id)),
-      ]),
-    );
-    if (this.store.removeStalePeers(this.stalePeerMs) > 0) {
-      for (const [broadcastId, peerIds] of peersBefore) {
-        const activePeerIds = new Set(
-          this.store.listPeers(broadcastId).map((peer) => peer.id),
-        );
-        for (const peerId of peerIds) {
-          if (!activePeerIds.has(peerId)) {
-            this.webSockets.peerLeft(broadcastId, peerId);
-          }
-        }
-      }
+    // The store reports who it removed; listing every peer (with segments)
+    // before and after blocked the tracker for hundreds of milliseconds at
+    // 4000 peers on every sweep.
+    for (const { broadcastId, peerId } of this.store.removeStalePeers(this.stalePeerMs)) {
+      this.webSockets.peerLeft(broadcastId, peerId);
     }
     const nowMs = Date.now();
     for (const broadcast of this.store.listBroadcasts()) {

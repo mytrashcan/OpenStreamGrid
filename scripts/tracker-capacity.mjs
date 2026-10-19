@@ -12,6 +12,8 @@
 //   node scripts/tracker-capacity.mjs --api-key ... --peers 100,250,500 \
 //     --tracker-pid <pid>
 //
+// Pass --churn <fraction> to replace that share of the audience every second.
+//
 // Simulated peers declare the `inventory_batch` and `neighbor_view` subscribe
 // features like the SDK and Node peer do. Pass --neighbor-view false to see the
 // whole audience, or --inventory-batch false to measure legacy clients that
@@ -42,6 +44,12 @@ const reportIntervalMs = Number(args["report-interval"] ?? 5) * 1_000;
 const trackerPid = args["tracker-pid"];
 const inventoryBatch = (args["inventory-batch"] ?? "true") !== "false";
 const neighborView = inventoryBatch && (args["neighbor-view"] ?? "true") !== "false";
+// Fraction of the audience replaced per second: that many peers leave and as
+// many new ones join, connect, and start reporting.
+const churnPerSecond = Number(args.churn ?? 0);
+if (!Number.isFinite(churnPerSecond) || churnPerSecond < 0 || churnPerSecond > 1) {
+  throw new Error("--churn must be a fraction between 0 and 1 (peers replaced per second)");
+}
 const features = [
   ...(inventoryBatch ? ["inventory_batch"] : []),
   ...(neighborView ? ["neighbor_view"] : []),
@@ -76,6 +84,23 @@ const sampleTracker = () => {
     .trim()
     .split(/\s+/);
   return { cpuSeconds: cpuSeconds(time), rssMb: Number(rssKb) / 1_024 };
+};
+
+// The tracker's event-loop delay since the previous read, from /metrics. It
+// separates delay on the tracker from delay in this load generator, which
+// shares a machine and also times the probes.
+const trackerLoopDelay = async () => {
+  try {
+    const response = await fetch(new URL("/metrics", trackerUrl), { headers: { "x-api-key": apiKey } });
+    const text = await response.text();
+    const seconds = (name) =>
+      Number(new RegExp(`^openstreamgrid_event_loop_delay_${name}_seconds (\\S+)$`, "m").exec(text)?.[1]);
+    const p99 = seconds("p99");
+    const max = seconds("max");
+    return Number.isFinite(p99) && Number.isFinite(max) ? { p99Ms: p99 * 1_000, maxMs: max * 1_000 } : undefined;
+  } catch {
+    return undefined;
+  }
 };
 
 const forwardedFor = (index) => `198.18.${Math.floor(index / 250)}.${(index % 250) + 1}`;
@@ -113,6 +138,15 @@ const runStage = async (peerCount) => {
     body: JSON.stringify({ id: broadcastId, playlistUrl: "http://origin.invalid/live.m3u8" }),
   });
 
+  const join = async (index) => {
+    const peerId = `cap-${index}`;
+    const { sessionToken } = await json(
+      `/api/v1/broadcasts/${broadcastId}/peers`,
+      { method: "POST", body: JSON.stringify({ id: peerId, address: `webrtc://${peerId}` }) },
+      index,
+    );
+    return { index, peerId, sessionToken, segment: 0, received: 0, receivedBytes: 0, socket: undefined, timers: [] };
+  };
   // Join in concurrent batches: joining thousands of peers one by one takes
   // longer than the tracker's stale-peer timeout, and the first peers expire
   // before they connect.
@@ -123,20 +157,10 @@ const runStage = async (peerCount) => {
       { length: Math.min(CONNECT_BATCH, peerCount - start) },
       (_, offset) => start + offset,
     );
-    peers.push(
-      ...(await Promise.all(
-        indexes.map(async (index) => {
-          const peerId = `cap-${index}`;
-          const { sessionToken } = await json(
-            `/api/v1/broadcasts/${broadcastId}/peers`,
-            { method: "POST", body: JSON.stringify({ id: peerId, address: `webrtc://${peerId}` }) },
-            index,
-          );
-          return { index, peerId, sessionToken, segment: 0, received: 0, receivedBytes: 0, socket: undefined };
-        }),
-      )),
-    );
+    peers.push(...(await Promise.all(indexes.map(join))));
   }
+  // Every peer that took part, for traffic totals; `peers` holds the active ones.
+  const everyPeer = [...peers];
 
   let errors = 0;
   const closeCodes = new Map();
@@ -201,8 +225,8 @@ const runStage = async (peerCount) => {
     }
   };
   // Stagger peers across the interval like independent players would be.
-  const timers = peers.flatMap((peer) => {
-    const offset = Math.floor((peer.index / peerCount) * segmentIntervalMs);
+  const startReporting = (peer) => {
+    const offset = Math.floor(((peer.index % peerCount) / peerCount) * segmentIntervalMs);
     const segmentTimer = setTimeout(() => {
       const tick = () => {
         peer.segment += 1;
@@ -218,19 +242,79 @@ const runStage = async (peerCount) => {
       tick();
       peer.segmentInterval = setInterval(tick, segmentIntervalMs);
     }, offset);
-    const reportTimer = setInterval(() => {
-      send(peer, { type: "heartbeat", latencyMs: 20, uploadBandwidthBps: 4_000_000, successRate: 1 });
-      send(peer, { type: "report_stats", stats: emptyStats(peer.segment) });
-    }, reportIntervalMs);
-    return [segmentTimer, reportTimer];
-  });
+    // Spread heartbeats and stats over the report interval too: started
+    // together, all peers reported in the same instant every interval.
+    const reportOffset = Math.floor(((peer.index % peerCount) / peerCount) * reportIntervalMs);
+    const reportTimer = setTimeout(() => {
+      const report = () => {
+        send(peer, { type: "heartbeat", latencyMs: 20, uploadBandwidthBps: 4_000_000, successRate: 1 });
+        send(peer, { type: "report_stats", stats: emptyStats(peer.segment) });
+      };
+      peer.timers.push(setInterval(report, reportIntervalMs));
+    }, reportOffset);
+    peer.timers.push(segmentTimer, reportTimer);
+  };
+  const stopReporting = (peer) => {
+    for (const timer of peer.timers) {
+      clearTimeout(timer);
+      clearInterval(timer);
+    }
+    clearInterval(peer.segmentInterval);
+  };
+  for (const peer of peers) startReporting(peer);
 
-  const receivedBefore = peers.reduce((sum, peer) => sum + peer.received, 0);
-  const receivedBytesBefore = peers.reduce((sum, peer) => sum + peer.receivedBytes, 0);
+  // Churn: replace a share of the audience every second, like viewers who
+  // leave and others who arrive. Leaving peers close their socket and leave
+  // over REST; arrivals join, connect, and pick up at the current segment.
+  let churned = 0;
+  let churnCarry = 0;
+  let nextIndex = peerCount;
+  const churnOnce = async () => {
+    churnCarry += churnPerSecond * peerCount;
+    const count = Math.min(Math.floor(churnCarry), peers.length);
+    churnCarry -= count;
+    if (count === 0) return;
+    const leaving = [];
+    for (let left = 0; left < count; left += 1) {
+      leaving.push(...peers.splice(Math.floor(Math.random() * peers.length), 1));
+    }
+    await Promise.all(
+      leaving.map(async (peer) => {
+        stopReporting(peer);
+        peer.closing = true;
+        peer.socket?.close();
+        await json(`/api/v1/broadcasts/${broadcastId}/peers/${peer.peerId}`, {
+          method: "DELETE",
+          headers: { authorization: `Bearer ${peer.sessionToken}` },
+        }).catch(() => undefined);
+      }),
+    );
+    const latest = Math.max(0, ...peers.map((peer) => peer.segment));
+    const arrivals = await Promise.all(
+      Array.from({ length: count }, () => join((nextIndex += 1))),
+    );
+    for (const peer of arrivals) peer.segment = Math.max(0, latest - 1);
+    await Promise.all(arrivals.map(connect));
+    for (const peer of arrivals) startReporting(peer);
+    peers.push(...arrivals);
+    everyPeer.push(...arrivals);
+    churned += count;
+  };
+  let churning = Promise.resolve();
+  const churnTimer =
+    churnPerSecond > 0
+      ? setInterval(() => {
+          churning = churning.then(churnOnce).catch(() => undefined);
+        }, 1_000)
+      : undefined;
+
+  const receivedBefore = everyPeer.reduce((sum, peer) => sum + peer.received, 0);
+  const receivedBytesBefore = everyPeer.reduce((sum, peer) => sum + peer.receivedBytes, 0);
   const latencies = [];
   const samples = [];
   let probeFailures = 0;
   const startSample = sampleTracker();
+  await trackerLoopDelay(); // Reset: measure only this stage.
   const startedAt = Date.now();
   while (Date.now() - startedAt < durationMs) {
     // Look up a segment that peers still hold, not one they already evicted.
@@ -247,18 +331,18 @@ const runStage = async (peerCount) => {
     if (sample) samples.push(sample);
     await delay(500);
   }
+  clearInterval(churnTimer);
+  await churning;
+  const loopDelay = await trackerLoopDelay();
   const elapsedSeconds = (Date.now() - startedAt) / 1_000;
   const endSample = sampleTracker();
-  const delivered = peers.reduce((sum, peer) => sum + peer.received, 0) - receivedBefore;
-  const deliveredBytes = peers.reduce((sum, peer) => sum + peer.receivedBytes, 0) - receivedBytesBefore;
+  const delivered = everyPeer.reduce((sum, peer) => sum + peer.received, 0) - receivedBefore;
+  const deliveredBytes =
+    everyPeer.reduce((sum, peer) => sum + peer.receivedBytes, 0) - receivedBytesBefore;
 
   const openAtEnd = peers.filter((peer) => peer.socket?.readyState === WebSocket.OPEN).length;
-  for (const timer of timers) {
-    clearTimeout(timer);
-    clearInterval(timer);
-  }
   for (const peer of peers) {
-    clearInterval(peer.segmentInterval);
+    stopReporting(peer);
     peer.closing = true;
     peer.socket?.close();
   }
@@ -275,6 +359,9 @@ const runStage = async (peerCount) => {
     errors,
     connectFailures,
     openAtEnd,
+    active: peers.length,
+    churned,
+    loopDelay,
     closeCodes: Object.fromEntries(closeCodes),
     cpuPercent:
       startSample && endSample
@@ -293,13 +380,22 @@ for (const peerCount of peerCounts) {
 
 const fixed = (value, digits = 1) => (value === undefined ? "n/a" : value.toFixed(digits));
 const ms = (value) => (value === undefined ? "n/a" : `${fixed(value)} ms`);
-console.log("| Peers | Probe p50 | Probe p95 | Probe p99 | Failed probes | WS msgs/s delivered | WS MB/s delivered | Tracker CPU | Tracker RSS | Connect failures | Dropped during run |");
-console.log("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+const churnColumn = churnPerSecond > 0;
+console.log(
+  "| Peers | Probe p50 | Probe p95 | Probe p99 | Failed probes | WS msgs/s delivered | WS MB/s delivered | Tracker CPU | Tracker RSS | Tracker loop delay p99 / max | Connect failures | Dropped during run |" +
+    (churnColumn ? " Peers replaced |" : ""),
+);
+console.log(
+  "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |" + (churnColumn ? " ---: |" : ""),
+);
 for (const result of results) {
+  const dropped = Math.max(0, result.active - result.connectFailures - result.openAtEnd);
   console.log(
     `| ${result.peers} | ${ms(result.probeP50Ms)} | ${ms(result.probeP95Ms)} | ${ms(result.probeP99Ms)} | ${result.probeFailures} | ` +
       `${fixed(result.wsMessagesPerSecond, 0)} | ${fixed(result.wsMegabytesPerSecond)} | ${fixed(result.cpuPercent)}% | ${fixed(result.rssMaxMb, 0)} MB | ` +
-      `${result.connectFailures} | ${result.peers - result.connectFailures - result.openAtEnd} |`,
+      `${result.loopDelay ? `${fixed(result.loopDelay.p99Ms)} / ${fixed(result.loopDelay.maxMs)} ms` : "n/a"} | ` +
+      `${result.connectFailures} | ${dropped} |` +
+      (churnColumn ? ` ${result.churned} |` : ""),
   );
 }
 for (const result of results) {
