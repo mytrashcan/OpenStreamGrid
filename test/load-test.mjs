@@ -639,6 +639,9 @@ class VirtualPeer {
             type: "subscribe",
             broadcastId: this.options.config.broadcastId,
             peerId: this.id,
+            // Negotiate what the SDK and Node peer negotiate, so the load
+            // matches real clients.
+            features: ["inventory_batch", "neighbor_view"],
           }),
         );
       });
@@ -690,12 +693,38 @@ class VirtualPeer {
       this.peers.delete(message.peerId);
       return;
     }
-    if (message.type === "segment_available") {
-      const peer = this.peers.get(message.peerId);
-      if (peer && Array.isArray(message.segments)) {
-        peer.segments = [...new Set([...peer.segments, ...message.segments])];
+    if (message.type === "segment_available" && Array.isArray(message.segments)) {
+      if (message.replace === true) this.replaceInventory(message.peerId, message.segments);
+      else this.applyInventoryDelta(message.peerId, message.segments, []);
+      return;
+    }
+    if (message.type === "segment_inventory_delta") {
+      this.applyInventoryDelta(message.peerId, message.added ?? [], message.removed ?? []);
+      return;
+    }
+    if (message.type === "segment_inventory_batch" && Array.isArray(message.updates)) {
+      for (const update of message.updates) {
+        if (update?.replace === true && Array.isArray(update.segments)) {
+          this.replaceInventory(update.peerId, update.segments);
+        } else if (update) {
+          this.applyInventoryDelta(update.peerId, update.added ?? [], update.removed ?? []);
+        }
       }
     }
+  }
+
+  replaceInventory(peerId, segments) {
+    const peer = this.peers.get(peerId);
+    if (peer) peer.segments = [...segments];
+  }
+
+  applyInventoryDelta(peerId, added, removed) {
+    const peer = this.peers.get(peerId);
+    if (!peer) return;
+    const segments = new Set(peer.segments);
+    for (const segment of removed) segments.delete(segment);
+    for (const segment of added) segments.add(segment);
+    peer.segments = [...segments];
   }
 
   sendTracker(message) {

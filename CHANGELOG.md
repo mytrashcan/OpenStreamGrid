@@ -86,6 +86,11 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Fixed
 
+- The load-test image (used by `scripts/benchmark.sh`) now contains the
+  benchmark helper it imports; it failed at startup since 0.6.0. CI starts the
+  image to catch this. The load test also negotiates inventory batching and
+  neighbor views like the SDK, and applies full-list, delta, and batched
+  inventory updates correctly instead of merging everything.
 - An open monitoring dashboard no longer overloads the tracker: event-driven
   SSE snapshots, which list every peer, are coalesced to at most one per
   second. At 1000 peers, REST p95 latency with a dashboard open dropped from
