@@ -78,7 +78,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: playwright-report-${{ matrix.player }}-${{ matrix.segment-type }}
+          name: playwright-report-${{ matrix.player }}-${{ matrix.segment-type }}${{ matrix.parts && format('-parts{0}', matrix.parts) || '' }}
           path: |
             e2e/browser/playwright-report
             e2e/browser/test-results
