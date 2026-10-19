@@ -275,10 +275,11 @@ output directory:
 ```bash
 # From a checkout (npm run build first)
 node origin/dist/sidecars.js /var/www/hls
-# Or from the published origin image; it runs as a non-root user, so let it
-# write to the host directory with --user
+# Or from an origin image built from main or a release after v0.6.1 (v0.6.1
+# predates the writer); it runs as a non-root user, so let it write to the
+# host directory with --user
 docker run --rm --user "$(id -u):$(id -g)" -v /var/www/hls:/hls \
-  ghcr.io/mytrashcan/openstreamgrid-origin:v0.6.1 origin/dist/sidecars.js /hls
+  <origin image> origin/dist/sidecars.js /hls
 ```
 
 It hashes segments once they appear in a media playlist, so it never hashes a

@@ -266,10 +266,11 @@ Video.js 10.0.1을 재생합니다.
 ```bash
 # 소스에서 (먼저 npm run build)
 node origin/dist/sidecars.js /var/www/hls
-# 또는 배포된 Origin 이미지로. 이미지는 root가 아닌 사용자로 실행되므로
-# --user로 호스트 디렉터리에 쓸 수 있게 하세요
+# 또는 main이나 v0.6.1 이후 릴리스로 빌드한 Origin 이미지로(v0.6.1에는 작성기가
+# 없습니다). 이미지는 root가 아닌 사용자로 실행되므로 --user로 호스트 디렉터리에
+# 쓸 수 있게 하세요
 docker run --rm --user "$(id -u):$(id -g)" -v /var/www/hls:/hls \
-  ghcr.io/mytrashcan/openstreamgrid-origin:v0.6.1 origin/dist/sidecars.js /hls
+  <origin image> origin/dist/sidecars.js /hls
 ```
 
 세그먼트가 미디어 플레이리스트에 나타난 뒤에만 해시하므로 패키저가 아직 쓰는
