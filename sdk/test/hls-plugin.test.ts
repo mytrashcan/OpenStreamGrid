@@ -669,7 +669,7 @@ test("routes CMAF/fMP4 media segments through P2P and keeps init segments on ori
   );
 });
 
-test("sends byte-range segment requests to the default loader", () => {
+test("sends byte-range and LL-HLS partial segment requests to the default loader", () => {
   const plugin = new OpenStreamGridHlsPlugin({
     trackerUrl: "ws://tracker.example/ws",
     broadcastId: "live",
@@ -692,7 +692,13 @@ test("sends byte-range segment requests to the default loader", () => {
   try {
     const ranged = { url: "https://origin.example/hls/low/media.m4s", rangeStart: 1_024, rangeEnd: 4_096 };
     new LoaderClass(hls.config).load(ranged, config, {});
-    assert.deepEqual(defaultLoads, [ranged]);
+    const part = {
+      url: "https://origin.example/hls/low/segment_000010.part2.m4s",
+      frag: { start: 20, duration: 2 },
+      part: { index: 2, duration: 0.5 },
+    };
+    new LoaderClass(hls.config).load(part, config, {});
+    assert.deepEqual(defaultLoads, [ranged, part]);
   } finally {
     plugin.detach();
   }
