@@ -9,6 +9,7 @@ import {
   type BroadcastRegistration,
   type BroadcastStats,
   type GlobalStats,
+  type Peer,
   type PeerFailureReport,
   type PeerHeartbeat,
   type PeerJoinRequest,
@@ -880,6 +881,11 @@ export interface TrackerHttpOptions {
   turn?: TurnCredentialOptions;
   /** Reverse proxies in front of the tracker whose X-Forwarded-For is trusted. */
   trustProxyHops?: number;
+  /**
+   * The neighbors a peer sees over WebSocket, if any. Peer-session callers of
+   * the REST peer listings see only themselves and these neighbors.
+   */
+  peerView?: (broadcastId: string, peerId: string) => ReadonlySet<string> | undefined;
 }
 
 /** Creates the REST and dashboard request handler for a tracker store. */
@@ -939,6 +945,24 @@ export const createTrackerHandler = (
             : "Invalid API key",
           401,
         );
+      };
+      // A viewer with a peer session sees only itself and the neighbors the
+      // WebSocket tells it about, so REST cannot enumerate the audience's
+      // addresses. Administrators, and peers without neighbors yet (such as
+      // peers restored after a restart, until they subscribe), see everyone.
+      const visiblePeers = (
+        broadcastId: string,
+        claims: PeerSessionClaims,
+        segment?: string,
+      ): Peer[] => {
+        const view = hasAdminAccess
+          ? undefined
+          : options.peerView?.(broadcastId, claims.peerId);
+        if (!view || view.size === 0) return store.listPeers(broadcastId, segment);
+        return [claims.peerId, ...view].flatMap((id) => {
+          const peer = store.getPeer(broadcastId, id);
+          return peer && (segment === undefined || peer.segments.includes(segment)) ? [peer] : [];
+        });
       };
       const requirePeerSession = (
         broadcastId: string,
@@ -1189,10 +1213,10 @@ export const createTrackerHandler = (
           return;
         }
         if (!encodedPeerId && method === "GET") {
-          requirePeerSession(broadcastId);
+          const claims = requirePeerSession(broadcastId);
           const segment = url.searchParams.get("segment") ?? undefined;
           sendJson(response, 200, {
-            peers: store.listPeers(broadcastId, segment),
+            peers: visiblePeers(broadcastId, claims, segment),
           });
           return;
         }
@@ -1210,10 +1234,10 @@ export const createTrackerHandler = (
       if (broadcastMatch?.[1]) {
         const broadcastId = decodedPathComponent(broadcastMatch[1]);
         if (method === "GET") {
-          requirePeerSession(broadcastId);
+          const claims = requirePeerSession(broadcastId);
           sendJson(response, 200, {
             broadcast: store.getBroadcast(broadcastId),
-            peers: store.listPeers(broadcastId),
+            peers: visiblePeers(broadcastId, claims),
           });
           return;
         }
@@ -1362,6 +1386,7 @@ export class TrackerServer {
         ...(configuration.trustProxyHops !== undefined
           ? { trustProxyHops: configuration.trustProxyHops }
           : {}),
+        peerView: (broadcastId, peerId) => webSockets?.peerView(broadcastId, peerId),
       }),
     );
     this.server.headersTimeout = 10_000;

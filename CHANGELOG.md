@@ -6,6 +6,10 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Added
 
+- `origin/dist/sidecars.js` writes the `.sha256` sidecars peers verify
+  against for HLS output from any packager, so OpenStreamGrid works with an
+  existing origin. It hashes segments once a playlist lists them and prunes
+  sidecars of deleted segments.
 - Prometheus metrics for WebSocket signaling: messages and bytes sent, and
   subscribers by inventory delivery mode, with matching Grafana panels.
 - WebSocket `neighbor_view` subscribe feature (with `inventory_batch`): each
@@ -72,6 +76,10 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Changed
 
+- With neighbor views enabled, REST peer listings
+  (`GET /api/v1/broadcasts/:id/peers` and `GET /api/v1/broadcasts/:id`) show a
+  peer-session caller only itself and its neighbors, so a viewer can no longer
+  list the whole audience's addresses. Administrators still see everyone.
 - The tracker no longer sends `stats_update` to every peer on each stats
   report (the SDK and Node peer ignored it; the dashboard uses SSE). At 500
   peers in one broadcast, REST p95 latency dropped from about 1 s to 7 ms.
@@ -89,6 +97,11 @@ All notable changes to OpenStreamGrid are documented in this file.
 - The dashboard's peer table shows the top 200 peers by P2P upload, with a
   note when there are more, instead of rebuilding a row for every peer on each
   update.
+- The load-test image (used by `scripts/benchmark.sh`) now contains the
+  benchmark helper it imports; it failed at startup since 0.6.0. CI starts the
+  image to catch this. The load test also negotiates inventory batching and
+  neighbor views like the SDK, and applies full-list, delta, and batched
+  inventory updates correctly instead of merging everything.
 - An open monitoring dashboard no longer overloads the tracker: event-driven
   SSE snapshots, which list every peer, are coalesced to at most one per
   second. At 1000 peers, REST p95 latency with a dashboard open dropped from

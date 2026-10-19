@@ -100,6 +100,11 @@ jobs:
         run: |
           docker run --rm openstreamgrid-tracker:test -e "new (require('better-sqlite3'))(':memory:').close(); console.log('better-sqlite3', process.arch)"
           docker run --rm openstreamgrid-peer:test -e "require('@roamhq/wrtc'); console.log('@roamhq/wrtc', process.arch)"
+      - name: Start the load-test image
+        # The benchmark builds this image; starting it catches missing files.
+        run: |
+          docker build -f test/load-test.Dockerfile -t openstreamgrid-load-test:test .
+          docker run --rm openstreamgrid-load-test:test --help
       - name: Lint Helm chart
         if: matrix.runner == 'ubuntu-latest'
         run: docker run --rm -v "$PWD:/src" alpine/helm:3.16.4 lint /src/helm/openstreamgrid
