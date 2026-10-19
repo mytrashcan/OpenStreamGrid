@@ -12,8 +12,10 @@ Universal hybrid P2P-CDN middleware for standards-based live streaming.
 
 OpenStreamGrid adds peer-assisted delivery to HLS streams with MPEG-TS (`.ts`)
 or CMAF/fMP4 (`.m4s`) media segments. With LL-HLS, partial segments load
-from the origin while complete segments are shared; sharing parts is a roadmap
-item (see [ADR 0002](docs/adr/0002-llhls-part-sharing.md)). Peers share and SHA-256-verify media segments, while fMP4 init segments
+from the origin while complete segments are shared. With
+`assembleLowLatencySegments`, viewers at the live edge also share the segments
+they assemble from parts; sharing the parts themselves is a roadmap item (see
+[ADR 0002](docs/adr/0002-llhls-part-sharing.md)). Peers share and SHA-256-verify media segments, while fMP4 init segments
 and playlists always load from your origin or CDN. Your
 origin continues to encode and publish media while OpenStreamGrid discovers
 peers, verifies segments, limits resource use, reports delivery metrics, and
@@ -396,6 +398,7 @@ configuration is available through the following environment variables.
 | `peerTimeoutMs` | `3000` | Peer request and negotiation deadline |
 | `maxCacheBytes` | `100 MB` | Browser segment-cache limit |
 | `hashUrlResolver` | adjacent `.sha256` | Override signed/query-aware sidecar URL resolution |
+| `assembleLowLatencySegments` | `false` | LL-HLS: join a segment's parts once the playlist lists it, verify it against the segment's sidecar, and share it with peers that load complete segments. Needs `attach()` on the hls.js instance and segment verification |
 
 ### Benchmark
 

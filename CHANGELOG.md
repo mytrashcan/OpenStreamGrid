@@ -6,6 +6,11 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Added
 
+- `assembleLowLatencySegments` (Hls.js plugin, off by default): LL-HLS
+  viewers join a segment's parts once the playlist lists it with all its
+  parts, verify the result against the segment's sidecar, and share it, so
+  peers that load complete segments can get them from viewers at the live
+  edge (ADR 0002, option B).
 - Prometheus gauges for the tracker's event-loop delay
   (`openstreamgrid_event_loop_delay_{p50,p90,p99,max}_seconds`) since the
   previous scrape. The capacity benchmark reports them and gains `--churn`.

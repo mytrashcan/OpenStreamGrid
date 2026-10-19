@@ -247,6 +247,10 @@ class OpenStreamGridLoader implements Loader<LoaderContext> {
     // short-lived and have no integrity sidecar, so peers cannot help.
     const ranged = (context.rangeStart ?? 0) > 0 || (context.rangeEnd ?? 0) > 0;
     const partial = Boolean((context as { part?: unknown }).part);
+    if (partial && this.plugin.assemblesLowLatencySegments()) {
+      this.fallbackToOrigin(context, config, this.plugin.recordingPartCallbacks(context, callbacks));
+      return;
+    }
     if (!this.isMediaSegmentUrl(url) || ranged || partial) {
       this.fallbackToOrigin(context, config, callbacks);
       return;
@@ -366,6 +370,22 @@ class OpenStreamGridLoader implements Loader<LoaderContext> {
   }
 }
 
+/** The parts of an hls.js fragment the assembler reads. */
+interface PartFragment {
+  sn?: unknown;
+  level?: unknown;
+  url?: string;
+}
+
+interface PartAssembly {
+  level: number;
+  sn: number;
+  parts: Map<number, Uint8Array>;
+  settled: boolean;
+}
+
+const MAX_PART_ASSEMBLIES = 8;
+
 const createP2PLoader = (
   plugin: OpenStreamGridHlsPlugin,
   fallbackLoader: HlsConfig["loader"],
@@ -425,6 +445,10 @@ export class OpenStreamGridHlsPlugin {
   private originalLoader: HlsConfig["loader"] | undefined;
   private installedLoader: HlsConfig["loader"] | undefined;
   private deadlineContinuityCounter: number | undefined;
+
+  private readonly assembleParts: boolean;
+  /** LL-HLS parts loaded per segment, keyed by `level:sn`, oldest first. */
+  private readonly partAssemblies = new Map<string, PartAssembly>();
 
   constructor(config: HlsjsPluginConfig) {
     if (config.peerId !== undefined && config.peerId.trim() === "") {
@@ -495,6 +519,8 @@ export class OpenStreamGridHlsPlugin {
       config.verifySegments !== false && config.originBaseUrl
         ? new OriginHashVerifier(config.originBaseUrl, config.hashUrlResolver)
         : undefined;
+    // Assembled bytes are shared only after verification, never without it.
+    this.assembleParts = config.assembleLowLatencySegments === true && this.verifier !== undefined;
 
     this.wsClient = new WsTrackerClient({
       trackerUrl: config.trackerUrl,
@@ -616,6 +642,138 @@ export class OpenStreamGridHlsPlugin {
     this.registrationRetry = undefined;
     this.sessionRefresh = undefined;
     if (this.registered) void this.unregisterPeer();
+  }
+
+  /** @internal Whether part loads should be recorded for assembly. */
+  assemblesLowLatencySegments(): boolean {
+    return this.assembleParts && this.active;
+  }
+
+  /**
+   * @internal Wraps a part load's callbacks so the part's bytes are kept for
+   * assembling its segment. Playback receives the part unchanged.
+   */
+  recordingPartCallbacks(
+    context: LoaderContext,
+    callbacks: LoaderCallbacks<LoaderContext>,
+  ): LoaderCallbacks<LoaderContext> {
+    return {
+      ...callbacks,
+      onSuccess: (response, stats, successContext, networkDetails) => {
+        try {
+          this.recordPart(context, response.data);
+        } catch (error) {
+          logger.warn("part_record_failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        callbacks.onSuccess(response, stats, successContext, networkDetails);
+      },
+    };
+  }
+
+  private recordPart(context: LoaderContext, data: unknown): void {
+    const part = (context as { part?: { index?: unknown; fragment?: PartFragment } }).part;
+    const fragment = part?.fragment;
+    if (
+      !(data instanceof ArrayBuffer) ||
+      typeof part?.index !== "number" ||
+      typeof fragment?.sn !== "number" ||
+      typeof fragment.level !== "number"
+    ) {
+      return;
+    }
+    const key = `${fragment.level}:${fragment.sn}`;
+    let assembly = this.partAssemblies.get(key);
+    if (!assembly) {
+      assembly = { level: fragment.level, sn: fragment.sn, parts: new Map(), settled: false };
+      this.partAssemblies.set(key, assembly);
+      while (this.partAssemblies.size > MAX_PART_ASSEMBLIES) {
+        const oldest = this.partAssemblies.keys().next().value;
+        if (oldest === undefined) break;
+        this.partAssemblies.delete(oldest);
+      }
+    }
+    if (!assembly.settled) assembly.parts.set(part.index, new Uint8Array(data.slice(0)));
+    // A part load is also the moment to finish earlier segments whose
+    // complete URI the playlist has listed since.
+    for (const pending of this.partAssemblies.values()) {
+      if (!pending.settled) void this.assembleSegment(pending);
+    }
+  }
+
+  /**
+   * Joins a segment's parts once the playlist lists the complete segment, and
+   * shares the result if it matches the segment's published hash. Playlists
+   * list a segment only after all of its parts, so the set is final then.
+   */
+  private async assembleSegment(assembly: PartAssembly): Promise<void> {
+    const listed = this.listedSegment(assembly);
+    // Wait until the playlist lists the segment and this viewer has loaded
+    // as many parts as the playlist had for it (a last part may still be
+    // loading when the segment appears).
+    if (!listed || !this.verifier || assembly.parts.size < listed.partCount) return;
+    const segmentUrl = listed.url;
+    assembly.settled = true;
+    const ordered: Uint8Array[] = [];
+    for (let index = 0; index < assembly.parts.size; index += 1) {
+      const bytes = assembly.parts.get(index);
+      if (!bytes) {
+        assembly.parts.clear();
+        return; // A part was loaded elsewhere or skipped; the set is incomplete.
+      }
+      ordered.push(bytes);
+    }
+    assembly.parts.clear();
+    const data = new Uint8Array(ordered.reduce((total, bytes) => total + bytes.byteLength, 0));
+    let offset = 0;
+    for (const bytes of ordered) {
+      data.set(bytes, offset);
+      offset += bytes.byteLength;
+    }
+    const segmentName = segmentUrl.split("/").pop() ?? segmentUrl;
+    try {
+      const verification = await this.verifier.verifyUrl(segmentUrl, data);
+      if (!verification.valid) {
+        // The packager's parts do not join into the published segment.
+        logger.warn("part_assembly_mismatch", { segment: segmentName });
+        return;
+      }
+    } catch (error) {
+      logger.warn("part_assembly_unverified", {
+        segment: segmentName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    if (!this.active) return;
+    this.cacheSegment(cacheKeyFrom(segmentUrl), this.segmentPeerId(segmentUrl), data);
+    this.emit({ type: "segment_assembled", segment: segmentName });
+  }
+
+  /**
+   * The complete segment's URL and part count, once the current playlist
+   * lists the segment and still holds its parts; undefined otherwise.
+   */
+  private listedSegment(assembly: PartAssembly): { url: string; partCount: number } | undefined {
+    const details = (
+      this.attachedHls?.levels?.[assembly.level] as
+        | { details?: { fragments?: PartFragment[]; partList?: Array<{ fragment?: PartFragment }> | null } }
+        | undefined
+    )?.details;
+    const url = details?.fragments?.find((fragment) => fragment.sn === assembly.sn)?.url;
+    const partCount =
+      details?.partList?.filter((part) => part.fragment?.sn === assembly.sn).length ?? 0;
+    if (!url || partCount === 0 || !this.isMediaSegmentUrl(url)) return undefined;
+    return { url, partCount };
+  }
+
+  private isMediaSegmentUrl(url: string): boolean {
+    try {
+      return MEDIA_SEGMENT_EXTENSION_PATTERN.test(new URL(url, globalThis.location?.href).pathname);
+    } catch {
+      return false;
+    }
   }
 
   /** @internal Playback element used by the Hls.js loader deadline adapter. */

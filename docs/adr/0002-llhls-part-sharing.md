@@ -1,6 +1,7 @@
 # ADR 0002: Sharing LL-HLS partial segments
 
-- **Status:** Proposed — awaiting a maintainer decision
+- **Status:** Proposed. Option B is implemented as the opt-in SDK setting
+  `assembleLowLatencySegments` (off by default); A remains the default
 - **Date:** 2026-10-19
 - **Scope:** browser SDK (Hls.js plugin), Node peer, tracker inventory protocol,
   origin sidecar writer
