@@ -138,6 +138,13 @@ chooses Origin.
 ## Features
 
 - Hybrid HTTP/WebRTC segment delivery with immediate origin fallback.
+- Player integrations for Hls.js, Shaka Player, and Video.js 10 (or any player
+  that creates hls.js itself); LL-HLS streams play, with partial segments
+  loading from the origin.
+- Works with an existing origin: a sidecar writer adds the SHA-256 files
+  peers verify against to any packager's HLS output.
+- Scales to thousands of viewers per broadcast and tracker: batched inventory
+  updates and bounded neighbor views keep signaling linear in the audience.
 - Admin API-key authentication plus short-lived, peer-scoped session tokens.
 - HTTPS-compatible clients; terminate TLS at a trusted reverse proxy.
 - Configurable STUN and TURN servers for WebRTC NAT traversal.
@@ -145,7 +152,8 @@ chooses Origin.
 - Quality-based peer ranking, parallel downloads, and request coalescing.
 - SHA-256 verification, peer trust scoring, and integrity-failure exclusion.
 - TTL-aware LRU caching, upload bandwidth limiting, and connection limits.
-- Real-time dashboard, Prometheus metrics, SSE updates, and SQLite history.
+- Real-time dashboard, Prometheus metrics (including signaling volume and
+  event-loop delay), SSE updates, and SQLite history.
 - Grafana dashboard and Prometheus Operator `ServiceMonitor` in the Helm chart.
 - Docker Compose, load-test scenarios, Kubernetes/Helm manifests, and CI.
 

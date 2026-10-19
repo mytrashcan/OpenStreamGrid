@@ -133,6 +133,12 @@ Peer보다 지속적인 품질 이력이 적기 때문에 두 정책을 의도�
 ## 주요 기능
 
 - HTTP/WebRTC 기반 P2P 전송과 즉시 Origin 폴백
+- Hls.js, Shaka Player, Video.js 10(또는 hls.js를 직접 만드는 플레이어) 연동.
+  LL-HLS 스트림도 재생하며 부분 세그먼트는 Origin에서 받음
+- 기존 Origin 지원: 사이드카 작성기가 임의 패키저의 HLS 출력에 피어 검증용
+  SHA-256 파일을 추가
+- 방송·Tracker당 수천 명 규모: 인벤토리 배치와 제한된 이웃 뷰로 시그널링이
+  시청자 수에 선형으로 증가
 - HLS 다중 채널 격리와 세 가지 ABR 화질 생성
 - WebSocket 실시간 피어 탐색 및 시그널링
 - 지연 시간, 성공률, 업로드 대역폭, 신뢰 점수 기반 피어 선택
@@ -140,7 +146,8 @@ Peer보다 지속적인 품질 이력이 적기 때문에 두 정책을 의도�
 - SHA-256 무결성 검증과 실패 피어 신뢰도 차감
 - 업로드 속도 및 동시 연결 수 제한
 - 관리자 API 키와 단기 피어 세션 인증, STUN/TURN 설정
-- SQLite WAL 영속화와 실시간 대시보드, SSE, Prometheus 메트릭
+- SQLite WAL 영속화와 실시간 대시보드, SSE, Prometheus 메트릭(시그널링 양,
+  이벤트 루프 지연 포함)
 - Helm 차트의 Grafana 대시보드와 Prometheus Operator `ServiceMonitor`
 - Docker Compose 통합 테스트, 부하 테스트, Kubernetes/Helm 배포 파일
 
