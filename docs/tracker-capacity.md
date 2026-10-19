@@ -125,7 +125,8 @@ delivered bytes grow linearly: 4.7 MB/s at 2000 peers against 127 MB/s with
 batching alone, and 9.3 MB/s at 4000. CPU is about the same as with batching
 alone, because the tracker still writes the same number of messages; it is now
 the limit, at under half a core for 4000 peers. Probe latency at 4000 peers
-reflects the 4000-entry probe response as well as flush time.
+reflects the 4000-entry probe response as well as flush time, and its p95
+varied between 60 ms and 200 ms across runs.
 
 Measuring 4000 peers exposed per-peer work that scanned the whole audience:
 the WebSocket upgrade, `subscribe`, and the rejoin check each listed every

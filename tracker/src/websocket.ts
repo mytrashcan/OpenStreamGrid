@@ -237,13 +237,13 @@ export class TrackerWebSocketHub implements TrackerEvents {
 
   peerJoined(broadcastId: string, peer: Peer): void {
     this.broadcast({ type: "peer_joined", broadcastId, peer });
-    if (this.neighborViews) {
-      // Candidates come from the views rather than the store: listing every
-      // peer from the store on every join would make joins O(audience).
+    const views = this.seededViews(broadcastId);
+    if (views) {
+      views.add(broadcastId, peer.id);
       this.announceFill(
         broadcastId,
         peer.id,
-        this.neighborViews.fill(broadcastId, peer.id, this.neighborViews.peers(broadcastId)),
+        views.fill(broadcastId, peer.id),
         (id) => (id === peer.id ? peer : this.store.getPeer(broadcastId, id)),
       );
     }
@@ -257,15 +257,13 @@ export class TrackerWebSocketHub implements TrackerEvents {
     this.broadcast({ type: "peer_left", broadcastId, peerId });
     if (this.neighborViews) {
       const lost = this.neighborViews.leave(broadcastId, peerId);
-      // One candidate array is shared by all refills; fill samples it in place.
-      const candidates = lost.length > 0 ? this.neighborViews.peers(broadcastId) : [];
       for (const watcher of lost) {
         this.sendToViewer(broadcastId, watcher, { type: "peer_left", broadcastId, peerId });
         // Replace the lost neighbor so views stay full as the audience churns.
         this.announceFill(
           broadcastId,
           watcher,
-          this.neighborViews.fill(broadcastId, watcher, candidates),
+          this.neighborViews.fill(broadcastId, watcher),
           (id) => this.store.getPeer(broadcastId, id),
         );
       }
@@ -446,23 +444,19 @@ export class TrackerWebSocketHub implements TrackerEvents {
           Array.isArray(features) &&
           features.includes(WS_FEATURE_NEIGHBOR_VIEW) &&
           this.neighborViews !== undefined;
-        if (neighborView && this.neighborViews) {
+        const views = neighborView ? this.seededViews(broadcastId) : undefined;
+        if (views) {
           // Top up the view before indexing this socket, so the new
           // neighbors arrive in the peer list rather than as peer_joined.
-          // Peers that joined through this process already have a view; only
-          // after a tracker restart do candidates come from the store.
-          const known = this.neighborViews.view(broadcastId, peerId) !== undefined;
-          const candidates = known
-            ? this.neighborViews.peers(broadcastId)
-            : this.store.listPeers(broadcastId).map((peer) => peer.id);
+          views.add(broadcastId, peerId);
           this.announceFill(
             broadcastId,
             peerId,
-            this.neighborViews.fill(broadcastId, peerId, candidates),
+            views.fill(broadcastId, peerId),
             (id) => this.store.getPeer(broadcastId, id),
           );
           this.setSubscription(socket, { broadcastId, peerId, inventoryBatch, neighborView });
-          const listed = [peerId, ...(this.neighborViews.view(broadcastId, peerId) ?? [])];
+          const listed = [peerId, ...(views.view(broadcastId, peerId) ?? [])];
           this.send(socket, {
             type: "peer_list",
             broadcastId,
@@ -629,6 +623,24 @@ export class TrackerWebSocketHub implements TrackerEvents {
     yield* subscribers.immediate;
     yield* subscribers.batched;
     for (const sockets of subscribers.viewers.values()) yield* sockets;
+  }
+
+  /**
+   * Neighbor views with every stored peer of the broadcast registered. Peers
+   * join the views as they join the tracker; after a tracker restart, peers
+   * restored from the store are registered once, the first time the
+   * broadcast's views are needed, so later fills can link them.
+   */
+  private seededViews(broadcastId: string): NeighborViews | undefined {
+    const views = this.neighborViews;
+    if (views && !views.has(broadcastId)) {
+      try {
+        for (const peer of this.store.listPeers(broadcastId)) views.add(broadcastId, peer.id);
+      } catch {
+        // The broadcast was removed; there is nobody to register.
+      }
+    }
+    return views;
   }
 
   /**

@@ -1287,6 +1287,64 @@ test("limits neighbor-view subscribers to their neighbors and refills on leave",
   }
 });
 
+test("neighbor views include peers restored from the store after a restart", async () => {
+  const store = new TrackerStore();
+  const configuration = {
+    rateLimitRps: 100,
+    rateLimitBurst: 200,
+    maxPeersPerBroadcast: 500,
+    peerSessionSecret: "test-peer-session-secret-0123456789",
+    neighborViewSize: 4,
+  };
+  const before = new TrackerServer(() => store, 30_000, configuration);
+  const beforePort = await before.start(0, "127.0.0.1");
+  await fetch(`http://127.0.0.1:${beforePort}/api/v1/broadcasts`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: "live", playlistUrl: "http://origin/live.m3u8" }),
+  });
+  await fetch(`http://127.0.0.1:${beforePort}/api/v1/broadcasts/live/peers`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: "peer-old", address: "http://peer-old:9090" }),
+  });
+  await before.stop().catch(() => undefined);
+
+  // The restarted tracker knows peer-old only from the store. A new peer that
+  // opts into neighbor views must still be able to find it.
+  const after = new TrackerServer(() => store, 30_000, configuration);
+  const port = await after.start(0, "127.0.0.1");
+  let socket: WebSocket | undefined;
+  try {
+    const join = await fetch(`http://127.0.0.1:${port}/api/v1/broadcasts/live/peers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "peer-new", address: "http://peer-new:9090" }),
+    });
+    const { sessionToken } = await join.json() as { sessionToken: string };
+    const activeSocket = new WebSocket(
+      `ws://127.0.0.1:${port}/ws?sessionToken=${encodeURIComponent(sessionToken)}`,
+    );
+    socket = activeSocket;
+    await new Promise<void>((resolve) => activeSocket.once("open", resolve));
+    const list = waitForMessage(activeSocket, (message) => message.type === "peer_list");
+    activeSocket.send(
+      JSON.stringify({
+        type: "subscribe",
+        broadcastId: "live",
+        peerId: "peer-new",
+        features: ["inventory_batch", "neighbor_view"],
+      }),
+    );
+    const peerList = await list;
+    assert.equal(peerList.type, "peer_list");
+    assert.deepEqual(peerList.peers.map((peer) => peer.id).sort(), ["peer-new", "peer-old"]);
+  } finally {
+    socket?.close();
+    await after.stop();
+  }
+});
+
 test("authenticates WebSocket upgrades with a peer session", async () => {
   const server = new TrackerServer(
     () => new TrackerStore(),
