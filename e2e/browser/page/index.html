@@ -25,7 +25,10 @@
       };
       window.osg = state;
 
+      // LL-HLS viewer: low-latency hls.js that assembles and shares segments.
+      const lowLatency = params.get("ll") === "1";
       const options = {
+        assembleLowLatencySegments: lowLatency,
         trackerUrl: params.get("tracker"),
         broadcastId: params.get("broadcast") ?? "live",
         peerId: params.get("peer"),
@@ -104,7 +107,7 @@
         element.play?.()?.catch?.(() => undefined);
       } else {
         const plugin = new OpenStreamGridHlsPlugin(options);
-        const hls = new Hls({ liveSyncDurationCount: 3 });
+        const hls = new Hls({ liveSyncDurationCount: 3, lowLatencyMode: lowLatency });
         hls.on(Hls.Events.ERROR, (_event, data) => {
           if (data.fatal) state.fatalErrors.push(data.details);
         });

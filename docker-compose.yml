@@ -71,6 +71,8 @@ services:
       HLS_DIRECTORY: /tmp/openstreamgrid-hls
       SEGMENT_DURATION_SECONDS: "${SEGMENT_DURATION_SECONDS:-2}"
       HLS_SEGMENT_TYPE: "${HLS_SEGMENT_TYPE:-mpegts}"
+      # Test-only LL-HLS parts per segment (MPEG-TS); 0 disables.
+      HLS_PARTS_PER_SEGMENT: "${HLS_PARTS_PER_SEGMENT:-0}"
     depends_on:
       tracker:
         condition: service_healthy
