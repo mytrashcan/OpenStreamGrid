@@ -40,7 +40,11 @@ Returns the real-time HTML dashboard. It consumes the SSE endpoint below.
 
 Returns Prometheus text exposition data for tracker uptime, active broadcasts
 and peers, REST request duration, rate-limited requests, delivery requests,
-P2P successes, integrity failures, and origin fallbacks.
+P2P successes, integrity failures, and origin fallbacks. WebSocket signaling
+is covered by `openstreamgrid_ws_messages_sent_total`,
+`openstreamgrid_ws_bytes_sent_total`, and `openstreamgrid_ws_subscribers` by
+`mode` (`immediate`, `batched`, or `neighbor_view`). Many `immediate`
+subscribers mean clients that predate inventory batching.
 
 #### `GET /api/v1/stats`
 

@@ -37,6 +37,7 @@ import {
   DEFAULT_NEIGHBOR_VIEW_SIZE,
   TrackerWebSocketHub,
   type TrackerEvents,
+  type TrackerWebSocketStats,
 } from "./websocket.js";
 
 const DEFAULT_PORT = 7070;
@@ -484,6 +485,8 @@ const REQUEST_DURATION_BUCKETS_MS = [
 
 /** Minimal Prometheus collector for tracker process and store metrics. */
 export class TrackerMetrics {
+  /** Set once the WebSocket hub exists; its counters are exported too. */
+  webSocketStats: (() => TrackerWebSocketStats) | undefined;
   private readonly startedAtMs: number;
   private broadcastsTotal = 0;
   private peersTotal = 0;
@@ -648,6 +651,29 @@ export class TrackerMetrics {
       "Tracker process uptime in seconds.",
       Math.max(0, (this.now() - this.startedAtMs) / 1_000),
     );
+
+    const webSocket = this.webSocketStats?.();
+    if (webSocket) {
+      metric(
+        "openstreamgrid_ws_messages_sent_total",
+        "counter",
+        "WebSocket messages sent to peers.",
+        webSocket.messagesSent,
+      );
+      metric(
+        "openstreamgrid_ws_bytes_sent_total",
+        "counter",
+        "WebSocket payload bytes sent to peers.",
+        webSocket.bytesSent,
+      );
+      lines.push(
+        "# HELP openstreamgrid_ws_subscribers Subscribed WebSocket connections by inventory delivery mode.",
+        "# TYPE openstreamgrid_ws_subscribers gauge",
+        `openstreamgrid_ws_subscribers{mode="immediate"} ${webSocket.subscribers.immediate}`,
+        `openstreamgrid_ws_subscribers{mode="batched"} ${webSocket.subscribers.batched}`,
+        `openstreamgrid_ws_subscribers{mode="neighbor_view"} ${webSocket.subscribers.neighborView}`,
+      );
+    }
 
     lines.push(
       "# HELP openstreamgrid_request_duration_ms REST request duration in milliseconds.",
@@ -1391,6 +1417,7 @@ export class TrackerServer {
       },
     );
     this.webSockets = webSockets;
+    metrics.webSocketStats = () => webSockets.webSocketStats();
   }
 
   async start(port = DEFAULT_PORT, host = "0.0.0.0"): Promise<number> {

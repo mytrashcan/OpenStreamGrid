@@ -6,6 +6,8 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Added
 
+- Prometheus metrics for WebSocket signaling: messages and bytes sent, and
+  subscribers by inventory delivery mode, with matching Grafana panels.
 - WebSocket `neighbor_view` subscribe feature (with `inventory_batch`): each
   client sees a bounded, mostly mutual set of neighbors
   (`TRACKER_NEIGHBOR_VIEW_SIZE`, default 64) and receives peer and inventory
