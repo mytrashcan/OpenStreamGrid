@@ -820,6 +820,8 @@
 
         const renderMesh = (snapshot) => {
           const allPeers = selectedPeers(snapshot);
+          // The tracker sends segments only for the first 24 peers of each
+          // broadcast (DASHBOARD_MESH_PEERS in server.ts); keep them in sync.
           const peers = allPeers.slice(0, 24);
           elements.meshCanvas.replaceChildren();
           elements.meshNote.textContent = allPeers.length > peers.length

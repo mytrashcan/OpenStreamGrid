@@ -1791,6 +1791,35 @@ test("coalesces bursts of dashboard updates into one leading and one trailing ev
   sse.stop();
 });
 
+test("sends dashboard segments only for the peers the mesh view draws", () => {
+  const store = new TrackerStore();
+  store.registerBroadcast({ id: "live", playlistUrl: "http://origin/live.m3u8" });
+  for (let index = 0; index < 30; index += 1) {
+    store.joinPeer("live", { id: `peer-${String(index).padStart(2, "0")}`, address: `http://peer-${index}:9090` });
+    store.reportSegments("live", `peer-${String(index).padStart(2, "0")}`, ["a.ts"]);
+  }
+  const sse = new TrackerStatsSse(store);
+  const writes: string[] = [];
+  const response = {
+    destroyed: false,
+    writableEnded: false,
+    writableNeedDrain: false,
+    writeHead: () => response,
+    flushHeaders: () => undefined,
+    write: (chunk: string) => writes.push(chunk),
+    once: () => response,
+    end: () => undefined,
+  };
+  sse.connect(response as unknown as ServerResponse);
+  sse.stop();
+  const event = writes.find((chunk) => chunk.startsWith("event:")) ?? "";
+  const snapshot = JSON.parse(/^data: (.*)$/m.exec(event)?.[1] ?? "{}") as TrackerStatsSnapshot;
+  const peers = snapshot.broadcasts[0]?.peers ?? [];
+  assert.equal(peers.length, 30);
+  assert.ok(peers.slice(0, 24).every((entry) => entry.peer.segments.length === 1));
+  assert.ok(peers.slice(24).every((entry) => entry.peer.segments.length === 0));
+});
+
 test("streams global, broadcast, REST, and WebSocket stats over SSE", async () => {
   const server = new TrackerServer(() => new TrackerStore());
   const port = await server.start(0, "127.0.0.1");
