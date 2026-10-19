@@ -359,6 +359,7 @@ Delivery events carry optional `segment`, `peerId`, `durationMs`, and
 | `peer_failed` | A peer attempt failed; `message` gives the reason (HTTP status, WebRTC error, timeout, integrity). Attempts cancelled because another peer won are not reported |
 | `origin_fallback` | The segment was served by the origin/CDN |
 | `integrity_ok` / `integrity_fail` | SHA-256 verification passed or failed |
+| `integrity_skipped` | The origin's sidecar could not be fetched (for example, LL-HLS parts that a player requests as segments). The origin bytes were played but not cached or shared; `message` gives the reason |
 | `segment_assembled` | With `assembleLowLatencySegments`, an LL-HLS segment was joined from its parts, verified, and cached for sharing |
 | `ws_connected` / `ws_disconnected` / `ws_error` | Tracker signaling connection state |
 | `scheduler_decision` | Delivery plan: `policy`, `mode`, `reason`, `candidateCount`, `selectedPeerCount` |

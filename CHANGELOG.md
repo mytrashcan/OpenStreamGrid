@@ -117,6 +117,11 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Fixed
 
+- When an origin segment's SHA-256 sidecar cannot be fetched, the SDK plays the
+  origin bytes and emits `integrity_skipped` instead of failing the load, and
+  never caches or shares them. Shaka Player in `lowLatencyMode` requests LL-HLS
+  parts as segments, which have no sidecar, and such loads failed repeatedly.
+  A sidecar that does not match still fails the load.
 - The stale-peer sweep no longer lists every peer (with segments) twice every
   sweep to find the removed ones, and SQLite segment lookups (`?segment=`) load
   the matching peers' segments in one query instead of one per peer.

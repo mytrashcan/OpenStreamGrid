@@ -58,7 +58,10 @@ prototype releases are not maintained unless a release notice says otherwise.
 
 SHA-256 sidecars detect corrupted segment bytes; they do not authenticate the
 content publisher unless the sidecar itself is delivered through a trusted,
-authenticated channel. The administrator API key is deployment-wide. Peer
+authenticated channel. Peers share only segments that matched a sidecar: when
+an origin segment's sidecar cannot be fetched, the browser SDK plays the
+origin bytes (as the player would without OpenStreamGrid) but never caches or
+shares them. The administrator API key is deployment-wide. Peer
 sessions are short-lived and identity-scoped, but they do not replace viewer
 account authorization in the integrating service. The development Docker
 Compose topology is not a hardened internet-facing deployment.

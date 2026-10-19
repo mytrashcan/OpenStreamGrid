@@ -248,6 +248,34 @@ test("verifies origin fallback data before caching it", async (context) => {
   assert.equal(plugin.stats.integrityFailures, 1);
 });
 
+test("plays origin data without a sidecar but never caches or shares it", async (context) => {
+  const requests: string[] = [];
+  context.mock.method(globalThis, "fetch", async (input: RequestInfo | URL) => {
+    requests.push(String(input));
+    // An LL-HLS part requested as a segment has no sidecar.
+    if (String(input).endsWith(".sha256")) return new Response("missing", { status: 404 });
+    return new Response(segmentData);
+  });
+  const events: SdkEvent[] = [];
+  const plugin = new OpenStreamGridHlsPlugin({
+    trackerUrl: "ws://tracker.example/ws",
+    broadcastId: "live",
+    originBaseUrl: "https://origin.example/hls",
+    onEvent: (event) => events.push(event),
+  });
+  const url = "https://origin.example/hls/low/segment_7.part2.m4s";
+
+  const first = await plugin.loadSegment("segment_7.part2.m4s", url, new AbortController().signal);
+  assert.deepEqual(first.data, segmentData);
+  assert.equal(plugin.cache.size, 0);
+  assert.equal(plugin.stats.integrityFailures, 0);
+  assert.ok(events.some((event) => event.type === "integrity_skipped"));
+  assert.ok(!events.some((event) => event.type === "integrity_ok"));
+  // Not cached, so the next load goes to the origin again.
+  await plugin.loadSegment("segment_7.part2.m4s", url, new AbortController().signal);
+  assert.equal(requests.filter((request) => request === url).length, 2);
+});
+
 test("uses an injected scheduler while keeping Origin fallback authoritative", async (context) => {
   const events: SdkEvent[] = [];
   const requests: string[] = [];

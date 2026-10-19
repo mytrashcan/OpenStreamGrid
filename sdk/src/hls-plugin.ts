@@ -103,7 +103,11 @@ interface PeerFetchResult {
 
 type SegmentLoadResult =
   | { source: "p2p"; data: Uint8Array; peerId: string }
-  | { source: "origin"; data: Uint8Array };
+  /** `unverified`: the origin's sidecar was unavailable; play, never share. */
+  | { source: "origin"; data: Uint8Array; unverified?: true };
+
+/** The bytes did not match the published SHA-256 (as opposed to no hash). */
+class SegmentIntegrityError extends Error {}
 
 type HedgedLoadAttempt =
   | { source: SegmentLoadResult["source"]; status: "fulfilled"; result: SegmentLoadResult }
@@ -1256,7 +1260,22 @@ export class OpenStreamGridHlsPlugin {
   ): Promise<SegmentLoadResult> {
     const startedAt = performance.now();
     const data = await this.fetchFromOrigin(segmentUrl, signal);
-    await this.verifySegment(segmentName, segmentUrl, data, "origin", signal);
+    try {
+      await this.verifySegment(segmentName, segmentUrl, data, "origin", signal);
+    } catch (error) {
+      if (signal.aborted || error instanceof SegmentIntegrityError) throw error;
+      // No hash to check against: the sidecar is missing or unreachable, as
+      // for LL-HLS parts that a player requests as segments. These are the
+      // bytes the player would get without the grid, so play them, but never
+      // cache or share bytes nobody verified.
+      this.emit({
+        type: "integrity_skipped",
+        segment: segmentName,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      this.observeOriginLatency(performance.now() - startedAt);
+      return { source: "origin", data, unverified: true };
+    }
     this.observeOriginLatency(performance.now() - startedAt);
     return { source: "origin", data };
   }
@@ -1277,7 +1296,7 @@ export class OpenStreamGridHlsPlugin {
       segment: segmentName,
       message: `Expected ${verification.expectedHash}, got ${verification.actualHash}`,
     });
-    throw new Error(
+    throw new SegmentIntegrityError(
       source === "origin"
         ? "Origin segment integrity check failed"
         : "Segment integrity check failed",
@@ -1290,7 +1309,8 @@ export class OpenStreamGridHlsPlugin {
     segmentUrl: string,
     segmentId: string,
   ): { data: Uint8Array } {
-    if (this.verifier) {
+    const unverified = result.source === "origin" && result.unverified === true;
+    if (this.verifier && !unverified) {
       this.emit({ type: "integrity_ok", segment: segmentName });
     }
     if (result.source === "p2p") {
@@ -1309,7 +1329,7 @@ export class OpenStreamGridHlsPlugin {
         message: "Served from origin",
       });
     }
-    this.cacheSegment(cacheKeyFrom(segmentUrl), segmentId, result.data);
+    if (!unverified) this.cacheSegment(cacheKeyFrom(segmentUrl), segmentId, result.data);
     return { data: result.data };
   }
 
