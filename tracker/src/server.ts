@@ -72,6 +72,8 @@ export interface TrackerConfiguration {
   wsMaxConnectionsPerIp: number;
   trustProxyHops: number;
   turn?: TurnCredentialOptions;
+  /** Inventory batch interval for `inventory_batch` WebSocket clients. */
+  wsInventoryBatchMs?: number;
 }
 
 const parseInteger = (
@@ -1145,6 +1147,7 @@ export const createTrackerHandler = (
           store.unregisterBroadcast(broadcastId);
           metrics.synchronizeTraffic(store);
           sendEmpty(response, 204);
+          events.broadcastRemoved?.(broadcastId);
           events.broadcastListChanged?.();
           return;
         }
@@ -1234,6 +1237,7 @@ export class TrackerServer {
           | "wsMaxConnectionsPerIp"
           | "trustProxyHops"
           | "turn"
+          | "wsInventoryBatchMs"
         >
       > = {
       rateLimitRps: DEFAULT_RATE_LIMIT_RPS,
@@ -1265,6 +1269,7 @@ export class TrackerServer {
       peerListChanged: (broadcastId) =>
         webSockets?.peerListChanged(broadcastId),
       broadcastListChanged: () => webSockets?.broadcastListChanged(),
+      broadcastRemoved: (broadcastId) => webSockets?.broadcastRemoved(broadcastId),
     };
     this.server = createServer(
       createTrackerHandler(store, events, this.statsEvents, {
@@ -1300,6 +1305,9 @@ export class TrackerServer {
           : {}),
         ...(configuration.trustProxyHops !== undefined
           ? { trustProxyHops: configuration.trustProxyHops }
+          : {}),
+        ...(configuration.wsInventoryBatchMs !== undefined
+          ? { inventoryBatchIntervalMs: configuration.wsInventoryBatchMs }
           : {}),
       },
     );
@@ -1402,6 +1410,7 @@ export class TrackerServer {
       const lease = broadcast.metadata?.leaseExpiresAt;
       if (broadcast.metadata?.owner === "origin" && lease && Date.parse(lease) <= nowMs) {
         this.store.unregisterBroadcast(broadcast.id);
+        this.webSockets.broadcastRemoved(broadcast.id);
         this.webSockets.broadcastListChanged();
       }
     }

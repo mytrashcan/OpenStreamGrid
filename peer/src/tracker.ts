@@ -1,10 +1,12 @@
 import {
   createLogger,
+  WS_FEATURE_INVENTORY_BATCH,
   type Peer,
   type PeerFailureReport,
   type PeerHeartbeat,
   type PeerJoinRequest,
   type PeerTrafficStats,
+  type SegmentInventoryUpdate,
   type WsClientMessage,
   type WsServerMessage,
 } from "@openstreamgrid/common";
@@ -32,7 +34,8 @@ type PeerUpdateMessage = Extract<
       | "peer_joined"
       | "peer_left"
       | "segment_available"
-      | "segment_inventory_delta";
+      | "segment_inventory_delta"
+      | "segment_inventory_batch";
   }
 >;
 
@@ -156,6 +159,22 @@ const parsePeerSession = (value: unknown): {
   };
 };
 
+const parseInventoryUpdate = (value: unknown): SegmentInventoryUpdate => {
+  if (!isObject(value) || typeof value.peerId !== "string") {
+    throw new TypeError("Tracker segment inventory update is invalid");
+  }
+  if (value.replace === true) {
+    if (!isStringArray(value.segments)) {
+      throw new TypeError("Tracker segment inventory update is invalid");
+    }
+    return { peerId: value.peerId, segments: value.segments, replace: true };
+  }
+  if (!isStringArray(value.added) || !isStringArray(value.removed)) {
+    throw new TypeError("Tracker segment inventory update is invalid");
+  }
+  return { peerId: value.peerId, added: value.added, removed: value.removed };
+};
+
 const parsePeerUpdate = (data: RawData): PeerUpdateMessage | undefined => {
   const value: unknown = JSON.parse(data.toString());
   if (
@@ -208,6 +227,15 @@ const parsePeerUpdate = (data: RawData): PeerUpdateMessage | undefined => {
         peerId: value.peerId,
         added: value.added,
         removed: value.removed,
+      };
+    case "segment_inventory_batch":
+      if (!Array.isArray(value.updates)) {
+        throw new TypeError("Tracker segment inventory batch is invalid");
+      }
+      return {
+        type: "segment_inventory_batch",
+        broadcastId,
+        updates: value.updates.map(parseInventoryUpdate),
       };
     default:
       return undefined;
@@ -456,6 +484,7 @@ export class TrackerClient implements PeerDirectory {
         type: "subscribe",
         broadcastId: this.options.broadcastId,
         peerId: this.options.peerId,
+        features: [WS_FEATURE_INVENTORY_BATCH],
       });
       this.reportStatusSafely();
       this.firstConnectionResolver?.();
@@ -536,25 +565,37 @@ export class TrackerClient implements PeerDirectory {
         return;
       }
       if (message.type === "segment_available") {
-        const peer = this.peers.get(message.peerId);
-        if (peer) {
-          peer.segments = message.replace
-            ? [...message.segments]
-            : [...new Set([...peer.segments, ...message.segments])];
-        }
+        if (message.replace) this.replaceInventory(message.peerId, message.segments);
+        else this.applyInventoryDelta(message.peerId, message.segments, []);
         return;
       }
       if (message.type === "segment_inventory_delta") {
-        const peer = this.peers.get(message.peerId);
-        if (!peer) return;
-        const segments = new Set(peer.segments);
-        for (const segment of message.removed) segments.delete(segment);
-        for (const segment of message.added) segments.add(segment);
-        peer.segments = [...segments];
+        this.applyInventoryDelta(message.peerId, message.added, message.removed);
+        return;
+      }
+      if (message.type === "segment_inventory_batch") {
+        for (const update of message.updates) {
+          if ("replace" in update) this.replaceInventory(update.peerId, update.segments);
+          else this.applyInventoryDelta(update.peerId, update.added, update.removed);
+        }
       }
     } catch (error) {
       logger.error("invalid_tracker_message", error);
     }
+  }
+
+  private replaceInventory(peerId: string, segments: string[]): void {
+    const peer = this.peers.get(peerId);
+    if (peer) peer.segments = [...segments];
+  }
+
+  private applyInventoryDelta(peerId: string, added: string[], removed: string[]): void {
+    const peer = this.peers.get(peerId);
+    if (!peer) return;
+    const segments = new Set(peer.segments);
+    for (const segment of removed) segments.delete(segment);
+    for (const segment of added) segments.add(segment);
+    peer.segments = [...segments];
   }
 
   private send(message: WsClientMessage): boolean {

@@ -377,12 +377,25 @@ export interface WebRtcSignalMessage {
   sdp: string;
 }
 
+/**
+ * Subscribe feature: receive inventory updates merged into periodic
+ * `segment_inventory_batch` messages instead of one message per report.
+ */
+export const WS_FEATURE_INVENTORY_BATCH = "inventory_batch";
+
+/** Net change to one peer's segment inventory within a batch. */
+export type SegmentInventoryUpdate =
+  | { peerId: string; added: string[]; removed: string[] }
+  | { peerId: string; segments: string[]; replace: true };
+
 /** Messages accepted from tracker WebSocket clients. */
 export type WsClientMessage =
   | {
       type: "subscribe";
       broadcastId: string;
       peerId: string;
+      /** Optional protocol features; trackers ignore unknown entries. */
+      features?: string[];
     }
   | {
       type: "heartbeat";
@@ -435,6 +448,12 @@ export type WsServerMessage =
       peerId: string;
       added: string[];
       removed: string[];
+    }
+  | {
+      /** Sent instead of the two messages above to `inventory_batch` clients. */
+      type: "segment_inventory_batch";
+      broadcastId: string;
+      updates: SegmentInventoryUpdate[];
     }
   | {
       type: "stats_update";
