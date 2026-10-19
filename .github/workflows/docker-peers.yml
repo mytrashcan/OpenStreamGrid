@@ -11,6 +11,9 @@ on:
       - "origin/**"
       - "test/docker-test.sh"
       - "docker-compose.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.base.json"
       - ".github/workflows/docker-peers.yml"
   workflow_dispatch:
 
