@@ -86,6 +86,9 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Fixed
 
+- The dashboard's peer table shows the top 200 peers by P2P upload, with a
+  note when there are more, instead of rebuilding a row for every peer on each
+  update.
 - An open monitoring dashboard no longer overloads the tracker: event-driven
   SSE snapshots, which list every peer, are coalesced to at most one per
   second. At 1000 peers, REST p95 latency with a dashboard open dropped from
