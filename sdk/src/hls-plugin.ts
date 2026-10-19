@@ -521,7 +521,34 @@ export class OpenStreamGridHlsPlugin {
    * Attach the plugin to an Hls.js instance.
    * Replaces the default loader with OpenStreamGrid's P2P-aware loader.
    */
+  /**
+   * hls.js configuration for players that construct hls.js themselves, such as
+   * Video.js 10's hls.js adapter (`source.engine.hlsJs`), `<hls-video>`, or a
+   * framework wrapper. Pass hls.js's default loader (`Hls.DefaultConfig.loader`)
+   * and merge the result into the config before the player creates hls.js.
+   * This starts the grid; call {@link attach} with the created instance to
+   * enable playback-deadline scheduling, and {@link detach} to stop.
+   */
+  hlsJsConfig(DefaultLoader: HlsConfig["loader"]): { loader: HlsConfig["loader"] } {
+    if (this.attachedHls && this.attachedHls.config.loader !== this.installedLoader) {
+      throw new Error("Plugin is already attached to an Hls.js instance");
+    }
+    if (!this.installedLoader) {
+      this.originalLoader = DefaultLoader;
+      this.installedLoader = createP2PLoader(this, DefaultLoader);
+    }
+    this.startGrid();
+    return { loader: this.installedLoader };
+  }
+
   attach(hls: Hls): void {
+    // An instance created with hlsJsConfig() already uses the grid's loader;
+    // just track it (wrappers may recreate it) instead of wrapping it twice.
+    if (this.installedLoader && hls.config.loader === this.installedLoader) {
+      this.attachedHls = hls;
+      this.startGrid();
+      return;
+    }
     if (this.attachedHls && this.attachedHls !== hls) {
       throw new Error("Plugin is already attached to another Hls.js instance");
     }

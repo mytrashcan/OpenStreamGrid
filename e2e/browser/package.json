@@ -3,10 +3,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "playwright test"
+    "test": "playwright test",
+    "build:videojs": "esbuild page/videojs.js --bundle --format=esm --outfile=page/dist/videojs.mjs --log-level=warning"
   },
   "devDependencies": {
     "@playwright/test": "1.64.0",
+    "@videojs/hlsjs-video": "10.0.1",
+    "@videojs/html": "10.0.1",
+    "esbuild": "0.28.2",
     "hls.js": "^1.7.3",
     "shaka-player": "5.2.12"
   }

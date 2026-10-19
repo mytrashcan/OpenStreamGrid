@@ -71,6 +71,37 @@
         } catch (error) {
           state.fatalErrors.push(`shaka-load-${error?.code ?? error}`);
         }
+      } else if (params.get("player") === "videojs") {
+        // Video.js 10 builds hls.js itself, so the grid's loader goes in
+        // through source.engine.hlsJs; attaching the engine it creates enables
+        // playback-deadline scheduling.
+        const { Hls } = await import("/vendor/videojs.mjs");
+        const plugin = new OpenStreamGridHlsPlugin(options);
+        const element = document.createElement("hlsjs-video");
+        element.muted = true;
+        element.autoplay = true;
+        element.playsInline = true;
+        element.source = {
+          src: params.get("playlist"),
+          // Chromium can play HLS natively, which would bypass hls.js.
+          preferPlayback: "mse",
+          engine: {
+            hlsJs: { liveSyncDurationCount: 3, ...plugin.hlsJsConfig(Hls.DefaultConfig.loader) },
+          },
+        };
+        video.replaceWith(element);
+        window.osgMediaElement = () => element.engine?.media ?? null;
+        let attachedEngine = null;
+        setInterval(() => {
+          const engine = element.engine;
+          if (!engine || engine === attachedEngine) return;
+          attachedEngine = engine;
+          plugin.attach(engine);
+          engine.on(Hls.Events.ERROR, (_event, data) => {
+            if (data.fatal) state.fatalErrors.push(data.details);
+          });
+        }, 100);
+        element.play?.()?.catch?.(() => undefined);
       } else {
         const plugin = new OpenStreamGridHlsPlugin(options);
         const hls = new Hls({ liveSyncDurationCount: 3 });
