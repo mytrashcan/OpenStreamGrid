@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import { mkdir, stat } from "node:fs/promises";
+import { mkdir, readFile, stat } from "node:fs/promises";
 import {
   createServer,
   type IncomingMessage,
@@ -8,6 +8,7 @@ import {
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { pathToFileURL } from "node:url";
+import { addPartsToPlaylist, parsePartName, partRange } from "./ll-hls.js";
 import {
   createLogger,
   isMediaSegmentPath,
@@ -41,6 +42,8 @@ const logger = createLogger("origin");
 interface OriginServerOptions {
   hlsDirectory: string;
   streamer: StreamController;
+  /** Test-only LL-HLS parts per MPEG-TS segment; 0 (default) disables. */
+  partsPerSegment?: number;
 }
 
 interface RegistrationOptions {
@@ -75,6 +78,7 @@ export interface OriginConfiguration {
   playlistSize: number;
   hashIntervalMs: number;
   segmentType: HlsSegmentType;
+  partsPerSegment: number;
   ffmpegPath?: string;
 }
 
@@ -143,6 +147,14 @@ export const parseOriginConfiguration = (
     "PUBLIC_ORIGIN_URL",
   );
   const ffmpegPath = environment.FFMPEG_PATH?.trim();
+  const segmentType = parseSegmentType(environment.HLS_SEGMENT_TYPE);
+  const partsPerSegment = Number(environment.HLS_PARTS_PER_SEGMENT ?? "0");
+  if (!Number.isSafeInteger(partsPerSegment) || partsPerSegment < 0 || partsPerSegment > 10) {
+    throw new Error("HLS_PARTS_PER_SEGMENT must be an integer between 0 and 10");
+  }
+  if (partsPerSegment > 0 && segmentType !== "mpegts") {
+    throw new Error("HLS_PARTS_PER_SEGMENT requires HLS_SEGMENT_TYPE=mpegts");
+  }
   const trackerApiKey = environment.TRACKER_API_KEY;
   if (trackerApiKey !== undefined && trackerApiKey.trim() === "") {
     throw new Error("TRACKER_API_KEY must not be empty");
@@ -195,7 +207,8 @@ export const parseOriginConfiguration = (
       environment.HASH_INTERVAL_MS ?? String(DEFAULT_HASH_INTERVAL_MS),
       "HASH_INTERVAL_MS",
     ),
-    segmentType: parseSegmentType(environment.HLS_SEGMENT_TYPE),
+    segmentType,
+    partsPerSegment,
     ...(ffmpegPath ? { ffmpegPath } : {}),
   };
 };
@@ -288,6 +301,7 @@ const resolveStreamAsset = (
 export const createOriginHandler = (
   hlsDirectory: string,
   streamer: StreamController,
+  partsPerSegment = 0,
 ) =>
   async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     try {
@@ -375,6 +389,30 @@ export const createOriginHandler = (
         sendJson(response, 400, { error: "Invalid file path" });
         return;
       }
+      if (partsPerSegment > 0 && extension === ".ts" && !(await fileExists(filePath))) {
+        const part = parsePartName(resolved.assetName);
+        if (part && part.index < partsPerSegment) {
+          await sendPart(
+            response,
+            method,
+            resolveHlsAssetPath(resolved.assetDirectory, part.segmentName),
+            part.index,
+            partsPerSegment,
+          );
+          return;
+        }
+      }
+      if (partsPerSegment > 0 && extension === ".m3u8" && (await fileExists(filePath))) {
+        const body = addPartsToPlaylist(await readFile(filePath, "utf8"), partsPerSegment);
+        response.writeHead(200, {
+          "content-type": contentTypes[extension] ?? "application/vnd.apple.mpegurl",
+          "content-length": Buffer.byteLength(body),
+          "access-control-allow-origin": "*",
+          "cache-control": "no-store",
+        });
+        response.end(method === "HEAD" ? undefined : body);
+        return;
+      }
       if (extension === ".sha256" && !(await fileExists(filePath))) {
         const segmentName = resolved.assetName.slice(0, -".sha256".length);
         // Only media segments have sidecars; init segments and playlists do not.
@@ -433,6 +471,38 @@ export const createOriginHandler = (
     }
   };
 
+/** Serves one LL-HLS part as a slice of its finished segment. */
+const sendPart = async (
+  response: ServerResponse,
+  method: string,
+  segmentPath: string,
+  index: number,
+  count: number,
+): Promise<void> => {
+  let size: number;
+  try {
+    size = (await stat(segmentPath)).size;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      sendJson(response, 404, { error: "File not found" });
+      return;
+    }
+    throw error;
+  }
+  const { start, end } = partRange(size, index, count);
+  response.writeHead(200, {
+    "content-type": contentTypes[".ts"] ?? "video/mp2t",
+    "content-length": end - start,
+    "access-control-allow-origin": "*",
+    "cache-control": `public, max-age=${IMMUTABLE_CACHE_MAX_AGE_SECONDS}, immutable`,
+  });
+  if (method === "HEAD" || end <= start) {
+    response.end();
+    return;
+  }
+  await pipeline(createReadStream(segmentPath, { start, end: end - 1 }), response);
+};
+
 /** Coordinates the origin HTTP server and its FFmpeg stream controller. */
 export class OriginServer {
   private readonly server;
@@ -441,7 +511,7 @@ export class OriginServer {
 
   constructor(private readonly options: OriginServerOptions) {
     this.server = createServer(
-      createOriginHandler(options.hlsDirectory, options.streamer),
+      createOriginHandler(options.hlsDirectory, options.streamer, options.partsPerSegment ?? 0),
     );
   }
 
@@ -649,6 +719,7 @@ const run = async (): Promise<void> => {
   const server = new OriginServer({
     hlsDirectory: configuration.hlsDirectory,
     streamer,
+    partsPerSegment: configuration.partsPerSegment,
   });
   const shutdownController = new AbortController();
   let registrationRefresh: NodeJS.Timeout | undefined;

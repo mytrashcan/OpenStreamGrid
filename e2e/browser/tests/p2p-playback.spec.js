@@ -18,6 +18,8 @@ if (!segmentExtension) throw new Error(`Unknown EXPECTED_SEGMENT_TYPE '${segment
 // or Video.js 10's <hlsjs-video> configured through hlsJsConfig().
 const player = process.env.E2E_PLAYER ?? "hlsjs";
 if (!["hlsjs", "shaka", "videojs"].includes(player)) throw new Error(`Unknown E2E_PLAYER '${player}'`);
+// LL-HLS parts per segment the origin lists (HLS_PARTS_PER_SEGMENT); 0 = off.
+const llParts = Number(process.env.E2E_LL_PARTS ?? 0);
 
 const routes = {
   "/": [join(here, "..", "page", "index.html"), "text/html; charset=utf-8"],
@@ -57,13 +59,14 @@ test.afterAll(async () => {
   await new Promise((resolve) => server.close(resolve));
 });
 
-const viewerUrl = (peerId) => {
+const viewerUrl = (peerId, lowLatency = false) => {
   const params = new URLSearchParams({
     tracker: trackerUrl,
     playlist: playlistUrl,
     originBase: originBaseUrl,
     peer: peerId,
     player,
+    ...(lowLatency ? { ll: "1" } : {}),
   });
   return `${pageOrigin}/?${params}`;
 };
@@ -84,10 +87,10 @@ const playbackState = (page) =>
 
 test("two zero-install browser viewers share segments over WebRTC", async ({ browser }) => {
   const viewers = [];
-  const openViewer = async (name) => {
+  const openViewer = async (name, lowLatency = false) => {
     const page = await (await browser.newContext()).newPage();
     viewers.push({ name, page });
-    await page.goto(viewerUrl(`e2e-${name}-${Date.now()}`));
+    await page.goto(viewerUrl(`e2e-${name}-${Date.now()}`, lowLatency));
     return page;
   };
   try {
@@ -96,8 +99,11 @@ test("two zero-install browser viewers share segments over WebRTC", async ({ bro
     expect(mediaLines.length).toBeGreaterThan(0);
     expect(mediaLines.every((line) => line.endsWith(segmentExtension))).toBe(true);
     if (segmentType === "fmp4") expect(playlist).toContain("#EXT-X-MAP:URI=");
+    if (llParts > 0) expect(playlist).toContain("#EXT-X-PART:");
 
-    const first = await openViewer("a");
+    // With LL-HLS, viewer A loads parts and shares the segments it assembles
+    // from them; viewer B loads complete segments and can get those from A.
+    const first = await openViewer("a", llParts > 0);
     // Let the first viewer cache a few live segments before the second joins.
     await expect.poll(async () => (await playbackState(first)).playedSeconds, { timeout: 60_000 })
       .toBeGreaterThan(4);
@@ -120,6 +126,7 @@ test("two zero-install browser viewers share segments over WebRTC", async ({ bro
     const [a, b] = await Promise.all([playbackState(first), playbackState(second)]);
     expect(a.fatalErrors).toEqual([]);
     expect(b.fatalErrors).toEqual([]);
+    if (llParts > 0) expect(a.events.segment_assembled ?? 0).toBeGreaterThan(0);
     const shared = [...a.peerFetchedSegments, ...b.peerFetchedSegments];
     expect(shared.length).toBeGreaterThan(0);
     expect(shared.every((segment) => segment.endsWith(segmentExtension))).toBe(true);

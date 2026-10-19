@@ -358,6 +358,7 @@ codes, and origin/peer endpoints.
 | `SEGMENT_DURATION_SECONDS` | `2` | HLS target duration |
 | `HLS_SEGMENT_TYPE` | `mpegts` | `mpegts` for `.ts` segments or `fmp4` for CMAF/fMP4 (`.m4s` plus a per-rendition init segment) |
 | `PLAYLIST_SIZE` | `8` | Segments retained per media playlist |
+| `HLS_PARTS_PER_SEGMENT` | `0` | Test only: list the last three MPEG-TS segments as this many LL-HLS parts (`EXT-X-PART`), served as packet-aligned slices of the finished segment, so players and the SDK exercise LL-HLS. Parts appear only once a segment is complete, so there is no latency gain |
 | `HASH_INTERVAL_MS` | `250` | Sidecar hash discovery interval |
 | `FFMPEG_PATH` | `ffmpeg` on `PATH` | FFmpeg executable override |
 

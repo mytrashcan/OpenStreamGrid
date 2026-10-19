@@ -348,6 +348,7 @@ WebSocket의 `sessionToken` 쿼리로 사용합니다.
 | `SEGMENT_DURATION_SECONDS` | `2` | HLS 목표 세그먼트 길이(초) |
 | `HLS_SEGMENT_TYPE` | `mpegts` | `.ts` 세그먼트는 `mpegts`, CMAF/fMP4(`.m4s`와 렌디션별 init 세그먼트)는 `fmp4` |
 | `PLAYLIST_SIZE` | `8` | 미디어 플레이리스트별 유지 세그먼트 수 |
+| `HLS_PARTS_PER_SEGMENT` | `0` | 테스트 전용: 마지막 세 MPEG-TS 세그먼트를 이 개수의 LL-HLS 부분 세그먼트(`EXT-X-PART`)로 나열하고 완성된 세그먼트의 패킷 단위 조각으로 제공. 플레이어와 SDK의 LL-HLS 경로를 시험하며, 세그먼트 완성 뒤에만 나열하므로 지연 이득은 없음 |
 | `HASH_INTERVAL_MS` | `250` | 해시 파일 탐색 주기(ms) |
 | `FFMPEG_PATH` | `PATH`의 `ffmpeg` | FFmpeg 실행 파일 경로 |
 

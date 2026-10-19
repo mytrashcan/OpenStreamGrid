@@ -6,6 +6,10 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Added
 
+- Test-only LL-HLS on the origin: `HLS_PARTS_PER_SEGMENT` lists recent MPEG-TS
+  segments as packet-aligned parts (`EXT-X-PART`). A new browser E2E variant
+  plays it with low-latency hls.js and checks that the viewer assembles and
+  shares segments (`assembleLowLatencySegments`).
 - `assembleLowLatencySegments` (Hls.js plugin, off by default): LL-HLS
   viewers join a segment's parts once the playlist lists it with all its
   parts, verify the result against the segment's sidecar, and share it, so

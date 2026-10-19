@@ -68,7 +68,17 @@ test("validates origin environment configuration", () => {
     playlistSize: 8,
     hashIntervalMs: 250,
     segmentType: "mpegts",
+    partsPerSegment: 0,
   });
+  assert.equal(parseOriginConfiguration({ HLS_PARTS_PER_SEGMENT: "3" }).partsPerSegment, 3);
+  assert.throws(
+    () => parseOriginConfiguration({ HLS_PARTS_PER_SEGMENT: "11" }),
+    /HLS_PARTS_PER_SEGMENT must be an integer between 0 and 10/,
+  );
+  assert.throws(
+    () => parseOriginConfiguration({ HLS_PARTS_PER_SEGMENT: "2", HLS_SEGMENT_TYPE: "fmp4" }),
+    /HLS_PARTS_PER_SEGMENT requires HLS_SEGMENT_TYPE=mpegts/,
+  );
   assert.equal(parseOriginConfiguration({ HLS_SEGMENT_TYPE: " FMP4 " }).segmentType, "fmp4");
   assert.throws(
     () => parseOriginConfiguration({ HLS_SEGMENT_TYPE: "cmaf" }),
@@ -273,6 +283,38 @@ test("serves HLS assets, creates hashes, and exposes readiness", async (context)
     /^[a-f0-9]{64}  segment_000001\.ts\n$/,
   );
   await streamer.stop();
+});
+
+test("serves LL-HLS parts as slices of finished segments when enabled", async (context) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "openstreamgrid-origin-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const streamer = new FakeStreamer(directory);
+  const segment = Buffer.alloc(188 * 10 + 5, 7);
+  await writeFile(
+    streamer.playlistPath,
+    "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2.0,\nsegment_000001.ts\n",
+  );
+  await writeFile(path.join(directory, "segment_000001.ts"), segment);
+
+  const handler = createOriginHandler(directory, streamer, 3);
+  const playlist = await invoke(handler, "/hls/stream.m3u8");
+  assert.match(playlist.body.toString(), /#EXT-X-PART:DURATION=0\.66667,URI="segment_000001\.part0\.ts",INDEPENDENT=YES/);
+  const parts = [];
+  for (let index = 0; index < 3; index += 1) {
+    const part = await invoke(handler, `/hls/segment_000001.part${index}.ts`);
+    assert.equal(part.statusCode, 200);
+    assert.equal(part.headers["content-type"], "video/mp2t");
+    parts.push(part.body);
+  }
+  // The parts join back into the segment, so its sidecar verifies them.
+  assert.deepEqual(Buffer.concat(parts), segment);
+  assert.equal((await invoke(handler, "/hls/segment_000001.part3.ts")).statusCode, 404);
+  assert.equal((await invoke(handler, "/hls/segment_000001.part0.ts.sha256")).statusCode, 404);
+
+  // Without parts enabled, playlists are unchanged and part names do not exist.
+  const plain = createOriginHandler(directory, streamer);
+  assert.doesNotMatch((await invoke(plain, "/hls/stream.m3u8")).body.toString(), /EXT-X-PART/);
+  assert.equal((await invoke(plain, "/hls/segment_000001.part0.ts")).statusCode, 404);
 });
 
 test("serves isolated multi-stream routes and disables ambiguous flat aliases", async (context) => {
