@@ -10,6 +10,7 @@ import {
   createTrackerHandler,
   parseTrackerConfiguration,
   TrackerServer,
+  TrackerStatsSse,
   type TrackerStatsSnapshot,
 } from "../src/server.js";
 import { TrackerStore } from "../src/store.js";
@@ -852,7 +853,8 @@ const waitForSseEvent = async (
   const timeout = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(
       () => reject(new Error("Timed out waiting for tracker SSE event")),
-      1_000,
+      // Event-driven updates are coalesced to one per second.
+      3_000,
     );
   });
   const matchingEvent = (async (): Promise<SseEvent> => {
@@ -1351,6 +1353,36 @@ test("relays WebRTC offers and answers only to the target peer", async () => {
     for (const socket of sockets) socket.close();
     await server.stop();
   }
+});
+
+test("coalesces bursts of dashboard updates into one leading and one trailing event", async () => {
+  const store = new TrackerStore();
+  store.registerBroadcast({ id: "live", playlistUrl: "http://origin/live.m3u8" });
+  const sse = new TrackerStatsSse(store, 50);
+  const writes: string[] = [];
+  const response = {
+    destroyed: false,
+    writableEnded: false,
+    writableNeedDrain: false,
+    writeHead: () => response,
+    flushHeaders: () => undefined,
+    write: (chunk: string) => writes.push(chunk),
+    once: () => response,
+    end: () => undefined,
+  };
+  sse.connect(response as unknown as ServerResponse);
+  const events = () => writes.filter((chunk) => chunk.startsWith("event:"));
+  assert.equal(events().length, 1);
+
+  for (let index = 0; index < 100; index += 1) sse.statsUpdated();
+  sse.peerJoined();
+  // The first event goes out at once; the rest wait for one trailing event.
+  assert.equal(events().length, 2);
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assert.equal(events().length, 3);
+  // The trailing event keeps the strongest event name of the burst.
+  assert.match(events()[2] ?? "", /^event: broadcasts\n/);
+  sse.stop();
 });
 
 test("streams global, broadcast, REST, and WebSocket stats over SSE", async () => {

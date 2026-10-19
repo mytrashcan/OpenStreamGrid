@@ -108,6 +108,21 @@ arrives during a flush waits for it, and the probe response itself lists every
 peer that holds the segment. Spreading a flush across several turns would
 trade some of that wait for batch delay.
 
+### With the monitoring dashboard open
+
+The dashboard's SSE stream sends a snapshot of every peer with its segments.
+Every stats report (one per peer every 5 s) and every join or leave used to
+rebuild and send one, so a single open dashboard dominated the tracker.
+Event-driven snapshots are now coalesced to at most one per second (the first
+at once, the rest in one trailing update).
+
+| Peers | Dashboard | Probe p95 | Tracker CPU | SSE data in the run |
+| ---: | --- | ---: | ---: | ---: |
+| 500 | before | 534.0 ms | 28.4% | |
+| 1000 | before | 3,896.7 ms | 70.7% | 4.4 GB for both stages |
+| 500 | after | 16.3 ms | 14.3% | |
+| 1000 | after | 28.7 ms | 22.8% | 17.5 MB for both stages |
+
 ## Findings
 
 - With clients that negotiate `inventory_batch` (the SDK and the Node peer),
