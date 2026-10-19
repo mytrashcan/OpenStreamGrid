@@ -223,3 +223,73 @@ test("applies batched inventory updates in order", async (context) => {
     ["browser-unknown", ["x.ts"]],
   ]);
 });
+
+test("reconnects with backoff and resets it after a peer list", async (context) => {
+  context.mock.method(console, "error", () => {});
+  const sockets: FakeWebSocket[] = [];
+  const openedAt: number[] = [];
+  const events: string[] = [];
+  const client = new WsTrackerClient({
+    trackerUrl: "ws://tracker.example/ws",
+    broadcastId: "live",
+    peerId: "browser-a",
+    reportPeerState: false,
+    reconnectInitialMs: 20,
+    reconnectMaxMs: 40,
+    onConnected: () => events.push("connected"),
+    onDisconnected: () => events.push("disconnected"),
+    webSocketFactory: () => {
+      const socket = new FakeWebSocket();
+      sockets.push(socket);
+      openedAt.push(Date.now());
+      return socket as unknown as WebSocket;
+    },
+  });
+  client.setSessionToken("test-session");
+  const waitForSocket = async (count: number): Promise<FakeWebSocket> => {
+    const deadline = Date.now() + 1_000;
+    while (sockets.length < count) {
+      assert.ok(Date.now() < deadline, `socket ${count} was never opened`);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    return sockets[count - 1] as FakeWebSocket;
+  };
+  const deliver = (socket: FakeWebSocket, message: unknown): void =>
+    socket.onmessage?.({ data: JSON.stringify(message) } as MessageEvent);
+  const peer = { id: "browser-b", address: "webrtc://browser-b", segments: ["s.ts"], latencyMs: 1, successRate: 1, trustScore: 1 };
+
+  const started = client.start();
+  const first = await waitForSocket(1);
+  first.open();
+  await started;
+  deliver(first, { type: "peer_list", broadcastId: "live", peers: [peer] });
+  assert.equal(client.getAllPeers().length, 1);
+
+  // A drop clears the known peers and reconnects after the initial delay.
+  first.onclose?.();
+  assert.deepEqual(client.getAllPeers(), []);
+  const second = await waitForSocket(2);
+  // The next drop before any peer list waits twice as long, up to the cap.
+  second.onclose?.();
+  const third = await waitForSocket(3);
+  third.onclose?.();
+  const fourth = await waitForSocket(4);
+  const gaps = openedAt.slice(1).map((time, index) => time - (openedAt[index] ?? time));
+  assert.ok((gaps[0] ?? 0) >= 15, `first retry after ${gaps[0]} ms`);
+  assert.ok((gaps[1] ?? 0) >= 35, `second retry after ${gaps[1]} ms`);
+  assert.ok((gaps[2] ?? 0) >= 35 && (gaps[2] ?? 0) < 200, `capped retry after ${gaps[2]} ms`);
+
+  // A peer list proves the session works and resets the backoff.
+  fourth.open();
+  deliver(fourth, { type: "peer_list", broadcastId: "live", peers: [] });
+  fourth.onclose?.();
+  await waitForSocket(5);
+  const reset = (openedAt[4] ?? 0) - (openedAt[3] ?? 0);
+  assert.ok(reset < 35, `retry after a peer list took ${reset} ms`);
+  client.stop();
+
+  assert.deepEqual(events.slice(0, 2), ["connected", "disconnected"]);
+  // stop() prevents further reconnects.
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(sockets.length, 5);
+});
