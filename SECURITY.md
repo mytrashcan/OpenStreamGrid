@@ -47,6 +47,9 @@ prototype releases are not maintained unless a release notice says otherwise.
 - Persist SQLite on protected storage, back it up consistently, and restrict
   access to the database, WAL, and shared-memory files.
 - Treat peer addresses, metadata, and traffic statistics as untrusted input.
+  Peer addresses are visible to other viewers: keep neighbor views enabled
+  (`TRACKER_NEIGHBOR_VIEW_SIZE`) so each viewer sees only its neighbors, over
+  both WebSocket and REST, rather than the whole audience.
 - Monitor authentication failures, rate-limit responses, integrity failures,
   fallback spikes, peer churn, and unexpected origin traffic.
 - Keep Node.js, FFmpeg, container base images, and npm dependencies patched.
