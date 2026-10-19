@@ -4,7 +4,11 @@
  * Implements exponential-backoff reconnection and periodic status reporting.
  */
 
-import { createLogger, WS_FEATURE_INVENTORY_BATCH } from "@openstreamgrid/common";
+import {
+  createLogger,
+  WS_FEATURE_INVENTORY_BATCH,
+  WS_FEATURE_NEIGHBOR_VIEW,
+} from "@openstreamgrid/common";
 import type {
   PeerInfo,
   PeerTrafficStats,
@@ -435,7 +439,7 @@ export class WsTrackerClient {
         type: "subscribe",
         broadcastId: this.options.broadcastId,
         peerId: this.options.peerId,
-        features: [WS_FEATURE_INVENTORY_BATCH],
+        features: [WS_FEATURE_INVENTORY_BATCH, WS_FEATURE_NEIGHBOR_VIEW],
       });
 
       if (this.reportPeerState) this.reportStatusSafely();

@@ -420,3 +420,19 @@ test("joinPeerDetailed is atomic and applySegmentDelta enforces the cap", (conte
   const capped = store.applySegmentDelta("live", "peer-a", ["s3.ts", "s4.ts"], []);
   assert.deepEqual(capped.segments, ["s3.ts", "s4.ts"]);
 });
+
+test("looks up a single peer in both stores", (context) => {
+  for (const store of [new SQLiteStore(temporaryDatabasePath(context)), new TrackerStore()]) {
+    context.after(() => store.close());
+    store.registerBroadcast({ id: "live", playlistUrl: "http://origin/live.m3u8" });
+    store.joinPeer("live", { id: "peer-a", address: "http://peer-a:9090" });
+    store.reportSegments("live", "peer-a", ["a.ts", "b.ts"]);
+
+    const peer = store.getPeer("live", "peer-a");
+    assert.equal(peer?.id, "peer-a");
+    assert.deepEqual(peer?.segments, ["a.ts", "b.ts"]);
+    assert.deepEqual(peer, store.listPeers("live")[0]);
+    assert.equal(store.getPeer("live", "missing"), undefined);
+    assert.equal(store.getPeer("missing", "peer-a"), undefined);
+  }
+});

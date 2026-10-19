@@ -273,7 +273,7 @@ The first client message subscribes the connection:
   "type": "subscribe",
   "broadcastId": "live",
   "peerId": "peer-a",
-  "features": ["inventory_batch"]
+  "features": ["inventory_batch", "neighbor_view"]
 }
 ```
 
@@ -285,6 +285,17 @@ Without it, a client receives every report as it arrives. With batching, a
 client receives four messages per second for every 256 peers whose inventory
 changed in an interval; without it, each report becomes one message to every
 peer in the broadcast. The SDK and the Node peer declare it.
+
+With `neighbor_view` (honored only together with `inventory_batch`), the
+client sees a bounded set of neighbors, `TRACKER_NEIGHBOR_VIEW_SIZE` peers (64
+by default), instead of the whole audience. `peer_list` contains the client and
+its neighbors, inventory batches carry only neighbors' updates, and
+`peer_joined` / `peer_left` mean that a peer entered or left the client's view:
+the tracker replaces neighbors that leave and links newcomers to random
+existing peers, which may drop one of their neighbors to make room. Links are
+made in both directions, so most peers a client sees also see it and can
+request segments from it. Audiences no larger than the
+view size are unaffected. The SDK and the Node peer declare it.
 
 Deleting a broadcast closes its subscribers' connections with code `4004`.
 

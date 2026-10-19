@@ -77,7 +77,7 @@ test("supports passive subscriptions without reporting unregistered peer state",
         type: "subscribe",
         broadcastId: "live",
         peerId: "browser-viewer",
-        features: ["inventory_batch"],
+        features: ["inventory_batch", "neighbor_view"],
       },
     ],
   );

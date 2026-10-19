@@ -383,6 +383,13 @@ export interface WebRtcSignalMessage {
  */
 export const WS_FEATURE_INVENTORY_BATCH = "inventory_batch";
 
+/**
+ * Subscribe feature, honored together with `inventory_batch`: the tracker
+ * sends peer and inventory updates only for a bounded set of neighbors
+ * instead of the whole audience.
+ */
+export const WS_FEATURE_NEIGHBOR_VIEW = "neighbor_view";
+
 /** Net change to one peer's segment inventory within a batch. */
 export type SegmentInventoryUpdate =
   | { peerId: string; added: string[]; removed: string[] }
