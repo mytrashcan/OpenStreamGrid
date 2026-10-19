@@ -1420,6 +1420,84 @@ test("limits REST peer listings for peer sessions to their neighbor view", async
   }
 });
 
+test("spreads a flush over several turns and still reaches every viewer", async () => {
+  const server = new TrackerServer(() => new TrackerStore(), 30_000, {
+    rateLimitRps: 100,
+    rateLimitBurst: 200,
+    maxPeersPerBroadcast: 500,
+    wsInventoryBatchMs: 100,
+    neighborViewSize: 8,
+    wsViewersPerFlushTurn: 1,
+  });
+  const port = await server.start(0, "127.0.0.1");
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const sockets: WebSocket[] = [];
+  try {
+    await fetch(`${baseUrl}/api/v1/broadcasts`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "live", playlistUrl: "http://origin/live.m3u8" }),
+    });
+    const ids = ["peer-a", "peer-b", "peer-c", "peer-d"];
+    const tokens = new Map<string, string>();
+    for (const id of ids) {
+      const join = await fetch(`${baseUrl}/api/v1/broadcasts/live/peers`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id, address: `http://${id}:9090` }),
+      });
+      tokens.set(id, (await join.json() as { sessionToken: string }).sessionToken);
+    }
+    const seen = new Map<string, Set<string>>();
+    for (const id of ids) {
+      const socket = new WebSocket(
+        `ws://127.0.0.1:${port}/ws?sessionToken=${encodeURIComponent(tokens.get(id) ?? "")}`,
+      );
+      sockets.push(socket);
+      await new Promise<void>((resolve) => socket.once("open", resolve));
+      const list = waitForMessage(socket, (message) => message.type === "peer_list");
+      socket.send(
+        JSON.stringify({
+          type: "subscribe",
+          broadcastId: "live",
+          peerId: id,
+          features: ["inventory_batch", "neighbor_view"],
+        }),
+      );
+      await list;
+      const updatedPeers = new Set<string>();
+      seen.set(id, updatedPeers);
+      socket.on("message", (data: RawData) => {
+        const message = JSON.parse(data.toString()) as WsServerMessage;
+        if (message.type !== "segment_inventory_batch") return;
+        for (const update of message.updates) updatedPeers.add(update.peerId);
+      });
+    }
+    // Every peer reports; each viewer must get its neighbors' updates even
+    // though the flush serves one viewer per event-loop turn.
+    ids.forEach((id, index) =>
+      sockets[index]?.send(
+        JSON.stringify({ type: "report_segments", broadcastId: "live", peerId: id, added: [`${id}.ts`], removed: [] }),
+      ),
+    );
+    // Reports may straddle two flushes, so collect until every viewer has
+    // seen each of its neighbors' updates.
+    const complete = (): boolean =>
+      ids.every((id) => (seen.get(id)?.size ?? 0) === ids.length - 1);
+    const deadline = Date.now() + 2_000;
+    while (!complete()) {
+      assert.ok(Date.now() < deadline, "a viewer missed its neighbors' updates");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    for (const id of ids) {
+      assert.deepEqual([...(seen.get(id) ?? [])].sort(), ids.filter((other) => other !== id));
+    }
+  } finally {
+    for (const socket of sockets) socket.close();
+    await server.stop();
+  }
+});
+
 test("authenticates WebSocket upgrades with a peer session", async () => {
   const server = new TrackerServer(
     () => new TrackerStore(),

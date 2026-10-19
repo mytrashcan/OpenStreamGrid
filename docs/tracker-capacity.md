@@ -128,6 +128,15 @@ the limit, at under half a core for 4000 peers. Probe latency at 4000 peers
 reflects the 4000-entry probe response as well as flush time, and its p95
 varied between 60 ms and 200 ms across runs.
 
+Each flush wrote every viewer's batch in one event-loop turn, which took 37
+to 50 ms at 4000 peers, four times a second, and REST requests waited behind
+it. Flushes now serve 256 viewers per turn:
+
+| Peers | Probe p50 | Probe p95 | Probe p99 | Tracker CPU |
+| ---: | ---: | ---: | ---: | ---: |
+| 2000 | 16.9 ms | 32.3 ms | 78.9 ms | 32.6% |
+| 4000 | 22.5 ms | 34.8 ms | 79.8 ms | 40.1% |
+
 Measuring 4000 peers exposed per-peer work that scanned the whole audience:
 the WebSocket upgrade, `subscribe`, and the rejoin check each listed every
 peer (with its segments) to find one. With single-peer lookups, 4000 peers

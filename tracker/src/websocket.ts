@@ -69,6 +69,8 @@ interface MessageBudget {
 const DEFAULT_INVENTORY_BATCH_INTERVAL_MS = 250;
 export const DEFAULT_NEIGHBOR_VIEW_SIZE = 64;
 const MAX_UPDATES_PER_BATCH = 256;
+/** Neighbor-view subscribers served per event-loop turn during a flush. */
+const VIEWERS_PER_FLUSH_TURN = 256;
 const MAX_SUBSCRIBE_FEATURES = 16;
 const MAX_BUFFERED_WEB_SOCKET_BYTES = 1024 * 1024;
 const MAX_WEB_SOCKET_PAYLOAD_BYTES = 64 * 1024;
@@ -181,6 +183,8 @@ export interface TrackerWebSocketOptions {
    * this size are unaffected; 0 disables neighbor views.
    */
   neighborViewSize?: number;
+  /** Neighbor-view subscribers served per event-loop turn (default 256). */
+  viewersPerFlushTurn?: number;
 }
 
 /** WebSocket fan-out counters exported as Prometheus metrics. */
@@ -200,6 +204,9 @@ export class TrackerWebSocketHub implements TrackerEvents {
   /** Subscribed sockets per broadcast, so fan-out skips other broadcasts. */
   private readonly subscribersByBroadcast = new Map<string, BroadcastSubscribers>();
   private readonly pendingInventory = new Map<string, PendingInventoryBatch>();
+  /** Broadcasts whose flush is still sending to viewers, and those waiting. */
+  private readonly flushing = new Set<string>();
+  private readonly flushRequested = new Set<string>();
   private readonly sessions = new Map<WebSocket, PeerSessionClaims>();
   private readonly messageBudgets = new Map<WebSocket, MessageBudget>();
   private readonly connectionIps = new Map<WebSocket, string>();
@@ -350,6 +357,7 @@ export class TrackerWebSocketHub implements TrackerEvents {
     this.server.off("upgrade", this.handleUpgrade);
     for (const batch of this.pendingInventory.values()) clearTimeout(batch.timer);
     this.pendingInventory.clear();
+    this.flushRequested.clear();
     for (const socket of this.webSocketServer.clients) socket.terminate();
     await new Promise<void>((resolve, reject) => {
       this.webSocketServer.close((error) => (error ? reject(error) : resolve()));
@@ -817,6 +825,11 @@ export class TrackerWebSocketHub implements TrackerEvents {
   }
 
   private flushInventory(broadcastId: string): void {
+    // Keep batches in order: the next flush starts after this one finishes.
+    if (this.flushing.has(broadcastId)) {
+      this.flushRequested.add(broadcastId);
+      return;
+    }
     const batch = this.pendingInventory.get(broadcastId);
     this.pendingInventory.delete(broadcastId);
     const subscribers = this.subscribersByBroadcast.get(broadcastId);
@@ -832,9 +845,33 @@ export class TrackerWebSocketHub implements TrackerEvents {
     if (subscribers.batched.size > 0) {
       this.sendBatch(broadcastId, [...updates.values()], subscribers.batched);
     }
-    for (const [peerId, sockets] of subscribers.viewers) {
+    if (subscribers.viewers.size === 0) return;
+    this.flushing.add(broadcastId);
+    this.sendViewerBatches(broadcastId, subscribers, updates, [...subscribers.viewers.keys()], 0);
+  }
+
+  /**
+   * Sends each neighbor-view subscriber its share of a flush, a slice of
+   * viewers per event-loop turn: writing thousands of per-viewer payloads at
+   * once blocked the tracker for tens of milliseconds. Each slice filters by
+   * the viewer's current view, so peers that left meanwhile are skipped, and
+   * it stops if the broadcast's subscribers were replaced (removed broadcast).
+   */
+  private sendViewerBatches(
+    broadcastId: string,
+    subscribers: BroadcastSubscribers,
+    updates: Map<string, SegmentInventoryUpdate>,
+    viewerIds: string[],
+    start: number,
+  ): void {
+    const current = this.subscribersByBroadcast.get(broadcastId) === subscribers;
+    const perTurn = this.options.viewersPerFlushTurn ?? VIEWERS_PER_FLUSH_TURN;
+    const end = current ? Math.min(start + perTurn, viewerIds.length) : start;
+    for (let index = start; index < end; index += 1) {
+      const peerId = viewerIds[index] as string;
+      const sockets = subscribers.viewers.get(peerId);
       const view = this.neighborViews?.view(broadcastId, peerId);
-      if (!view) continue;
+      if (!sockets || !view) continue;
       // Walk whichever side is smaller: the view or this interval's updates.
       const relevant =
         view.size < updates.size
@@ -842,6 +879,14 @@ export class TrackerWebSocketHub implements TrackerEvents {
           : [...updates.values()].filter((update) => view.has(update.peerId));
       if (relevant.length > 0) this.sendBatch(broadcastId, relevant, sockets);
     }
+    if (current && end < viewerIds.length) {
+      setImmediate(() =>
+        this.sendViewerBatches(broadcastId, subscribers, updates, viewerIds, end),
+      );
+      return;
+    }
+    this.flushing.delete(broadcastId);
+    if (this.flushRequested.delete(broadcastId)) this.flushInventory(broadcastId);
   }
 
   private sendBatch(

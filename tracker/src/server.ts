@@ -83,6 +83,8 @@ export interface TrackerConfiguration {
   wsInventoryBatchMs?: number;
   /** Peers each `neighbor_view` client sees; 0 sends the whole audience. */
   neighborViewSize: number;
+  /** Neighbor-view subscribers served per event-loop turn of a flush. */
+  wsViewersPerFlushTurn?: number;
 }
 
 const parseInteger = (
@@ -1339,6 +1341,7 @@ export class TrackerServer {
           | "turn"
           | "wsInventoryBatchMs"
           | "neighborViewSize"
+          | "wsViewersPerFlushTurn"
         >
       > = {
       rateLimitRps: DEFAULT_RATE_LIMIT_RPS,
@@ -1410,6 +1413,9 @@ export class TrackerServer {
           : {}),
         ...(configuration.neighborViewSize !== undefined
           ? { neighborViewSize: configuration.neighborViewSize }
+          : {}),
+        ...(configuration.wsViewersPerFlushTurn !== undefined
+          ? { viewersPerFlushTurn: configuration.wsViewersPerFlushTurn }
           : {}),
         ...(configuration.wsInventoryBatchMs !== undefined
           ? { inventoryBatchIntervalMs: configuration.wsInventoryBatchMs }
