@@ -456,6 +456,43 @@ test("looks up a single peer in both stores", (context) => {
   }
 });
 
+test("groups per-message writes into one commit per event-loop turn", async (context) => {
+  const path = temporaryDatabasePath(context);
+  const store = new SQLiteStore(path);
+  context.after(() => store.close());
+  store.registerBroadcast({ id: "live", playlistUrl: "http://origin/live.m3u8" });
+  store.joinPeer("live", { id: "peer-a", address: "http://peer-a:9090" });
+  await new Promise((resolve) => setImmediate(resolve));
+  const reader = new Database(path, { readonly: true });
+  context.after(() => reader.close());
+  const latency = (): unknown =>
+    (reader.prepare("SELECT latency_ms FROM peers WHERE peer_id = 'peer-a'").get() as
+      | { latency_ms: number }
+      | undefined)?.latency_ms;
+
+  store.heartbeat("live", "peer-a", { latencyMs: 11 });
+  store.reportStats("live", "peer-a", trafficStats());
+  store.applySegmentDelta("live", "peer-a", ["a.ts"], []);
+  // The writer sees its own writes at once; other connections after the commit.
+  assert.equal(store.getPeer("live", "peer-a")?.latencyMs, 11);
+  assert.notEqual(latency(), 11);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(latency(), 11);
+});
+
+test("close commits writes still waiting for their group", (context) => {
+  const path = temporaryDatabasePath(context);
+  const store = new SQLiteStore(path);
+  store.registerBroadcast({ id: "live", playlistUrl: "http://origin/live.m3u8" });
+  store.joinPeer("live", { id: "peer-a", address: "http://peer-a:9090" });
+  store.reportSegments("live", "peer-a", ["a.ts", "b.ts"]);
+  store.close();
+
+  const reopened = new SQLiteStore(path);
+  context.after(() => reopened.close());
+  assert.deepEqual(reopened.getPeer("live", "peer-a")?.segments, ["a.ts", "b.ts"]);
+});
+
 test("returns the same peer from writes as reading it back", (context) => {
   const store = new SQLiteStore(temporaryDatabasePath(context));
   context.after(() => store.close());

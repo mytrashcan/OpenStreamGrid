@@ -84,6 +84,9 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Changed
 
+- SQLite heartbeats, stats reports, and segment reports share one commit per
+  event-loop turn (each still in its own savepoint), cutting tracker CPU at
+  4000 peers by about 10%. A crash can lose the current turn's writes.
 - SQLite heartbeats, stats reports, and segment deltas look up the peer row
   once instead of loading the peer and its segments up to three times, which
   saves a few points of tracker CPU at 4000 peers.

@@ -583,6 +583,7 @@ export class SQLiteStore implements TrackerStoreBackend {
     segments: string[],
     replace = false,
   ): Peer {
+    this.groupWrites();
     this.requirePeer(broadcastId, peerId);
     const existing = this.getSegments(broadcastId, peerId);
     const nextSegments = [...new Set(replace ? segments : [...existing, ...segments])].slice(
@@ -615,6 +616,7 @@ export class SQLiteStore implements TrackerStoreBackend {
     added: string[],
     removed: string[],
   ): Peer {
+    this.groupWrites();
     const row = this.requirePeerRow(broadcastId, peerId);
     return this.database.transaction(() => {
       const existing = this.getSegments(broadcastId, peerId);
@@ -649,6 +651,7 @@ export class SQLiteStore implements TrackerStoreBackend {
     peerId: string,
     heartbeat: PeerHeartbeat,
   ): Peer {
+    this.groupWrites();
     const row = this.requirePeerRow(broadcastId, peerId);
     const updated: PeerRow = {
       ...row,
@@ -680,6 +683,7 @@ export class SQLiteStore implements TrackerStoreBackend {
     peerId: string,
     stats: PeerTrafficStats,
   ): void {
+    this.groupWrites();
     this.requirePeerRow(broadcastId, peerId);
     this.database.transaction(() => {
       this.statements.replacePeerStats.run({
@@ -781,7 +785,26 @@ export class SQLiteStore implements TrackerStoreBackend {
     return this.statements.deleteStatsHistoryBefore.run({ cutoff }).changes;
   }
 
+  /**
+   * Group commit for per-message writes: the first write in an event-loop
+   * turn opens a transaction that commits on the next turn, so a burst of
+   * heartbeats and reports costs one commit instead of one each. Each write
+   * still runs in its own savepoint (better-sqlite3 nests transactions that
+   * way), so a failing write does not undo the others. A crash can lose the
+   * current turn's writes, which synchronous=NORMAL already allows.
+   */
+  private groupWrites(): void {
+    if (this.database.inTransaction) return;
+    this.database.exec("BEGIN");
+    setImmediate(() => this.commitGroupedWrites());
+  }
+
+  private commitGroupedWrites(): void {
+    if (this.database.open && this.database.inTransaction) this.database.exec("COMMIT");
+  }
+
   close(): void {
+    this.commitGroupedWrites();
     if (this.database.open) this.database.close();
   }
 
