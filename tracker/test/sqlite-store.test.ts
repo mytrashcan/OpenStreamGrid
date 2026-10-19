@@ -142,7 +142,10 @@ test("implements broadcast, peer, segment, health, stats, and deletion CRUD", (c
   assert.equal(store.getGlobalStats().peers, 2);
 
   now = new Date("2026-07-17T00:01:00.000Z");
-  assert.equal(store.removeStalePeers(30_000), 2);
+  assert.deepEqual(store.removeStalePeers(30_000), [
+    { broadcastId: "live", peerId: "reporter" },
+    { broadcastId: "live", peerId: "reporter-2" },
+  ]);
   assert.equal(store.getBroadcastStats("live").peers, 0);
   assert.throws(
     () => store.leavePeer("live", "missing"),
@@ -434,5 +437,21 @@ test("looks up a single peer in both stores", (context) => {
     assert.deepEqual(peer, store.listPeers("live")[0]);
     assert.equal(store.getPeer("live", "missing"), undefined);
     assert.equal(store.getPeer("missing", "peer-a"), undefined);
+
+    // A segment-filtered listing returns each match with all its segments.
+    store.joinPeer("live", { id: "peer-b", address: "http://peer-b:9090" });
+    store.reportSegments("live", "peer-b", ["b.ts", "c.ts"]);
+    assert.deepEqual(
+      store.listPeers("live", "b.ts").map((listed) => [listed.id, listed.segments]),
+      [
+        ["peer-a", ["a.ts", "b.ts"]],
+        ["peer-b", ["b.ts", "c.ts"]],
+      ],
+    );
+    assert.deepEqual(
+      store.listPeers("live", "c.ts").map((listed) => [listed.id, listed.segments]),
+      [["peer-b", ["b.ts", "c.ts"]]],
+    );
+    assert.deepEqual(store.listPeers("live", "none.ts"), []);
   }
 });

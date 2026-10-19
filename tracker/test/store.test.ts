@@ -78,7 +78,7 @@ test("penalizes integrity failures more heavily and expires stale peers", () => 
   assert.equal(peer.trustScore, 0.65);
 
   now = new Date("2026-07-17T00:01:00.000Z");
-  assert.equal(store.removeStalePeers(30_000), 3);
+  assert.equal(store.removeStalePeers(30_000).length, 3);
   assert.equal(store.listPeers("live").length, 0);
 });
 
@@ -175,7 +175,7 @@ test("handles empty updates, cutoff boundaries, and missing store entities", () 
   assert.equal(heartbeat.latencyMs, original.latencyMs);
   assert.equal(heartbeat.uploadBandwidthBps, 100);
   assert.equal(heartbeat.successRate, original.successRate);
-  assert.equal(store.removeStalePeers(0), 0);
+  assert.deepEqual(store.removeStalePeers(0), []);
 
   assert.throws(() => store.unregisterBroadcast("missing"), /was not found/);
   assert.throws(() => store.leavePeer("live", "missing"), /Peer 'missing'/);

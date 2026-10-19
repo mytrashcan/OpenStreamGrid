@@ -45,6 +45,9 @@ is covered by `openstreamgrid_ws_messages_sent_total`,
 `openstreamgrid_ws_bytes_sent_total`, and `openstreamgrid_ws_subscribers` by
 `mode` (`immediate`, `batched`, or `neighbor_view`). Many `immediate`
 subscribers mean clients that predate inventory batching.
+`openstreamgrid_event_loop_delay_{p50,p90,p99,max}_seconds` report how long
+callbacks waited for the tracker's event loop since the previous scrape; every
+REST and WebSocket message pays that delay.
 
 #### `GET /api/v1/stats`
 

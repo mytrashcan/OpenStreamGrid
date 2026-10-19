@@ -25,8 +25,12 @@ For each peer count the script reports the latency of a REST probe
 (`GET /api/v1/broadcasts/:id/peers?segment=…` every 0.5 s, for a segment the
 peers currently hold), WebSocket messages and megabytes delivered per second,
 tracker CPU (CPU time used during the stage divided by its wall time, from
-`ps`) and RSS, and connection failures. It also prints how long joining and
-connecting the peers took.
+`ps`) and RSS, the tracker's event-loop delay (p99 and maximum, from
+`/metrics`, which separates delay on the tracker from delay in the load
+generator), and connection failures. It also prints how long joining and
+connecting the peers took. Heartbeats, stats, and segment reports are spread
+evenly over their intervals; `--churn <fraction>` replaces that share of the
+audience every second.
 
 Simulated peers declare the `inventory_batch` and `neighbor_view` subscribe
 features like the SDK and the Node peer. Pass `--neighbor-view false` to send
@@ -160,13 +164,42 @@ is heavier, so the improvement is if anything understated.
 | 500 | after | 16.3 ms | 14.3% | |
 | 1000 | after | 28.7 ms | 22.8% | 17.5 MB for both stages |
 
+### With churn
+
+Viewers leave and arrive all the time. With `--churn 0.01` (1% of the audience
+replaced every second: at 4000 peers, 40 leave and 40 join each second, and
+every departure refills the views that held it):
+
+| Peers | Probe p50 | Probe p95 | Tracker loop delay p99 / max | WS msgs/s | Tracker CPU | Dropped |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1000 | 13.1 ms | 19.9 ms | 23.9 / 45.7 ms | 6,486 | 28.0% | 0 |
+| 2000 | 17.8 ms | 36.7 ms | 31.6 / 64.0 ms | 13,206 | 35.9% | 0 |
+| 4000 | 25.0 ms | 44.8 ms | 56.2 / 92.9 ms | 27,146 | 50.0% | 0 |
+
+Without churn, the same run measured a loop delay p99 of 28.8 ms and a maximum
+of 51.6 ms at 4000 peers. Churn roughly doubles the messages (view changes
+reach clients as `peer_joined` and `peer_left`) and adds about ten points of
+CPU. At an extreme 2% per second for 150 s (12,000 peers replaced), 4000 peers
+still ran without drops at 61% of a core.
+
+Two fixes came out of these runs. The stale-peer sweep listed every peer with
+its segments twice every 15 s to find the ones it removed; the store now
+returns them. And a SQLite segment lookup (`?segment=`) loaded each matching
+peer's segments with its own query; it now uses one. Earlier runs showed
+200–300 ms loop stalls at 4000 peers, which turned out to come mostly from the
+benchmark itself: every simulated peer sent its heartbeat and stats in the
+same instant every 5 s. Reports are now spread like real clients'.
+
 ## Sizing
 
 Tracker memory (RSS) across the runs above grew from about 125 MB at 500
-peers to 145 MB at 1000, 170 to 195 MB at 2000, and 225 to 265 MB at 4000:
-roughly **105 MB plus 40 KB per active peer**. CPU with neighbor-view clients
-was about 15% of a core at 500 peers and 40% at 4000. These are macOS
-figures; confirm them in your container runtime before relying on them.
+peers to 145 MB at 1000, 170 to 210 MB at 2000, and 240 to 280 MB at 4000 in
+steady state, roughly **105 MB plus 40 KB per active peer**, with peaks up to
+about 400 MB at 4000 peers while thousands of peers connect at once. Memory
+stayed flat over 150 s of heavy churn. CPU with neighbor-view clients was
+about 15% of a core at 500 peers, 40% at 4000, and 50% at 4000 with 1%
+churn per second. These are macOS figures; confirm them in your container
+runtime before relying on them.
 
 The Helm chart's defaults (`cpu: 500m`, `memory: 256Mi` limits) fit the
 default `MAX_PEERS_PER_BROADCAST=500` with room to spare. Before raising the
