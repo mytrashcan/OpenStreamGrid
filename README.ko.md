@@ -456,6 +456,7 @@ P2P 교환과 Origin 폴백 통합 테스트는 `bash test/docker-test.sh`, 기�
 - [보안 정책](SECURITY.md)
 - [릴리스 노트](RELEASE_NOTES.md)
 - [변경 이력](CHANGELOG.md)
+- [로드맵](docs/ROADMAP.md)
 - [Kubernetes 배포 가이드](deploy/k8s/README.md)
 - [Helm 설정](helm/openstreamgrid/values.yaml)
 - [브라우저 SDK 예제](sdk/examples/basic.html)
