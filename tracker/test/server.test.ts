@@ -1283,6 +1283,15 @@ test("limits neighbor-view subscribers to their neighbors and refills on leave",
     );
     // A neighbor learned through peer_joined arrives with its inventory.
     assert.deepEqual(known.get(outsider), [`${outsider}.ts`]);
+
+    const metrics = await (await fetch(`${baseUrl}/metrics`)).text();
+    assert.match(metrics, /openstreamgrid_ws_subscribers\{mode="neighbor_view"\} 1\n/);
+    assert.match(metrics, /openstreamgrid_ws_subscribers\{mode="batched"\} 1\n/);
+    assert.match(metrics, /openstreamgrid_ws_subscribers\{mode="immediate"\} 0\n/);
+    const sent = Number(/openstreamgrid_ws_messages_sent_total (\d+)/.exec(metrics)?.[1]);
+    const bytes = Number(/openstreamgrid_ws_bytes_sent_total (\d+)/.exec(metrics)?.[1]);
+    assert.ok(sent >= viewer.messages.length + full.messages.length);
+    assert.ok(bytes > sent);
   } finally {
     for (const socket of sockets) socket.close();
     await server.stop();
