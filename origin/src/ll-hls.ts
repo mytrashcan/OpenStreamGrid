@@ -61,7 +61,13 @@ export const addPartsToPlaylist = (playlist: string, partsPerSegment: number): s
   lines.forEach((line, index) => {
     if (withParts.has(index)) {
       const duration = Number(line.slice("#EXTINF:".length).split(",")[0]);
-      const uri = lines[index + 1]?.trim() ?? "";
+      // The URI is the next non-tag line; FFmpeg puts EXT-X-PROGRAM-DATE-TIME
+      // between EXTINF and it.
+      const uri =
+        lines
+          .slice(index + 1)
+          .find((candidate) => candidate.trim() !== "" && !candidate.startsWith("#"))
+          ?.trim() ?? "";
       if (Number.isFinite(duration) && uri.endsWith(".ts")) {
         const base = uri.slice(0, -".ts".length);
         for (let part = 0; part < partsPerSegment; part += 1) {

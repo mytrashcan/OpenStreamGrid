@@ -32,7 +32,12 @@ test("adds LL-HLS part tags to the last segments of a media playlist", () => {
     "#EXT-X-VERSION:3",
     "#EXT-X-TARGETDURATION:2",
     "#EXT-X-MEDIA-SEQUENCE:7",
-    ...[7, 8, 9, 10].flatMap((sn) => ["#EXTINF:2.000000,", `e_segment_00000${sn}.ts`]),
+    // FFmpeg writes a program date-time between EXTINF and the URI.
+    ...[7, 8, 9, 10].flatMap((sn) => [
+      "#EXTINF:2.000000,",
+      "#EXT-X-PROGRAM-DATE-TIME:2026-10-19T06:50:56.111+0000",
+      `e_segment_00000${sn}.ts`,
+    ]),
     "",
   ].join("\n");
   const rewritten = addPartsToPlaylist(playlist, 2).split("\n");
@@ -42,10 +47,11 @@ test("adds LL-HLS part tags to the last segments of a media playlist", () => {
   // The oldest segment gets no parts; the last three do, before their EXTINF.
   assert.ok(!rewritten.some((line) => line.includes("e_segment_000007.part")));
   const tenth = rewritten.indexOf("e_segment_0000010.ts");
-  assert.deepEqual(rewritten.slice(tenth - 3, tenth), [
+  assert.deepEqual(rewritten.slice(tenth - 4, tenth), [
     '#EXT-X-PART:DURATION=1.00000,URI="e_segment_0000010.part0.ts",INDEPENDENT=YES',
     '#EXT-X-PART:DURATION=1.00000,URI="e_segment_0000010.part1.ts"',
     "#EXTINF:2.000000,",
+    "#EXT-X-PROGRAM-DATE-TIME:2026-10-19T06:50:56.111+0000",
   ]);
 
   // Master playlists and disabled parts are left alone.
