@@ -43,6 +43,7 @@ const DEFAULT_MAX_PEERS_PER_BROADCAST = 500;
 const DEFAULT_PEER_SESSION_TTL_MS = 60 * 60 * 1_000;
 const STATS_EVENT_INTERVAL_MS = 3_000;
 const STATS_EVENT_RETRY_MS = 3_000;
+const STATS_EVENT_MIN_INTERVAL_MS = 1_000;
 const MAX_BODY_BYTES = 1_000_000;
 const API_CORS_HEADERS = {
   "access-control-allow-origin": "*",
@@ -256,8 +257,20 @@ export class TrackerStatsSse implements TrackerEvents {
   private readonly clients = new Set<ServerResponse>();
   private eventSequence = 0;
   private publishTimer: NodeJS.Timeout | undefined;
+  private pendingEvent: StatsEventName | undefined;
+  private pendingTimer: NodeJS.Timeout | undefined;
+  private lastPublishedAt = Number.NEGATIVE_INFINITY;
 
-  constructor(private readonly store: TrackerStoreBackend) {}
+  /**
+   * Each snapshot lists every peer with its segments, so event-driven
+   * publishes are coalesced to at most one per `minIntervalMs`: with an open
+   * dashboard, every stats report and peer join used to rebuild and send a
+   * full snapshot, which saturated the tracker at 1000 peers.
+   */
+  constructor(
+    private readonly store: TrackerStoreBackend,
+    private readonly minIntervalMs = STATS_EVENT_MIN_INTERVAL_MS,
+  ) {}
 
   connect(response: ServerResponse): void {
     response.writeHead(200, {
@@ -278,24 +291,27 @@ export class TrackerStatsSse implements TrackerEvents {
   }
 
   broadcastListChanged(): void {
-    this.publish("broadcasts");
+    this.requestPublish("broadcasts");
   }
 
   peerJoined(): void {
-    this.publish("broadcasts");
+    this.requestPublish("broadcasts");
   }
 
   peerLeft(): void {
-    this.publish("broadcasts");
+    this.requestPublish("broadcasts");
   }
 
   statsUpdated(): void {
-    this.publish("stats");
+    this.requestPublish("stats");
   }
 
   stop(): void {
     if (this.publishTimer) clearInterval(this.publishTimer);
     this.publishTimer = undefined;
+    if (this.pendingTimer) clearTimeout(this.pendingTimer);
+    this.pendingTimer = undefined;
+    this.pendingEvent = undefined;
     for (const client of this.clients) client.end();
     this.clients.clear();
   }
@@ -312,8 +328,33 @@ export class TrackerStatsSse implements TrackerEvents {
     };
   }
 
+  /** Publishes now if the last publish is old enough, else once it is. */
+  private requestPublish(eventName: StatsEventName): void {
+    if (this.clients.size === 0) return;
+    // A "broadcasts" event also carries the stats, so it wins when coalescing.
+    if (this.pendingEvent !== "broadcasts") this.pendingEvent = eventName;
+    if (this.pendingTimer) return;
+    const waitMs = this.lastPublishedAt + this.minIntervalMs - Date.now();
+    if (waitMs <= 0) {
+      this.publishPending();
+      return;
+    }
+    this.pendingTimer = setTimeout(() => {
+      this.pendingTimer = undefined;
+      this.publishPending();
+    }, waitMs);
+    this.pendingTimer.unref();
+  }
+
+  private publishPending(): void {
+    const eventName = this.pendingEvent;
+    this.pendingEvent = undefined;
+    if (eventName) this.publish(eventName);
+  }
+
   private publish(eventName: StatsEventName): void {
     if (this.clients.size === 0) return;
+    this.lastPublishedAt = Date.now();
     const payload = JSON.stringify(this.snapshot());
     const eventId = ++this.eventSequence;
     for (const client of this.clients) {

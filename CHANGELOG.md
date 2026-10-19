@@ -74,6 +74,10 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Fixed
 
+- An open monitoring dashboard no longer overloads the tracker: event-driven
+  SSE snapshots, which list every peer, are coalesced to at most one per
+  second. At 1000 peers, REST p95 latency with a dashboard open dropped from
+  3.9 s to 29 ms.
 - Behind a TLS proxy or Kubernetes ingress, all viewers shared the proxy's
   address, so the per-client REST rate limit and the 20-connection WebSocket
   limit applied to the whole audience. With `TRUST_PROXY_HOPS` set, limits
