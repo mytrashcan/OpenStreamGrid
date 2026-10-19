@@ -44,14 +44,20 @@ test("adds LL-HLS part tags to the last segments of a media playlist", () => {
 
   assert.ok(rewritten.includes("#EXT-X-PART-INF:PART-TARGET=1.00000"));
   assert.ok(rewritten.includes("#EXT-X-SERVER-CONTROL:PART-HOLD-BACK=3.00000"));
-  // The oldest segment gets no parts; the last three do, before their EXTINF.
+  // The oldest segment gets no parts; the next two get parts before EXTINF.
   assert.ok(!rewritten.some((line) => line.includes("e_segment_000007.part")));
-  const tenth = rewritten.indexOf("e_segment_0000010.ts");
-  assert.deepEqual(rewritten.slice(tenth - 4, tenth), [
-    '#EXT-X-PART:DURATION=1.00000,URI="e_segment_0000010.part0.ts",INDEPENDENT=YES',
-    '#EXT-X-PART:DURATION=1.00000,URI="e_segment_0000010.part1.ts"',
+  const ninth = rewritten.indexOf("e_segment_000009.ts");
+  assert.deepEqual(rewritten.slice(ninth - 4, ninth), [
+    '#EXT-X-PART:DURATION=1.00000,URI="e_segment_000009.part0.ts",INDEPENDENT=YES',
+    '#EXT-X-PART:DURATION=1.00000,URI="e_segment_000009.part1.ts"',
     "#EXTINF:2.000000,",
     "#EXT-X-PROGRAM-DATE-TIME:2026-10-19T06:50:56.111+0000",
+  ]);
+  // The newest segment is listed only as parts, like a segment in progress.
+  assert.ok(!rewritten.includes("e_segment_0000010.ts"));
+  assert.deepEqual(rewritten.slice(ninth + 1).filter((line) => line !== ""), [
+    '#EXT-X-PART:DURATION=1.00000,URI="e_segment_0000010.part0.ts",INDEPENDENT=YES',
+    '#EXT-X-PART:DURATION=1.00000,URI="e_segment_0000010.part1.ts"',
   ]);
 
   // Master playlists and disabled parts are left alone.

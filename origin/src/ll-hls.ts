@@ -2,9 +2,12 @@
  * Test-only LL-HLS: FFmpeg's HLS muxer does not write partial segments, so
  * with HLS_PARTS_PER_SEGMENT the origin lists each recent MPEG-TS segment as
  * that many parts (`<segment>.part<k>.ts`) and serves each part as a slice of
- * the finished segment, cut at 188-byte TS packet boundaries. Parts are only
- * listed for completed segments, so players see LL-HLS without the latency
- * benefit, which is enough to exercise part loading in players and the SDK.
+ * the finished segment, cut at 188-byte TS packet boundaries. The newest
+ * segment is listed only as parts, like a segment still being written in real
+ * LL-HLS (hls.js expects that trailing partial segment), and appears as a
+ * complete segment in the next playlist. Players see LL-HLS one segment behind
+ * FFmpeg, without the latency benefit, which is enough to exercise part
+ * loading in players and the SDK.
  */
 
 const TS_PACKET_BYTES = 188;
@@ -41,7 +44,8 @@ const formatDuration = (seconds: number): string => seconds.toFixed(5);
 /**
  * Adds LL-HLS part tags to an MPEG-TS media playlist: a part target, a server
  * control hold-back, and `EXT-X-PART` lines (the first independent) before
- * each of the last few segments. Other playlists are returned unchanged.
+ * each of the last few segments, the newest of which is listed only as its
+ * parts. Other playlists are returned unchanged.
  */
 export const addPartsToPlaylist = (playlist: string, partsPerSegment: number): string => {
   const lines = playlist.split("\n");
@@ -57,17 +61,22 @@ export const addPartsToPlaylist = (playlist: string, partsPerSegment: number): s
     line.startsWith("#EXTINF:") ? [index] : [],
   );
   const withParts = new Set(segmentIndexes.slice(-SEGMENTS_WITH_PARTS));
+  const newest = segmentIndexes[segmentIndexes.length - 1];
   const output: string[] = [];
+  let partialUntil = -1;
   lines.forEach((line, index) => {
+    // Drop the newest segment's own lines (EXTINF, its tags, and URI) after
+    // its parts, so it reads as the segment in progress.
+    if (index <= partialUntil) return;
     if (withParts.has(index)) {
       const duration = Number(line.slice("#EXTINF:".length).split(",")[0]);
       // The URI is the next non-tag line; FFmpeg puts EXT-X-PROGRAM-DATE-TIME
       // between EXTINF and it.
-      const uri =
-        lines
-          .slice(index + 1)
-          .find((candidate) => candidate.trim() !== "" && !candidate.startsWith("#"))
-          ?.trim() ?? "";
+      const uriIndex = lines.findIndex(
+        (candidate, candidateIndex) =>
+          candidateIndex > index && candidate.trim() !== "" && !candidate.startsWith("#"),
+      );
+      const uri = lines[uriIndex]?.trim() ?? "";
       if (Number.isFinite(duration) && uri.endsWith(".ts")) {
         const base = uri.slice(0, -".ts".length);
         for (let part = 0; part < partsPerSegment; part += 1) {
@@ -75,6 +84,10 @@ export const addPartsToPlaylist = (playlist: string, partsPerSegment: number): s
             `#EXT-X-PART:DURATION=${formatDuration(duration / partsPerSegment)},` +
               `URI="${base}.part${part}.ts"${part === 0 ? ",INDEPENDENT=YES" : ""}`,
           );
+        }
+        if (index === newest) {
+          partialUntil = uriIndex;
+          return;
         }
       }
     }
