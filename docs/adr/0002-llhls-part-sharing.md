@@ -80,18 +80,23 @@ Peers advertise and serve individual parts.
     alternative is to announce progress ("has parts up to N.k") instead of
     each part.
 - **Effort:** large, touching the SDK, Node peer, tracker protocol, sidecar
-  writer, and origin. It needs an LL-HLS origin in the E2E, which the FFmpeg
-  test origin cannot produce today.
+  writer, and origin. The test origin's `HLS_PARTS_PER_SEGMENT` mode (#119)
+  lists parts only once a segment is finished, which is enough to test part
+  loading and B but not the sub-second timing C depends on; C needs parts
+  published while the segment is still being written.
 
 ## Recommendation
 
 1. **Now:** keep **A**, which is already in place and safe.
 2. **Next:** implement **B** behind an SDK option, off by default at first.
    Measure how much of a mixed audience (at the edge and behind it) it
-   offloads, and which packagers satisfy the concatenation property.
+   offloads, and which packagers satisfy the concatenation property. *Done:*
+   `assembleLowLatencySegments` (#113), covered by a browser E2E against the
+   test origin's LL-HLS mode (#119).
 3. **Only if B's offload is not enough for real low-latency audiences:** design
    **C**, starting with progress-based part inventory and per-part sidecars in
-   the sidecar writer, and an LL-HLS-capable test origin for the E2E.
+   the sidecar writer, and a test origin that publishes parts as they are
+   written.
 
 ## Consequences
 
