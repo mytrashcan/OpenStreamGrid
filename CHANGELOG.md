@@ -81,6 +81,9 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Changed
 
+- SQLite heartbeats, stats reports, and segment deltas look up the peer row
+  once instead of loading the peer and its segments up to three times, which
+  saves a few points of tracker CPU at 4000 peers.
 - Inventory flushes for neighbor-view clients are spread over event-loop turns
   (256 viewers per turn), so they no longer block REST requests for tens of
   milliseconds. At 4000 peers, REST p95 latency dropped from 60–200 ms to
