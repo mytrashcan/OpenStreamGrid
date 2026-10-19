@@ -10,6 +10,15 @@ All notable changes to OpenStreamGrid are documented in this file.
   against for HLS output from any packager, so OpenStreamGrid works with an
   existing origin. It hashes segments once a playlist lists them and prunes
   sidecars of deleted segments.
+- Prometheus metrics for WebSocket signaling: messages and bytes sent, and
+  subscribers by inventory delivery mode, with matching Grafana panels.
+- WebSocket `neighbor_view` subscribe feature (with `inventory_batch`): each
+  client sees a bounded, mostly mutual set of neighbors
+  (`TRACKER_NEIGHBOR_VIEW_SIZE`, default 64) and receives peer and inventory
+  updates only for them, so inventory traffic grows linearly with the audience
+  instead of with its square. Neighbors that leave are replaced, and newcomers
+  are linked into full views. The SDK and the Node peer declare it. One
+  tracker serves 4000 peers in one broadcast at under half a core.
 - The Hls.js plugin sends LL-HLS partial segments (`EXT-X-PART`) straight to
   the origin and shares only complete segments, instead of attempting P2P and
   an integrity sidecar that parts do not have.
@@ -67,17 +76,29 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Changed
 
+- With neighbor views enabled, REST peer listings
+  (`GET /api/v1/broadcasts/:id/peers` and `GET /api/v1/broadcasts/:id`) show a
+  peer-session caller only itself and its neighbors, so a viewer can no longer
+  list the whole audience's addresses. Administrators still see everyone.
 - The tracker no longer sends `stats_update` to every peer on each stats
   report (the SDK and Node peer ignored it; the dashboard uses SSE). At 500
   peers in one broadcast, REST p95 latency dropped from about 1 s to 7 ms.
 - WebSocket fan-out serializes each message once and only visits the
   broadcast's own subscribers.
+- WebSocket upgrades, `subscribe`, and peer rejoins look up one peer instead
+  of listing the whole audience, so connecting thousands of peers no longer
+  slows down quadratically.
 - Deleting a broadcast, or letting an origin lease expire, closes its
   WebSocket subscribers with code `4004` and drops pending inventory updates,
   so a new broadcast that reuses the ID starts clean.
 
 ### Fixed
 
+- The load-test image (used by `scripts/benchmark.sh`) now contains the
+  benchmark helper it imports; it failed at startup since 0.6.0. CI starts the
+  image to catch this. The load test also negotiates inventory batching and
+  neighbor views like the SDK, and applies full-list, delta, and batched
+  inventory updates correctly instead of merging everything.
 - An open monitoring dashboard no longer overloads the tracker: event-driven
   SSE snapshots, which list every peer, are coalesced to at most one per
   second. At 1000 peers, REST p95 latency with a dashboard open dropped from

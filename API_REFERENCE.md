@@ -40,7 +40,11 @@ Returns the real-time HTML dashboard. It consumes the SSE endpoint below.
 
 Returns Prometheus text exposition data for tracker uptime, active broadcasts
 and peers, REST request duration, rate-limited requests, delivery requests,
-P2P successes, integrity failures, and origin fallbacks.
+P2P successes, integrity failures, and origin fallbacks. WebSocket signaling
+is covered by `openstreamgrid_ws_messages_sent_total`,
+`openstreamgrid_ws_bytes_sent_total`, and `openstreamgrid_ws_subscribers` by
+`mode` (`immediate`, `batched`, or `neighbor_view`). Many `immediate`
+subscribers mean clients that predate inventory batching.
 
 #### `GET /api/v1/stats`
 
@@ -109,6 +113,7 @@ Returns `200` with `{ "broadcasts": Broadcast[] }`.
 #### `GET /api/v1/broadcasts/:id`
 
 Returns `200` with `{ "broadcast": Broadcast, "peers": Peer[] }`, or `404`.
+`peers` follows the same visibility rule as the peer listing below.
 
 #### `DELETE /api/v1/broadcasts/:id`
 
@@ -195,6 +200,13 @@ transport in metadata:
 Returns `{ "peers": Peer[] }`. Add `?segment=low_00042.ts` to return only
 peers reporting that segment.
 
+With neighbor views enabled (`TRACKER_NEIGHBOR_VIEW_SIZE` above 0, the
+default), a caller authenticated with a peer session sees only itself and its
+neighbors, the same peers the WebSocket reports, so a viewer cannot list the
+whole audience's addresses. Administrators see every peer, and so does a peer
+that has no neighbors yet (for example, one restored after a tracker restart,
+until it subscribes).
+
 #### `DELETE /api/v1/broadcasts/:id/peers/:peerId`
 
 Leaves the broadcast and retires the peer's final stats. Returns `204`, or `404`.
@@ -273,7 +285,7 @@ The first client message subscribes the connection:
   "type": "subscribe",
   "broadcastId": "live",
   "peerId": "peer-a",
-  "features": ["inventory_batch"]
+  "features": ["inventory_batch", "neighbor_view"]
 }
 ```
 
@@ -285,6 +297,17 @@ Without it, a client receives every report as it arrives. With batching, a
 client receives four messages per second for every 256 peers whose inventory
 changed in an interval; without it, each report becomes one message to every
 peer in the broadcast. The SDK and the Node peer declare it.
+
+With `neighbor_view` (honored only together with `inventory_batch`), the
+client sees a bounded set of neighbors, `TRACKER_NEIGHBOR_VIEW_SIZE` peers (64
+by default), instead of the whole audience. `peer_list` contains the client and
+its neighbors, inventory batches carry only neighbors' updates, and
+`peer_joined` / `peer_left` mean that a peer entered or left the client's view:
+the tracker replaces neighbors that leave and links newcomers to random
+existing peers, which may drop one of their neighbors to make room. Links are
+made in both directions, so most peers a client sees also see it and can
+request segments from it. Audiences no larger than the
+view size are unaffected. The SDK and the Node peer declare it.
 
 Deleting a broadcast closes its subscribers' connections with code `4004`.
 

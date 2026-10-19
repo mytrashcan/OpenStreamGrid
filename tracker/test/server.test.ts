@@ -36,6 +36,7 @@ test("validates tracker environment configuration", () => {
     maxPeersPerBroadcast: 500,
     wsMaxConnectionsPerIp: 20,
     trustProxyHops: 0,
+    neighborViewSize: 64,
   });
   assert.deepEqual(
     parseTrackerConfiguration({
@@ -55,7 +56,16 @@ test("validates tracker environment configuration", () => {
       maxPeersPerBroadcast: 500,
       wsMaxConnectionsPerIp: 20,
       trustProxyHops: 0,
+      neighborViewSize: 64,
     },
+  );
+  assert.equal(
+    parseTrackerConfiguration({ TRACKER_NEIGHBOR_VIEW_SIZE: "0" }).neighborViewSize,
+    0,
+  );
+  assert.throws(
+    () => parseTrackerConfiguration({ TRACKER_NEIGHBOR_VIEW_SIZE: "1001" }),
+    /TRACKER_NEIGHBOR_VIEW_SIZE must be an integer between 0 and 1000/,
   );
   assert.throws(
     () => parseTrackerConfiguration({ PORT: "0" }),
@@ -1164,6 +1174,248 @@ test("drops pending inventory and closes subscribers when a broadcast is deleted
     assert.deepEqual(await listSegments(), [[]]);
   } finally {
     for (const socket of sockets) socket.close();
+    await server.stop();
+  }
+});
+
+test("limits neighbor-view subscribers to their neighbors and refills on leave", async () => {
+  const server = new TrackerServer(() => new TrackerStore(), 30_000, {
+    rateLimitRps: 100,
+    rateLimitBurst: 200,
+    maxPeersPerBroadcast: 500,
+    wsInventoryBatchMs: 100,
+    neighborViewSize: 2,
+  });
+  const port = await server.start(0, "127.0.0.1");
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const sockets: WebSocket[] = [];
+  try {
+    await fetch(`${baseUrl}/api/v1/broadcasts`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "live", playlistUrl: "http://origin/live.m3u8" }),
+    });
+    const tokens = new Map<string, string>();
+    for (const id of ["peer-a", "peer-b", "peer-c", "peer-d"]) {
+      const join = await fetch(`${baseUrl}/api/v1/broadcasts/live/peers`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id, address: `http://${id}:9090` }),
+      });
+      tokens.set(id, (await join.json() as { sessionToken: string }).sessionToken);
+    }
+    const connect = async (id: string, features: string[]) => {
+      const socket = new WebSocket(
+        `ws://127.0.0.1:${port}/ws?sessionToken=${encodeURIComponent(tokens.get(id) ?? "")}`,
+      );
+      sockets.push(socket);
+      const messages: WsServerMessage[] = [];
+      socket.on("message", (data: RawData) => {
+        messages.push(JSON.parse(data.toString()) as WsServerMessage);
+      });
+      await new Promise<void>((resolve) => socket.once("open", resolve));
+      const list = waitForMessage(socket, (message) => message.type === "peer_list");
+      socket.send(JSON.stringify({ type: "subscribe", broadcastId: "live", peerId: id, features }));
+      const peerList = await list;
+      assert.equal(peerList.type, "peer_list");
+      return { socket, messages, peerList: peerList.peers.map((peer) => peer.id).sort() };
+    };
+
+    const viewer = await connect("peer-d", ["inventory_batch", "neighbor_view"]);
+    const full = await connect("peer-a", ["inventory_batch"]);
+    // The viewer sees itself and two neighbors; a full subscriber sees everyone.
+    assert.equal(viewer.peerList.length, 3);
+    assert.ok(viewer.peerList.includes("peer-d"));
+    assert.deepEqual(full.peerList, ["peer-a", "peer-b", "peer-c", "peer-d"]);
+    const neighbors = viewer.peerList.filter((id) => id !== "peer-d");
+    const outsider = ["peer-a", "peer-b", "peer-c"].find((id) => !neighbors.includes(id));
+    assert.ok(outsider);
+
+    for (const id of ["peer-a", "peer-b", "peer-c"]) {
+      const join = await fetch(`${baseUrl}/api/v1/broadcasts/live/peers/${id}/segments`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${tokens.get(id) ?? ""}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ segments: [`${id}.ts`] }),
+      });
+      assert.equal(join.status, 200);
+    }
+    const batch = await waitForMessage(
+      viewer.socket,
+      (message) => message.type === "segment_inventory_batch",
+    );
+    assert.equal(batch.type, "segment_inventory_batch");
+    assert.deepEqual(batch.updates.map((update) => update.peerId).sort(), neighbors.sort());
+
+    // When a neighbor leaves, the viewer is told and its view is refilled
+    // from the remaining audience. Other peers refill too and may link to or
+    // evict the viewer, so check the resulting peer set, not message order.
+    const [leaving] = neighbors;
+    assert.ok(leaving);
+    const seenBefore = viewer.messages.length;
+    const left = await fetch(`${baseUrl}/api/v1/broadcasts/live/peers/${leaving}`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${tokens.get(leaving) ?? ""}` },
+    });
+    assert.equal(left.status, 204);
+    const remaining = ["peer-a", "peer-b", "peer-c"].filter((id) => id !== leaving).sort();
+    const known = new Map<string, string[]>(
+      neighbors.map((id) => [id, [`${id}.ts`]]),
+    );
+    const deadline = Date.now() + 1_000;
+    let applied = seenBefore;
+    while (true) {
+      for (const message of viewer.messages.slice(applied)) {
+        if (message.type === "peer_joined") known.set(message.peer.id, message.peer.segments);
+        if (message.type === "peer_left") known.delete(message.peerId);
+      }
+      applied = viewer.messages.length;
+      if ([...known.keys()].sort().join() === remaining.join()) break;
+      assert.ok(Date.now() < deadline, `viewer knows ${[...known.keys()].join()}`);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.ok(
+      viewer.messages
+        .slice(seenBefore)
+        .some((message) => message.type === "peer_left" && message.peerId === leaving),
+    );
+    // A neighbor learned through peer_joined arrives with its inventory.
+    assert.deepEqual(known.get(outsider), [`${outsider}.ts`]);
+
+    const metrics = await (await fetch(`${baseUrl}/metrics`)).text();
+    assert.match(metrics, /openstreamgrid_ws_subscribers\{mode="neighbor_view"\} 1\n/);
+    assert.match(metrics, /openstreamgrid_ws_subscribers\{mode="batched"\} 1\n/);
+    assert.match(metrics, /openstreamgrid_ws_subscribers\{mode="immediate"\} 0\n/);
+    const sent = Number(/openstreamgrid_ws_messages_sent_total (\d+)/.exec(metrics)?.[1]);
+    const bytes = Number(/openstreamgrid_ws_bytes_sent_total (\d+)/.exec(metrics)?.[1]);
+    assert.ok(sent >= viewer.messages.length + full.messages.length);
+    assert.ok(bytes > sent);
+  } finally {
+    for (const socket of sockets) socket.close();
+    await server.stop();
+  }
+});
+
+test("neighbor views include peers restored from the store after a restart", async () => {
+  const store = new TrackerStore();
+  const configuration = {
+    rateLimitRps: 100,
+    rateLimitBurst: 200,
+    maxPeersPerBroadcast: 500,
+    peerSessionSecret: "test-peer-session-secret-0123456789",
+    neighborViewSize: 4,
+  };
+  const before = new TrackerServer(() => store, 30_000, configuration);
+  const beforePort = await before.start(0, "127.0.0.1");
+  await fetch(`http://127.0.0.1:${beforePort}/api/v1/broadcasts`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: "live", playlistUrl: "http://origin/live.m3u8" }),
+  });
+  await fetch(`http://127.0.0.1:${beforePort}/api/v1/broadcasts/live/peers`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: "peer-old", address: "http://peer-old:9090" }),
+  });
+  await before.stop().catch(() => undefined);
+
+  // The restarted tracker knows peer-old only from the store. A new peer that
+  // opts into neighbor views must still be able to find it.
+  const after = new TrackerServer(() => store, 30_000, configuration);
+  const port = await after.start(0, "127.0.0.1");
+  let socket: WebSocket | undefined;
+  try {
+    const join = await fetch(`http://127.0.0.1:${port}/api/v1/broadcasts/live/peers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "peer-new", address: "http://peer-new:9090" }),
+    });
+    const { sessionToken } = await join.json() as { sessionToken: string };
+    const activeSocket = new WebSocket(
+      `ws://127.0.0.1:${port}/ws?sessionToken=${encodeURIComponent(sessionToken)}`,
+    );
+    socket = activeSocket;
+    await new Promise<void>((resolve) => activeSocket.once("open", resolve));
+    const list = waitForMessage(activeSocket, (message) => message.type === "peer_list");
+    activeSocket.send(
+      JSON.stringify({
+        type: "subscribe",
+        broadcastId: "live",
+        peerId: "peer-new",
+        features: ["inventory_batch", "neighbor_view"],
+      }),
+    );
+    const peerList = await list;
+    assert.equal(peerList.type, "peer_list");
+    assert.deepEqual(peerList.peers.map((peer) => peer.id).sort(), ["peer-new", "peer-old"]);
+  } finally {
+    socket?.close();
+    await after.stop();
+  }
+});
+
+test("limits REST peer listings for peer sessions to their neighbor view", async () => {
+  const server = new TrackerServer(() => new TrackerStore(), 30_000, {
+    rateLimitRps: 100,
+    rateLimitBurst: 200,
+    maxPeersPerBroadcast: 500,
+    trackerApiKey: "test-admin-key",
+    neighborViewSize: 2,
+  });
+  const port = await server.start(0, "127.0.0.1");
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const admin = { "x-api-key": "test-admin-key" };
+  try {
+    await fetch(`${baseUrl}/api/v1/broadcasts`, {
+      method: "POST",
+      headers: { ...admin, "content-type": "application/json" },
+      body: JSON.stringify({ id: "live", playlistUrl: "http://origin/live.m3u8" }),
+    });
+    const tokens = new Map<string, string>();
+    for (const id of ["peer-a", "peer-b", "peer-c", "peer-d"]) {
+      const join = await fetch(`${baseUrl}/api/v1/broadcasts/live/peers`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id, address: `http://${id}:9090` }),
+      });
+      tokens.set(id, (await join.json() as { sessionToken: string }).sessionToken);
+      await fetch(`${baseUrl}/api/v1/broadcasts/live/peers/${id}/segments`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${tokens.get(id) ?? ""}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ segments: ["shared.ts"] }),
+      });
+    }
+    const listed = async (path: string, headers: Record<string, string>): Promise<string[]> => {
+      const response = await fetch(`${baseUrl}${path}`, { headers });
+      assert.equal(response.status, 200);
+      const body = await response.json() as { peers: Array<{ id: string }> };
+      return body.peers.map((peer) => peer.id).sort();
+    };
+    const asPeer = { authorization: `Bearer ${tokens.get("peer-d") ?? ""}` };
+
+    // A peer sees itself and its two neighbors, in both listings and with a
+    // segment filter; an administrator sees everyone.
+    const visible = await listed("/api/v1/broadcasts/live/peers", asPeer);
+    assert.equal(visible.length, 3);
+    assert.ok(visible.includes("peer-d"));
+    assert.deepEqual(await listed("/api/v1/broadcasts/live", asPeer), visible);
+    assert.deepEqual(
+      await listed("/api/v1/broadcasts/live/peers?segment=shared.ts", asPeer),
+      visible,
+    );
+    assert.deepEqual(await listed("/api/v1/broadcasts/live/peers?segment=none.ts", asPeer), []);
+    assert.deepEqual(await listed("/api/v1/broadcasts/live/peers", admin), [
+      "peer-a",
+      "peer-b",
+      "peer-c",
+      "peer-d",
+    ]);
+  } finally {
     await server.stop();
   }
 });

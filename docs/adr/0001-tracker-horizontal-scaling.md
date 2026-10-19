@@ -94,11 +94,10 @@ useful here: with one replica it would only block node drains.
    (both done; see the Kubernetes guide's *Recovery* section), and a measured
    capacity figure.
 2. **Measure:** done in [Tracker capacity](../tracker-capacity.md). One
-   instance serves 2000 active peers per broadcast at a third of a core once
-   clients negotiate inventory batching (about 500 with legacy clients, where
-   the inventory fan-out saturates a core at 1000). Inventory bytes still grow
-   with the square of the audience, which is the next limit within one
-   broadcast.
+   instance serves 4000 active peers per broadcast at under half a core once
+   clients negotiate inventory batching and neighbor views (about 500 with
+   legacy clients, where the inventory fan-out saturates a core at 1000).
+   Signaling traffic now grows linearly with the audience.
 3. **When the deployment has many broadcasts:** adopt **option A**. It delivers
    scale-out without destabilizing admission or signaling.
 4. **Only if one broadcast outgrows one instance:** adopt **option B**, staged

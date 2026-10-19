@@ -59,6 +59,8 @@ export interface TrackerStoreBackend {
   ): { peer: Peer; alreadyJoined: boolean };
   leavePeer(broadcastId: string, peerId: string): void;
   listPeers(broadcastId: string, segment?: string): Peer[];
+  /** One peer, or undefined when the peer or broadcast does not exist. */
+  getPeer(broadcastId: string, peerId: string): Peer | undefined;
   listPeerStats(broadcastId: string): PeerStatsSnapshot[];
   reportSegments(
     broadcastId: string,
@@ -236,6 +238,11 @@ export class TrackerStore implements TrackerStoreBackend {
     return peers
       .filter(({ peer }) => segment === undefined || peer.segments.includes(segment))
       .map(({ peer }) => this.copyPeer(peer));
+  }
+
+  getPeer(broadcastId: string, peerId: string): Peer | undefined {
+    const state = this.broadcasts.get(broadcastId)?.peers.get(peerId);
+    return state ? this.copyPeer(state.peer) : undefined;
   }
 
   listPeerStats(broadcastId: string): PeerStatsSnapshot[] {

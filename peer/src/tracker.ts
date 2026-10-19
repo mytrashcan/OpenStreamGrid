@@ -1,6 +1,7 @@
 import {
   createLogger,
   WS_FEATURE_INVENTORY_BATCH,
+  WS_FEATURE_NEIGHBOR_VIEW,
   type Peer,
   type PeerFailureReport,
   type PeerHeartbeat,
@@ -484,7 +485,7 @@ export class TrackerClient implements PeerDirectory {
         type: "subscribe",
         broadcastId: this.options.broadcastId,
         peerId: this.options.peerId,
-        features: [WS_FEATURE_INVENTORY_BATCH],
+        features: [WS_FEATURE_INVENTORY_BATCH, WS_FEATURE_NEIGHBOR_VIEW],
       });
       this.reportStatusSafely();
       this.firstConnectionResolver?.();

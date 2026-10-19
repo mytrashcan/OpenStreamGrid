@@ -170,7 +170,7 @@ test("negotiates and applies batched inventory updates", async () => {
         type: "subscribe",
         broadcastId: "live",
         peerId: "peer-a",
-        features: ["inventory_batch"],
+        features: ["inventory_batch", "neighbor_view"],
       },
     ]);
   } finally {

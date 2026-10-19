@@ -5,6 +5,7 @@ import {
   createLogger,
   parsePeerTrafficStats,
   WS_FEATURE_INVENTORY_BATCH,
+  WS_FEATURE_NEIGHBOR_VIEW,
   type Peer,
   type PeerHeartbeat,
   type SegmentInventoryUpdate,
@@ -17,6 +18,7 @@ import {
   bearerToken,
   type PeerSessionClaims,
 } from "./peer-session.js";
+import { NeighborViews, type NeighborViewFill } from "./neighbor-views.js";
 import type { TrackerStoreBackend } from "./store.js";
 
 interface Subscription {
@@ -24,6 +26,8 @@ interface Subscription {
   peerId: string;
   /** The client negotiated `inventory_batch` in its subscribe message. */
   inventoryBatch: boolean;
+  /** The client negotiated `neighbor_view` and the tracker has it enabled. */
+  neighborView: boolean;
 }
 
 interface BroadcastSubscribers {
@@ -31,7 +35,16 @@ interface BroadcastSubscribers {
   immediate: Set<WebSocket>;
   /** Receive inventory updates merged into periodic batches. */
   batched: Set<WebSocket>;
+  /** Batched subscribers limited to their peer's neighbor view, by peer ID. */
+  viewers: Map<string, Set<WebSocket>>;
 }
+
+const EMPTY_SUBSCRIPTION: Subscription = {
+  broadcastId: "",
+  peerId: "",
+  inventoryBatch: false,
+  neighborView: false,
+};
 
 /** Net inventory change for one peer since the last batch flush. */
 type PendingInventory =
@@ -54,6 +67,7 @@ interface MessageBudget {
 }
 
 const DEFAULT_INVENTORY_BATCH_INTERVAL_MS = 250;
+export const DEFAULT_NEIGHBOR_VIEW_SIZE = 64;
 const MAX_UPDATES_PER_BATCH = 256;
 const MAX_SUBSCRIBE_FEATURES = 16;
 const MAX_BUFFERED_WEB_SOCKET_BYTES = 1024 * 1024;
@@ -162,6 +176,18 @@ export interface TrackerWebSocketOptions {
    * that negotiated `inventory_batch` (default 250 ms).
    */
   inventoryBatchIntervalMs?: number;
+  /**
+   * Peers that a `neighbor_view` client sees (default 64). Audiences up to
+   * this size are unaffected; 0 disables neighbor views.
+   */
+  neighborViewSize?: number;
+}
+
+/** WebSocket fan-out counters exported as Prometheus metrics. */
+export interface TrackerWebSocketStats {
+  subscribers: { immediate: number; batched: number; neighborView: number };
+  messagesSent: number;
+  bytesSent: number;
 }
 
 /** Validates tracker WebSocket messages and broadcasts peer updates. */
@@ -179,6 +205,9 @@ export class TrackerWebSocketHub implements TrackerEvents {
   private readonly connectionIps = new Map<WebSocket, string>();
   private readonly connectionsPerIp = new Map<string, number>();
   private readonly sessionExpiryTimers = new Map<WebSocket, NodeJS.Timeout>();
+  private readonly neighborViews: NeighborViews | undefined;
+  private messagesSent = 0;
+  private bytesSent = 0;
 
   constructor(
     private readonly server: Server,
@@ -187,13 +216,12 @@ export class TrackerWebSocketHub implements TrackerEvents {
     private readonly peerSessions = new PeerSessionTokenService(),
     private readonly options: TrackerWebSocketOptions = {},
   ) {
+    const neighborViewSize = options.neighborViewSize ?? DEFAULT_NEIGHBOR_VIEW_SIZE;
+    this.neighborViews =
+      neighborViewSize > 0 ? new NeighborViews(neighborViewSize) : undefined;
     this.server.on("upgrade", this.handleUpgrade);
     this.webSocketServer.on("connection", (socket) => {
-      this.subscriptions.set(socket, {
-        broadcastId: "",
-        peerId: "",
-        inventoryBatch: false,
-      });
+      this.subscriptions.set(socket, EMPTY_SUBSCRIPTION);
       this.messageBudgets.set(socket, {
         tokens: MESSAGE_BURST,
         updatedAt: Date.now(),
@@ -218,6 +246,16 @@ export class TrackerWebSocketHub implements TrackerEvents {
 
   peerJoined(broadcastId: string, peer: Peer): void {
     this.broadcast({ type: "peer_joined", broadcastId, peer });
+    const views = this.seededViews(broadcastId);
+    if (views) {
+      views.add(broadcastId, peer.id);
+      this.announceFill(
+        broadcastId,
+        peer.id,
+        views.fill(broadcastId, peer.id),
+        (id) => (id === peer.id ? peer : this.store.getPeer(broadcastId, id)),
+      );
+    }
     this.downstreamEvents.peerJoined?.(broadcastId, peer);
   }
 
@@ -226,6 +264,19 @@ export class TrackerWebSocketHub implements TrackerEvents {
     // could resurrect the peer's inventory if the same ID rejoins.
     this.pendingInventory.get(broadcastId)?.updates.delete(peerId);
     this.broadcast({ type: "peer_left", broadcastId, peerId });
+    if (this.neighborViews) {
+      const lost = this.neighborViews.leave(broadcastId, peerId);
+      for (const watcher of lost) {
+        this.sendToViewer(broadcastId, watcher, { type: "peer_left", broadcastId, peerId });
+        // Replace the lost neighbor so views stay full as the audience churns.
+        this.announceFill(
+          broadcastId,
+          watcher,
+          this.neighborViews.fill(broadcastId, watcher),
+          (id) => this.store.getPeer(broadcastId, id),
+        );
+      }
+    }
     this.downstreamEvents.peerLeft?.(broadcastId, peerId);
   }
 
@@ -260,6 +311,11 @@ export class TrackerWebSocketHub implements TrackerEvents {
     this.downstreamEvents.peerListChanged?.(broadcastId);
   }
 
+  /** The neighbors a peer sees, when neighbor views are on and it has one. */
+  peerView(broadcastId: string, peerId: string): ReadonlySet<string> | undefined {
+    return this.neighborViews?.view(broadcastId, peerId);
+  }
+
   broadcastListChanged(): void {
     this.downstreamEvents.broadcastListChanged?.();
   }
@@ -270,16 +326,24 @@ export class TrackerWebSocketHub implements TrackerEvents {
     const batch = this.pendingInventory.get(broadcastId);
     if (batch) clearTimeout(batch.timer);
     this.pendingInventory.delete(broadcastId);
+    this.neighborViews?.removeBroadcast(broadcastId);
     for (const socket of [...this.subscribersOf(broadcastId)]) {
       this.unindexSubscription(socket);
-      this.subscriptions.set(socket, {
-        broadcastId: "",
-        peerId: "",
-        inventoryBatch: false,
-      });
+      this.subscriptions.set(socket, EMPTY_SUBSCRIPTION);
       socket.close(BROADCAST_REMOVED_CLOSE_CODE, "Broadcast removed");
     }
     this.downstreamEvents.broadcastRemoved?.(broadcastId);
+  }
+
+  /** Subscribers by delivery mode, and messages and bytes sent so far. */
+  webSocketStats(): TrackerWebSocketStats {
+    const subscribers = { immediate: 0, batched: 0, neighborView: 0 };
+    for (const broadcast of this.subscribersByBroadcast.values()) {
+      subscribers.immediate += broadcast.immediate.size;
+      subscribers.batched += broadcast.batched.size;
+      for (const sockets of broadcast.viewers.values()) subscribers.neighborView += sockets.size;
+    }
+    return { subscribers, messagesSent: this.messagesSent, bytesSent: this.bytesSent };
   }
 
   async stop(): Promise<void> {
@@ -398,17 +462,36 @@ export class TrackerWebSocketHub implements TrackerEvents {
         ) {
           throw new Error("'features' must be an array of strings");
         }
-        this.setSubscription(socket, {
-          broadcastId,
-          peerId,
-          inventoryBatch:
-            Array.isArray(features) && features.includes(WS_FEATURE_INVENTORY_BATCH),
-        });
-        this.send(socket, {
-          type: "peer_list",
-          broadcastId,
-          peers: this.store.listPeers(broadcastId),
-        });
+        const inventoryBatch =
+          Array.isArray(features) && features.includes(WS_FEATURE_INVENTORY_BATCH);
+        const neighborView =
+          inventoryBatch &&
+          Array.isArray(features) &&
+          features.includes(WS_FEATURE_NEIGHBOR_VIEW) &&
+          this.neighborViews !== undefined;
+        const views = neighborView ? this.seededViews(broadcastId) : undefined;
+        if (views) {
+          // Top up the view before indexing this socket, so the new
+          // neighbors arrive in the peer list rather than as peer_joined.
+          views.add(broadcastId, peerId);
+          this.announceFill(
+            broadcastId,
+            peerId,
+            views.fill(broadcastId, peerId),
+            (id) => this.store.getPeer(broadcastId, id),
+          );
+          this.setSubscription(socket, { broadcastId, peerId, inventoryBatch, neighborView });
+          const listed = [peerId, ...(views.view(broadcastId, peerId) ?? [])];
+          this.send(socket, {
+            type: "peer_list",
+            broadcastId,
+            peers: listed.flatMap((id) => this.store.getPeer(broadcastId, id) ?? []),
+          });
+          return;
+        }
+        const peers = this.store.listPeers(broadcastId);
+        this.setSubscription(socket, { broadcastId, peerId, inventoryBatch, neighborView });
+        this.send(socket, { type: "peer_list", broadcastId, peers });
         return;
       }
 
@@ -503,9 +586,7 @@ export class TrackerWebSocketHub implements TrackerEvents {
     peerId: string,
     segments: string[],
   ): boolean {
-    const peer = this.store
-      .listPeers(broadcastId)
-      .find((candidate) => candidate.id === peerId);
+    const peer = this.store.getPeer(broadcastId, peerId);
     if (!peer) return false;
     const expected = new Set(segments);
     return (
@@ -527,21 +608,37 @@ export class TrackerWebSocketHub implements TrackerEvents {
     this.subscriptions.set(socket, subscription);
     let subscribers = this.subscribersByBroadcast.get(subscription.broadcastId);
     if (!subscribers) {
-      subscribers = { immediate: new Set(), batched: new Set() };
+      subscribers = { immediate: new Set(), batched: new Set(), viewers: new Map() };
       this.subscribersByBroadcast.set(subscription.broadcastId, subscribers);
+    }
+    if (subscription.neighborView) {
+      let sockets = subscribers.viewers.get(subscription.peerId);
+      if (!sockets) {
+        sockets = new Set();
+        subscribers.viewers.set(subscription.peerId, sockets);
+      }
+      sockets.add(socket);
+      return;
     }
     (subscription.inventoryBatch ? subscribers.batched : subscribers.immediate).add(socket);
   }
 
   private unindexSubscription(socket: WebSocket): void {
-    const broadcastId = this.subscriptions.get(socket)?.broadcastId;
-    if (!broadcastId) return;
-    const subscribers = this.subscribersByBroadcast.get(broadcastId);
+    const subscription = this.subscriptions.get(socket);
+    if (!subscription?.broadcastId) return;
+    const subscribers = this.subscribersByBroadcast.get(subscription.broadcastId);
     if (!subscribers) return;
     subscribers.immediate.delete(socket);
     subscribers.batched.delete(socket);
-    if (subscribers.immediate.size === 0 && subscribers.batched.size === 0) {
-      this.subscribersByBroadcast.delete(broadcastId);
+    const viewerSockets = subscribers.viewers.get(subscription.peerId);
+    viewerSockets?.delete(socket);
+    if (viewerSockets?.size === 0) subscribers.viewers.delete(subscription.peerId);
+    if (
+      subscribers.immediate.size === 0 &&
+      subscribers.batched.size === 0 &&
+      subscribers.viewers.size === 0
+    ) {
+      this.subscribersByBroadcast.delete(subscription.broadcastId);
     }
   }
 
@@ -550,13 +647,70 @@ export class TrackerWebSocketHub implements TrackerEvents {
     if (!subscribers) return;
     yield* subscribers.immediate;
     yield* subscribers.batched;
+    for (const sockets of subscribers.viewers.values()) yield* sockets;
+  }
+
+  /**
+   * Neighbor views with every stored peer of the broadcast registered. Peers
+   * join the views as they join the tracker; after a tracker restart, peers
+   * restored from the store are registered once, the first time the
+   * broadcast's views are needed, so later fills can link them.
+   */
+  private seededViews(broadcastId: string): NeighborViews | undefined {
+    const views = this.neighborViews;
+    if (views && !views.has(broadcastId)) {
+      try {
+        for (const peer of this.store.listPeers(broadcastId)) views.add(broadcastId, peer.id);
+      } catch {
+        // The broadcast was removed; there is nobody to register.
+      }
+    }
+    return views;
+  }
+
+  /**
+   * Tells neighbor-view clients about links that a view fill created or
+   * dropped. Peers are looked up only for clients that are connected.
+   */
+  private announceFill(
+    broadcastId: string,
+    peerId: string,
+    fill: NeighborViewFill,
+    lookup: (peerId: string) => Peer | undefined,
+  ): void {
+    if (this.hasViewer(broadcastId, peerId)) {
+      for (const added of fill.added) {
+        const peer = lookup(added);
+        if (peer) this.sendToViewer(broadcastId, peerId, { type: "peer_joined", broadcastId, peer });
+      }
+    }
+    const watchers = fill.reciprocal.filter((watcher) => this.hasViewer(broadcastId, watcher));
+    const filled = watchers.length > 0 ? lookup(peerId) : undefined;
+    if (filled) {
+      for (const watcher of watchers) {
+        this.sendToViewer(broadcastId, watcher, { type: "peer_joined", broadcastId, peer: filled });
+      }
+    }
+    for (const { watcher, peerId: dropped } of fill.evicted) {
+      this.sendToViewer(broadcastId, watcher, { type: "peer_left", broadcastId, peerId: dropped });
+    }
+  }
+
+  private hasViewer(broadcastId: string, peerId: string): boolean {
+    return (this.subscribersByBroadcast.get(broadcastId)?.viewers.get(peerId)?.size ?? 0) > 0;
+  }
+
+  private sendToViewer(broadcastId: string, peerId: string, message: WsServerMessage): void {
+    const sockets = this.subscribersByBroadcast.get(broadcastId)?.viewers.get(peerId);
+    if (!sockets || sockets.size === 0) return;
+    const payload = JSON.stringify(message);
+    const bytes = Buffer.byteLength(payload);
+    for (const socket of sockets) this.sendSerialized(socket, payload, bytes);
   }
 
   private peerExists(claims: PeerSessionClaims): boolean {
     try {
-      return this.store
-        .listPeers(claims.broadcastId)
-        .some((peer) => peer.id === claims.peerId);
+      return this.store.getPeer(claims.broadcastId, claims.peerId) !== undefined;
     } catch {
       return false;
     }
@@ -592,13 +746,15 @@ export class TrackerWebSocketHub implements TrackerEvents {
     else this.connectionsPerIp.set(clientIp, remaining);
   }
 
+  /** Sends to subscribers that see the whole audience. */
   private broadcast(message: WsServerMessage): void {
     const subscribers = this.subscribersByBroadcast.get(message.broadcastId);
-    if (!subscribers) return;
+    if (!subscribers || subscribers.immediate.size + subscribers.batched.size === 0) return;
     // Serialize once: fan-out sends the same payload to every subscriber.
     const payload = JSON.stringify(message);
-    for (const socket of subscribers.immediate) this.sendSerialized(socket, payload);
-    for (const socket of subscribers.batched) this.sendSerialized(socket, payload);
+    const bytes = Buffer.byteLength(payload);
+    for (const socket of subscribers.immediate) this.sendSerialized(socket, payload, bytes);
+    for (const socket of subscribers.batched) this.sendSerialized(socket, payload, bytes);
   }
 
   /**
@@ -613,9 +769,12 @@ export class TrackerWebSocketHub implements TrackerEvents {
     if (!subscribers) return;
     if (subscribers.immediate.size > 0) {
       const payload = JSON.stringify(message);
-      for (const socket of subscribers.immediate) this.sendSerialized(socket, payload);
+      const bytes = Buffer.byteLength(payload);
+      for (const socket of subscribers.immediate) this.sendSerialized(socket, payload, bytes);
     }
-    if (subscribers.batched.size > 0) this.queueInventory(message);
+    if (subscribers.batched.size > 0 || subscribers.viewers.size > 0) {
+      this.queueInventory(message);
+    }
   }
 
   private queueInventory(message: InventoryMessage): void {
@@ -660,21 +819,45 @@ export class TrackerWebSocketHub implements TrackerEvents {
   private flushInventory(broadcastId: string): void {
     const batch = this.pendingInventory.get(broadcastId);
     this.pendingInventory.delete(broadcastId);
-    const subscribers = this.subscribersByBroadcast.get(broadcastId)?.batched;
-    if (!batch || !subscribers || subscribers.size === 0) return;
-    const updates = [...batch.updates].map(
-      ([peerId, pending]): SegmentInventoryUpdate =>
+    const subscribers = this.subscribersByBroadcast.get(broadcastId);
+    if (!batch || !subscribers || batch.updates.size === 0) return;
+    const updates = new Map(
+      [...batch.updates].map(([peerId, pending]): [string, SegmentInventoryUpdate] => [
+        peerId,
         pending.replace
           ? { peerId, segments: [...pending.segments], replace: true }
           : { peerId, added: [...pending.added], removed: [...pending.removed] },
+      ]),
     );
+    if (subscribers.batched.size > 0) {
+      this.sendBatch(broadcastId, [...updates.values()], subscribers.batched);
+    }
+    for (const [peerId, sockets] of subscribers.viewers) {
+      const view = this.neighborViews?.view(broadcastId, peerId);
+      if (!view) continue;
+      // Walk whichever side is smaller: the view or this interval's updates.
+      const relevant =
+        view.size < updates.size
+          ? [...view].flatMap((neighbor) => updates.get(neighbor) ?? [])
+          : [...updates.values()].filter((update) => view.has(update.peerId));
+      if (relevant.length > 0) this.sendBatch(broadcastId, relevant, sockets);
+    }
+  }
+
+  private sendBatch(
+    broadcastId: string,
+    updates: SegmentInventoryUpdate[],
+    sockets: Iterable<WebSocket>,
+  ): void {
+    const recipients = [...sockets];
     for (let start = 0; start < updates.length; start += MAX_UPDATES_PER_BATCH) {
       const payload = JSON.stringify({
         type: "segment_inventory_batch",
         broadcastId,
         updates: updates.slice(start, start + MAX_UPDATES_PER_BATCH),
       } satisfies WsServerMessage);
-      for (const socket of subscribers) this.sendSerialized(socket, payload);
+      const bytes = Buffer.byteLength(payload);
+      for (const socket of recipients) this.sendSerialized(socket, payload, bytes);
     }
   }
 
@@ -682,7 +865,11 @@ export class TrackerWebSocketHub implements TrackerEvents {
     this.sendSerialized(socket, JSON.stringify(message));
   }
 
-  private sendSerialized(socket: WebSocket, payload: string): void {
+  private sendSerialized(
+    socket: WebSocket,
+    payload: string,
+    bytes = Buffer.byteLength(payload),
+  ): void {
     if (socket.readyState === WebSocket.OPEN) {
       if (socket.bufferedAmount > MAX_BUFFERED_WEB_SOCKET_BYTES) {
         socket.terminate();
@@ -690,6 +877,8 @@ export class TrackerWebSocketHub implements TrackerEvents {
       }
       try {
         socket.send(payload);
+        this.messagesSent += 1;
+        this.bytesSent += bytes;
       } catch (error) {
         logger.error("websocket_send_failed", error);
         socket.terminate();

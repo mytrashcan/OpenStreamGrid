@@ -9,6 +9,7 @@ import {
   type BroadcastRegistration,
   type BroadcastStats,
   type GlobalStats,
+  type Peer,
   type PeerFailureReport,
   type PeerHeartbeat,
   type PeerJoinRequest,
@@ -32,7 +33,12 @@ import {
   TrackerStore,
   type TrackerStoreBackend,
 } from "./store.js";
-import { TrackerWebSocketHub, type TrackerEvents } from "./websocket.js";
+import {
+  DEFAULT_NEIGHBOR_VIEW_SIZE,
+  TrackerWebSocketHub,
+  type TrackerEvents,
+  type TrackerWebSocketStats,
+} from "./websocket.js";
 
 const DEFAULT_PORT = 7070;
 const DEFAULT_HOST = "0.0.0.0";
@@ -75,6 +81,8 @@ export interface TrackerConfiguration {
   turn?: TurnCredentialOptions;
   /** Inventory batch interval for `inventory_batch` WebSocket clients. */
   wsInventoryBatchMs?: number;
+  /** Peers each `neighbor_view` client sees; 0 sends the whole audience. */
+  neighborViewSize: number;
 }
 
 const parseInteger = (
@@ -117,6 +125,7 @@ const parseAllowedOrigin = (value: string): string => {
 const MIN_TURN_SHARED_SECRET_BYTES = 16;
 const DEFAULT_WS_MAX_CONNECTIONS_PER_IP = 20;
 const MAX_TRUST_PROXY_HOPS = 10;
+const MAX_NEIGHBOR_VIEW_SIZE = 1_000;
 // RFC 7065 TURN URI: turn[s]:host[:port][?transport=udp|tcp]
 // Host is a DNS name, IPv4 address, or bracketed IPv6 address.
 const TURN_URL_PATTERN =
@@ -234,6 +243,12 @@ export const parseTrackerConfiguration = (
       "TRUST_PROXY_HOPS",
       0,
       MAX_TRUST_PROXY_HOPS,
+    ),
+    neighborViewSize: parseInteger(
+      environment.TRACKER_NEIGHBOR_VIEW_SIZE ?? String(DEFAULT_NEIGHBOR_VIEW_SIZE),
+      "TRACKER_NEIGHBOR_VIEW_SIZE",
+      0,
+      MAX_NEIGHBOR_VIEW_SIZE,
     ),
     ...(turn ? { turn } : {}),
   };
@@ -470,6 +485,8 @@ const REQUEST_DURATION_BUCKETS_MS = [
 
 /** Minimal Prometheus collector for tracker process and store metrics. */
 export class TrackerMetrics {
+  /** Set once the WebSocket hub exists; its counters are exported too. */
+  webSocketStats: (() => TrackerWebSocketStats) | undefined;
   private readonly startedAtMs: number;
   private broadcastsTotal = 0;
   private peersTotal = 0;
@@ -634,6 +651,29 @@ export class TrackerMetrics {
       "Tracker process uptime in seconds.",
       Math.max(0, (this.now() - this.startedAtMs) / 1_000),
     );
+
+    const webSocket = this.webSocketStats?.();
+    if (webSocket) {
+      metric(
+        "openstreamgrid_ws_messages_sent_total",
+        "counter",
+        "WebSocket messages sent to peers.",
+        webSocket.messagesSent,
+      );
+      metric(
+        "openstreamgrid_ws_bytes_sent_total",
+        "counter",
+        "WebSocket payload bytes sent to peers.",
+        webSocket.bytesSent,
+      );
+      lines.push(
+        "# HELP openstreamgrid_ws_subscribers Subscribed WebSocket connections by inventory delivery mode.",
+        "# TYPE openstreamgrid_ws_subscribers gauge",
+        `openstreamgrid_ws_subscribers{mode="immediate"} ${webSocket.subscribers.immediate}`,
+        `openstreamgrid_ws_subscribers{mode="batched"} ${webSocket.subscribers.batched}`,
+        `openstreamgrid_ws_subscribers{mode="neighbor_view"} ${webSocket.subscribers.neighborView}`,
+      );
+    }
 
     lines.push(
       "# HELP openstreamgrid_request_duration_ms REST request duration in milliseconds.",
@@ -841,6 +881,11 @@ export interface TrackerHttpOptions {
   turn?: TurnCredentialOptions;
   /** Reverse proxies in front of the tracker whose X-Forwarded-For is trusted. */
   trustProxyHops?: number;
+  /**
+   * The neighbors a peer sees over WebSocket, if any. Peer-session callers of
+   * the REST peer listings see only themselves and these neighbors.
+   */
+  peerView?: (broadcastId: string, peerId: string) => ReadonlySet<string> | undefined;
 }
 
 /** Creates the REST and dashboard request handler for a tracker store. */
@@ -900,6 +945,24 @@ export const createTrackerHandler = (
             : "Invalid API key",
           401,
         );
+      };
+      // A viewer with a peer session sees only itself and the neighbors the
+      // WebSocket tells it about, so REST cannot enumerate the audience's
+      // addresses. Administrators, and peers without neighbors yet (such as
+      // peers restored after a restart, until they subscribe), see everyone.
+      const visiblePeers = (
+        broadcastId: string,
+        claims: PeerSessionClaims,
+        segment?: string,
+      ): Peer[] => {
+        const view = hasAdminAccess
+          ? undefined
+          : options.peerView?.(broadcastId, claims.peerId);
+        if (!view || view.size === 0) return store.listPeers(broadcastId, segment);
+        return [claims.peerId, ...view].flatMap((id) => {
+          const peer = store.getPeer(broadcastId, id);
+          return peer && (segment === undefined || peer.segments.includes(segment)) ? [peer] : [];
+        });
       };
       const requirePeerSession = (
         broadcastId: string,
@@ -1104,11 +1167,7 @@ export const createTrackerHandler = (
           }
           // Best-effort authorization peek for rejoin attempts; the
           // authoritative check happens on the atomic join result below.
-          if (
-            store
-              .listPeers(broadcastId)
-              .some((peer) => peer.id === join.id)
-          ) {
+          if (store.getPeer(broadcastId, join.id)) {
             requirePeerSession(broadcastId, join.id);
           }
           let joined: ReturnType<TrackerStoreBackend["joinPeerDetailed"]>;
@@ -1154,10 +1213,10 @@ export const createTrackerHandler = (
           return;
         }
         if (!encodedPeerId && method === "GET") {
-          requirePeerSession(broadcastId);
+          const claims = requirePeerSession(broadcastId);
           const segment = url.searchParams.get("segment") ?? undefined;
           sendJson(response, 200, {
-            peers: store.listPeers(broadcastId, segment),
+            peers: visiblePeers(broadcastId, claims, segment),
           });
           return;
         }
@@ -1175,10 +1234,10 @@ export const createTrackerHandler = (
       if (broadcastMatch?.[1]) {
         const broadcastId = decodedPathComponent(broadcastMatch[1]);
         if (method === "GET") {
-          requirePeerSession(broadcastId);
+          const claims = requirePeerSession(broadcastId);
           sendJson(response, 200, {
             broadcast: store.getBroadcast(broadcastId),
-            peers: store.listPeers(broadcastId),
+            peers: visiblePeers(broadcastId, claims),
           });
           return;
         }
@@ -1279,6 +1338,7 @@ export class TrackerServer {
           | "trustProxyHops"
           | "turn"
           | "wsInventoryBatchMs"
+          | "neighborViewSize"
         >
       > = {
       rateLimitRps: DEFAULT_RATE_LIMIT_RPS,
@@ -1326,6 +1386,7 @@ export class TrackerServer {
         ...(configuration.trustProxyHops !== undefined
           ? { trustProxyHops: configuration.trustProxyHops }
           : {}),
+        peerView: (broadcastId, peerId) => webSockets?.peerView(broadcastId, peerId),
       }),
     );
     this.server.headersTimeout = 10_000;
@@ -1347,12 +1408,16 @@ export class TrackerServer {
         ...(configuration.trustProxyHops !== undefined
           ? { trustProxyHops: configuration.trustProxyHops }
           : {}),
+        ...(configuration.neighborViewSize !== undefined
+          ? { neighborViewSize: configuration.neighborViewSize }
+          : {}),
         ...(configuration.wsInventoryBatchMs !== undefined
           ? { inventoryBatchIntervalMs: configuration.wsInventoryBatchMs }
           : {}),
       },
     );
     this.webSockets = webSockets;
+    metrics.webSocketStats = () => webSockets.webSocketStats();
   }
 
   async start(port = DEFAULT_PORT, host = "0.0.0.0"): Promise<number> {
