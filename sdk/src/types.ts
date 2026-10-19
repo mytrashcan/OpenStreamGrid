@@ -95,7 +95,8 @@ export type SdkEvent =
         | "ws_connected"
         | "ws_disconnected"
         | "ws_error"
-        | "segment_assembled";
+        | "segment_assembled"
+        | "integrity_skipped";
       /** Segment name involved, if any. */
       segment?: string;
       /** Peer ID involved, if any. */
