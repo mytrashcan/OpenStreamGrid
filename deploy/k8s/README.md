@@ -164,6 +164,14 @@ divided by P2P successes plus origin requests), P2P success rate, fallbacks,
 integrity failures, REST latency quantiles, peer churn, rate limiting, and
 WebSocket signaling (subscribers by delivery mode, messages and bytes sent).
 
+## Sizing
+
+The tracker's default resources fit the default 500-peer cap per broadcast.
+Its memory grows by about 40 KB per active peer on top of roughly 105 MB, so
+raise `tracker.resources.limits.memory` before raising
+`MAX_PEERS_PER_BROADCAST` (for example `512Mi` for 4000 peers). See
+[Tracker capacity](../../docs/tracker-capacity.md#sizing).
+
 ## Recovery
 
 The tracker runs as one replica, so a restart pauses P2P coordination. Playback
