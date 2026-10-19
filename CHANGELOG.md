@@ -6,6 +6,10 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Added
 
+- `origin/dist/sidecars.js` writes the `.sha256` sidecars peers verify
+  against for HLS output from any packager, so OpenStreamGrid works with an
+  existing origin. It hashes segments once a playlist lists them and prunes
+  sidecars of deleted segments.
 - Prometheus metrics for WebSocket signaling: messages and bytes sent, and
   subscribers by inventory delivery mode, with matching Grafana panels.
 - WebSocket `neighbor_view` subscribe feature (with `inventory_batch`): each

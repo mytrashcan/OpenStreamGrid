@@ -218,6 +218,28 @@ await player.load("https://stream.example.com/hls/stream.m3u8");
 요청의 재시도·정체(stall) 제한 시간에서 기한을 계산합니다. 피어는 그 예산의 앞부분만
 쓰고, Shaka가 요청을 중단하기 전에 Origin을 사용합니다.
 
+## 기존 Origin과 함께 사용하기
+
+피어는 공유되는 모든 세그먼트를 옆에 있는 `<segment>.sha256` 사이드카
+(`<16진수 다이제스트>  <세그먼트 이름>`)로 검증합니다. 번들 Origin은 사이드카를
+직접 쓰고, 다른 패키저를 쓴다면 HLS 출력 디렉터리를 가리키는 사이드카 작성기를
+함께 실행하세요.
+
+```bash
+# 소스에서 (먼저 npm run build)
+node origin/dist/sidecars.js /var/www/hls
+# 또는 배포된 Origin 이미지로. 이미지는 root가 아닌 사용자로 실행되므로
+# --user로 호스트 디렉터리에 쓸 수 있게 하세요
+docker run --rm --user "$(id -u):$(id -g)" -v /var/www/hls:/hls \
+  ghcr.io/mytrashcan/openstreamgrid-origin:v0.6.1 origin/dist/sidecars.js /hls
+```
+
+세그먼트가 미디어 플레이리스트에 나타난 뒤에만 해시하므로 패키저가 아직 쓰는
+중인 세그먼트는 해시하지 않으며, 세그먼트가 지워진 사이드카는 함께 지웁니다.
+`--once`는 한 번만 실행하고, `--interval <ms>`는 새 세그먼트를 찾는 주기(100~60000, 기본
+1000)입니다. 사이드카는 세그먼트와 같은 위치에서 제공하거나 SDK의
+`hashUrlResolver`로 위치를 지정하세요.
+
 ## API 요약
 
 Tracker 리소스는 `/api/v1` 아래에 있습니다. 관리 요청은 `X-API-Key`를
