@@ -70,6 +70,10 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Changed
 
+- With neighbor views enabled, REST peer listings
+  (`GET /api/v1/broadcasts/:id/peers` and `GET /api/v1/broadcasts/:id`) show a
+  peer-session caller only itself and its neighbors, so a viewer can no longer
+  list the whole audience's addresses. Administrators still see everyone.
 - The tracker no longer sends `stats_update` to every peer on each stats
   report (the SDK and Node peer ignored it; the dashboard uses SSE). At 500
   peers in one broadcast, REST p95 latency dropped from about 1 s to 7 ms.

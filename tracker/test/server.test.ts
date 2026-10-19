@@ -1347,6 +1347,70 @@ test("neighbor views include peers restored from the store after a restart", asy
   }
 });
 
+test("limits REST peer listings for peer sessions to their neighbor view", async () => {
+  const server = new TrackerServer(() => new TrackerStore(), 30_000, {
+    rateLimitRps: 100,
+    rateLimitBurst: 200,
+    maxPeersPerBroadcast: 500,
+    trackerApiKey: "test-admin-key",
+    neighborViewSize: 2,
+  });
+  const port = await server.start(0, "127.0.0.1");
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const admin = { "x-api-key": "test-admin-key" };
+  try {
+    await fetch(`${baseUrl}/api/v1/broadcasts`, {
+      method: "POST",
+      headers: { ...admin, "content-type": "application/json" },
+      body: JSON.stringify({ id: "live", playlistUrl: "http://origin/live.m3u8" }),
+    });
+    const tokens = new Map<string, string>();
+    for (const id of ["peer-a", "peer-b", "peer-c", "peer-d"]) {
+      const join = await fetch(`${baseUrl}/api/v1/broadcasts/live/peers`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id, address: `http://${id}:9090` }),
+      });
+      tokens.set(id, (await join.json() as { sessionToken: string }).sessionToken);
+      await fetch(`${baseUrl}/api/v1/broadcasts/live/peers/${id}/segments`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${tokens.get(id) ?? ""}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ segments: ["shared.ts"] }),
+      });
+    }
+    const listed = async (path: string, headers: Record<string, string>): Promise<string[]> => {
+      const response = await fetch(`${baseUrl}${path}`, { headers });
+      assert.equal(response.status, 200);
+      const body = await response.json() as { peers: Array<{ id: string }> };
+      return body.peers.map((peer) => peer.id).sort();
+    };
+    const asPeer = { authorization: `Bearer ${tokens.get("peer-d") ?? ""}` };
+
+    // A peer sees itself and its two neighbors, in both listings and with a
+    // segment filter; an administrator sees everyone.
+    const visible = await listed("/api/v1/broadcasts/live/peers", asPeer);
+    assert.equal(visible.length, 3);
+    assert.ok(visible.includes("peer-d"));
+    assert.deepEqual(await listed("/api/v1/broadcasts/live", asPeer), visible);
+    assert.deepEqual(
+      await listed("/api/v1/broadcasts/live/peers?segment=shared.ts", asPeer),
+      visible,
+    );
+    assert.deepEqual(await listed("/api/v1/broadcasts/live/peers?segment=none.ts", asPeer), []);
+    assert.deepEqual(await listed("/api/v1/broadcasts/live/peers", admin), [
+      "peer-a",
+      "peer-b",
+      "peer-c",
+      "peer-d",
+    ]);
+  } finally {
+    await server.stop();
+  }
+});
+
 test("authenticates WebSocket upgrades with a peer session", async () => {
   const server = new TrackerServer(
     () => new TrackerStore(),

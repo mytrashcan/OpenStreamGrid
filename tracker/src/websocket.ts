@@ -302,6 +302,11 @@ export class TrackerWebSocketHub implements TrackerEvents {
     this.downstreamEvents.peerListChanged?.(broadcastId);
   }
 
+  /** The neighbors a peer sees, when neighbor views are on and it has one. */
+  peerView(broadcastId: string, peerId: string): ReadonlySet<string> | undefined {
+    return this.neighborViews?.view(broadcastId, peerId);
+  }
+
   broadcastListChanged(): void {
     this.downstreamEvents.broadcastListChanged?.();
   }

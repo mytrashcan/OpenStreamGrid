@@ -109,6 +109,7 @@ Returns `200` with `{ "broadcasts": Broadcast[] }`.
 #### `GET /api/v1/broadcasts/:id`
 
 Returns `200` with `{ "broadcast": Broadcast, "peers": Peer[] }`, or `404`.
+`peers` follows the same visibility rule as the peer listing below.
 
 #### `DELETE /api/v1/broadcasts/:id`
 
@@ -194,6 +195,13 @@ transport in metadata:
 
 Returns `{ "peers": Peer[] }`. Add `?segment=low_00042.ts` to return only
 peers reporting that segment.
+
+With neighbor views enabled (`TRACKER_NEIGHBOR_VIEW_SIZE` above 0, the
+default), a caller authenticated with a peer session sees only itself and its
+neighbors, the same peers the WebSocket reports, so a viewer cannot list the
+whole audience's addresses. Administrators see every peer, and so does a peer
+that has no neighbors yet (for example, one restored after a tracker restart,
+until it subscribes).
 
 #### `DELETE /api/v1/broadcasts/:id/peers/:peerId`
 
