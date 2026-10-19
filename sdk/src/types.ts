@@ -48,6 +48,15 @@ export interface HlsjsPluginConfig {
   hashUrlResolver?: (segmentUrl: string) => string;
   /** Max cache size in bytes (default: 100 MB). */
   maxCacheBytes?: number;
+  /**
+   * LL-HLS: once the playlist lists a complete segment, join the partial
+   * segments this viewer loaded for it, verify the result against the
+   * segment's SHA-256 sidecar, and share it like any other segment, so peers
+   * that load complete segments can get it from this viewer (default: false).
+   * Requires segment verification; segments whose parts do not join into the
+   * published bytes are not shared.
+   */
+  assembleLowLatencySegments?: boolean;
   /** P2P request timeout in ms (default: 3000). */
   peerTimeoutMs?: number;
   /** Enable zero-install browser peer participation (default: true). */
@@ -85,7 +94,8 @@ export type SdkEvent =
         | "integrity_fail"
         | "ws_connected"
         | "ws_disconnected"
-        | "ws_error";
+        | "ws_error"
+        | "segment_assembled";
       /** Segment name involved, if any. */
       segment?: string;
       /** Peer ID involved, if any. */

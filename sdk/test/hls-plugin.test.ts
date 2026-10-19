@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import type {
   SegmentScheduler,
@@ -745,6 +746,102 @@ test("hands out its loader as hls.js config for players that build hls.js", () =
     // An instance built without the loader cannot be attached meanwhile.
     const other = { config: { loader: DefaultLoader } } as unknown as Hls;
     assert.throws(() => plugin.attach(other), /already attached/);
+  } finally {
+    plugin.detach();
+  }
+});
+
+test("assembles verified LL-HLS segments from their parts and shares them", async (context) => {
+  const parts = [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5]), new Uint8Array([6])];
+  const joined = new Uint8Array([1, 2, 3, 4, 5, 6]);
+  const sidecars: string[] = [];
+  context.mock.method(globalThis, "fetch", async (input: RequestInfo | URL) => {
+    const url = String(input);
+    sidecars.push(url);
+    // Segment 10 joins into the published bytes; segment 11 does not.
+    const published = url.includes("segment_10") ? joined : new Uint8Array([9, 9, 9]);
+    return new Response(createHash("sha256").update(published).digest("hex"));
+  });
+  const events: SdkEvent[] = [];
+  const plugin = new OpenStreamGridHlsPlugin({
+    trackerUrl: "ws://tracker.example/ws",
+    broadcastId: "live",
+    originBaseUrl: "https://origin.example/hls/low",
+    peerParticipation: false,
+    assembleLowLatencySegments: true,
+    onEvent: (event) => events.push(event),
+  });
+  class DefaultLoader {
+    stats = {};
+    load(
+      context: { url: string; part?: { index: number } },
+      _config: unknown,
+      callbacks: { onSuccess: (response: { data: ArrayBuffer }, ...rest: unknown[]) => void },
+    ): void {
+      const bytes = parts[context.part?.index ?? 0] ?? new Uint8Array();
+      callbacks.onSuccess({ data: bytes.slice().buffer }, {}, context, undefined);
+    }
+  }
+  // The playlist lists segment 10 as complete; segment 11 is still in parts.
+  const fragments: Array<{ sn: number; level: number; url?: string }> = [
+    { sn: 10, level: 0, url: "https://origin.example/hls/low/segment_10.m4s" },
+    { sn: 11, level: 0 },
+  ];
+  // hls.js keeps the parts of recent segments in details.partList.
+  const partList = [10, 11].flatMap((sn) =>
+    [0, 1, 2].map((index) => ({ index, fragment: fragments.find((fragment) => fragment.sn === sn) })),
+  );
+  const hls = {
+    config: { loader: DefaultLoader },
+    levels: [{ details: { fragments, partList } }],
+    media: null,
+  } as unknown as Hls;
+  plugin.attach(hls);
+  const LoaderClass = hls.config.loader as unknown as new (config: unknown) => {
+    load(context: unknown, config: unknown, callbacks: unknown): void;
+  };
+  const config = { timeout: 1_000, loadPolicy: { maxLoadTimeMs: 1_000 } };
+  const delivered: number[] = [];
+  const loadPart = (sn: number, index: number): void => {
+    const fragment = fragments.find((candidate) => candidate.sn === sn);
+    new LoaderClass(hls.config).load(
+      {
+        url: `https://origin.example/hls/low/segment_${sn}.part${index}.m4s`,
+        frag: fragment,
+        part: { index, fragment },
+      },
+      config,
+      { onSuccess: (response: { data: ArrayBuffer }) => delivered.push(response.data.byteLength) },
+    );
+  };
+  try {
+    // Segment 10 is already listed, but nothing is checked until all three
+    // of its parts have loaded.
+    loadPart(10, 0);
+    loadPart(10, 1);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(sidecars, []);
+    loadPart(10, 2);
+    for (let index = 0; index < 3; index += 1) loadPart(11, index);
+    // Playback still gets every part unchanged.
+    assert.deepEqual(delivered, [3, 2, 1, 3, 2, 1]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(
+      events.filter((event) => event.type === "segment_assembled").map((event) => "segment" in event ? event.segment : ""),
+      ["segment_10.m4s"],
+    );
+    // Segment 11 is not listed yet, so its sidecar is not requested.
+    assert.deepEqual(sidecars, ["https://origin.example/hls/low/segment_10.m4s.sha256"]);
+
+    // Once the playlist lists segment 11, the next part load assembles it;
+    // its parts do not match the published hash, so it is not shared.
+    (fragments[1] as { url?: string }).url = "https://origin.example/hls/low/segment_11.m4s";
+    fragments.push({ sn: 12, level: 0 });
+    partList.push({ index: 0, fragment: fragments[2] });
+    loadPart(12, 0);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(events.filter((event) => event.type === "segment_assembled").length, 1);
+    assert.equal(sidecars.length, 2);
   } finally {
     plugin.detach();
   }

@@ -20,7 +20,8 @@ OpenStreamGrid는 MPEG-TS(`.ts`) 또는 CMAF/fMP4(`.m4s`) 세그먼트를 쓰는
 피어는 미디어 세그먼트를 공유하고 SHA-256으로 검증하며, fMP4 init 세그먼트와
 플레이리스트는 항상 Origin 또는 CDN에서 받습니다. LL-HLS에서는 부분
 세그먼트(partial segment)를 Origin에서 받고 완성된 세그먼트만 공유합니다. 부분
-세그먼트 공유는 로드맵 항목입니다.
+세그먼트 자체의 공유는 로드맵 항목입니다. `assembleLowLatencySegments`를 켜면
+라이브 엣지의 시청자도 부분 세그먼트로 조립·검증한 완성 세그먼트를 공유합니다.
 
 P2P 전송이 불가능하거나 재생 기한 안에 완료되지 않으면 즉시 Origin/CDN으로
 전환합니다. 따라서 피어가 접속을 종료하거나 응답이 느려져도 재생 경로를
@@ -386,6 +387,7 @@ WebSocket의 `sessionToken` 쿼리로 사용합니다.
 | `peerTimeoutMs` | `3000` | Peer 요청 및 협상 제한 시간 |
 | `maxCacheBytes` | `100 MB` | 브라우저 세그먼트 캐시 한도 |
 | `hashUrlResolver` | 인접 `.sha256` | 서명·쿼리 URL을 고려한 해시 파일 주소 구성 함수 |
+| `assembleLowLatencySegments` | `false` | LL-HLS: 플레이리스트에 세그먼트가 오르면 부분 세그먼트를 이어 붙여 사이드카로 검증하고, 완성 세그먼트를 받는 피어와 공유. hls.js 인스턴스에 `attach()`와 세그먼트 검증 필요 |
 
 ### 벤치마크
 

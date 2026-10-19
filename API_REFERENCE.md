@@ -359,6 +359,7 @@ Delivery events carry optional `segment`, `peerId`, `durationMs`, and
 | `peer_failed` | A peer attempt failed; `message` gives the reason (HTTP status, WebRTC error, timeout, integrity). Attempts cancelled because another peer won are not reported |
 | `origin_fallback` | The segment was served by the origin/CDN |
 | `integrity_ok` / `integrity_fail` | SHA-256 verification passed or failed |
+| `segment_assembled` | With `assembleLowLatencySegments`, an LL-HLS segment was joined from its parts, verified, and cached for sharing |
 | `ws_connected` / `ws_disconnected` / `ws_error` | Tracker signaling connection state |
 | `scheduler_decision` | Delivery plan: `policy`, `mode`, `reason`, `candidateCount`, `selectedPeerCount` |
 | `scheduler_warning` | A scheduler error or invalid plan was contained: `policy`, `code`, `message` |
