@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseArguments } from "../src/client.js";
+import { parseArguments, SegmentAttempts } from "../src/client.js";
 
 const environment = {
   PEER_ADDRESS: "http://peer-a:9090",
@@ -181,4 +181,22 @@ test("lists MPEG-TS and fMP4 media segments but not init segments", async () => 
     playlistSegments(playlist, new URL("https://origin.example/hls/low/stream.m3u8")),
     ["epoch_segment_000001.m4s", "epoch_segment_000002.m4s", "legacy_segment_000003.ts"],
   );
+});
+
+test("gives up on a segment after its attempts and forgets unlisted ones", () => {
+  const attempts = new SegmentAttempts(3);
+  assert.equal(attempts.fail("a.ts"), false);
+  assert.equal(attempts.fail("a.ts"), false);
+  assert.equal(attempts.fail("a.ts"), true);
+
+  // A success resets the count, so a transient failure is not held against it.
+  attempts.fail("b.ts");
+  attempts.succeed("b.ts");
+  assert.equal(attempts.fail("b.ts"), false);
+
+  // Segments that leave the playlist are forgotten.
+  attempts.fail("c.ts");
+  attempts.fail("c.ts");
+  attempts.retain(new Set(["b.ts"]));
+  assert.equal(attempts.fail("c.ts"), false);
 });

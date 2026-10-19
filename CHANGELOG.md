@@ -120,6 +120,9 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Fixed
 
+- The Node peer gives up on a segment after three failed attempts instead of
+  downloading it from the origin again on every playlist poll, which a
+  missing sidecar caused indefinitely. It logs `segment_skipped`.
 - When an origin segment's SHA-256 sidecar cannot be fetched, the SDK plays the
   origin bytes and emits `integrity_skipped` instead of failing the load, and
   never caches or shares them. Shaka Player in `lowLatencyMode` requests LL-HLS

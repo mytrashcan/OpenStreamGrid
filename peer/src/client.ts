@@ -25,6 +25,7 @@ const DEFAULT_PLAYLIST_POLL_MS = 500;
 const DEFAULT_P2P_TIMEOUT_MS = 2_000;
 const DEFAULT_UPLOAD_HOST = "0.0.0.0";
 const MINIMUM_P2P_SEGMENTS_AHEAD = 2;
+const MAX_SEGMENT_ATTEMPTS = 3;
 const DEFAULT_HTTP_PORT = "80";
 const CLI_ARGUMENT_PAIR_SIZE = 2;
 const CLI_OPTION_PREFIX_LENGTH = 2;
@@ -71,6 +72,35 @@ const delay = async (milliseconds: number, signal: AbortSignal): Promise<void> =
 };
 
 /** Media segment names listed in an HLS media playlist. */
+/**
+ * Counts failed attempts per segment so a segment that keeps failing (for
+ * example, one whose origin sidecar never appears) is given up on instead of
+ * being downloaded from the origin again on every playlist poll.
+ */
+export class SegmentAttempts {
+  private readonly failures = new Map<string, number>();
+
+  constructor(private readonly maxAttempts = MAX_SEGMENT_ATTEMPTS) {}
+
+  /** Records a failure; true when the segment has now used every attempt. */
+  fail(segmentName: string): boolean {
+    const failures = (this.failures.get(segmentName) ?? 0) + 1;
+    this.failures.set(segmentName, failures);
+    return failures >= this.maxAttempts;
+  }
+
+  succeed(segmentName: string): void {
+    this.failures.delete(segmentName);
+  }
+
+  /** Forgets segments the playlist no longer lists. */
+  retain(current: ReadonlySet<string>): void {
+    for (const segmentName of this.failures.keys()) {
+      if (!current.has(segmentName)) this.failures.delete(segmentName);
+    }
+  }
+}
+
 export const playlistSegments = (playlist: string, playlistUrl: URL): string[] =>
   playlist
     .split("\n")
@@ -207,6 +237,7 @@ class PeerApplication {
 
   private async consumePlaylist(signal: AbortSignal): Promise<void> {
     const processed = new Set<string>();
+    const attempts = new SegmentAttempts();
     while (!signal.aborted) {
       try {
         const response = await keepAliveFetch(this.configuration.playlistUrl, { signal });
@@ -221,6 +252,7 @@ class PeerApplication {
         for (const segment of processed) {
           if (!current.has(segment)) processed.delete(segment);
         }
+        attempts.retain(current);
         const pending = segments
           .map((segmentName, index) => ({
             segmentName,
@@ -238,7 +270,7 @@ class PeerApplication {
           const batch = (
             nonUrgent.length > 0 ? nonUrgent : pending.slice(0, 1)
           ).slice(0, this.configuration.maxParallelDownloads);
-          await this.fetchBatch(batch, processed);
+          await this.fetchBatch(batch, processed, attempts);
           const attempted = new Set(batch.map(({ segmentName }) => segmentName));
           for (let index = pending.length - 1; index >= 0; index -= 1) {
             const item = pending[index];
@@ -255,6 +287,7 @@ class PeerApplication {
   private async fetchBatch(
     batch: Array<{ segmentName: string; segmentsAhead: number }>,
     processed: Set<string>,
+    attempts: SegmentAttempts,
   ): Promise<void> {
     for (const { segmentName } of batch) this.inFlightSegments.add(segmentName);
     let fetched: Map<string, Buffer>;
@@ -278,6 +311,15 @@ class PeerApplication {
       }
     } catch (error) {
       logger.error("parallel_segment_fetch_failed", error);
+      for (const { segmentName } of batch) {
+        if (!attempts.fail(segmentName)) continue;
+        processed.add(segmentName);
+        logger.warn("segment_skipped", {
+          peerId: this.configuration.peerId,
+          segment: segmentName,
+          attempts: MAX_SEGMENT_ATTEMPTS,
+        });
+      }
       return;
     } finally {
       for (const { segmentName } of batch) {
@@ -286,6 +328,7 @@ class PeerApplication {
     }
     for (const [segmentName, data] of fetched) {
       processed.add(segmentName);
+      attempts.succeed(segmentName);
       const source = this.fetcher.getLastSource(segmentName);
       logger.info("segment_fetched", {
         peerId: this.configuration.peerId,
