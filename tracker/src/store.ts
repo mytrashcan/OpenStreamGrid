@@ -90,10 +90,17 @@ export interface TrackerStoreBackend {
     peerId: string,
     report: PeerFailureReport,
   ): Peer;
-  removeStalePeers(maxAgeMs: number): number;
+  /** Retires peers not seen for `maxAgeMs` and returns who was removed. */
+  removeStalePeers(maxAgeMs: number): StalePeer[];
   getBroadcastStats(broadcastId: string): BroadcastStats;
   getGlobalStats(): GlobalStats;
   close(): void;
+}
+
+/** A peer removed for inactivity. */
+export interface StalePeer {
+  broadcastId: string;
+  peerId: string;
 }
 
 /** Active peer metadata paired with the peer's cumulative traffic counters. */
@@ -331,15 +338,15 @@ export class TrackerStore implements TrackerStoreBackend {
     return this.copyPeer(reported.peer);
   }
 
-  removeStalePeers(maxAgeMs: number): number {
+  removeStalePeers(maxAgeMs: number): StalePeer[] {
     const cutoff = this.now().getTime() - maxAgeMs;
-    let removed = 0;
-    for (const state of this.broadcasts.values()) {
+    const removed: StalePeer[] = [];
+    for (const [broadcastId, state] of this.broadcasts) {
       for (const [peerId, peerState] of state.peers) {
         if (new Date(peerState.peer.lastSeenAt).getTime() < cutoff) {
           addPeerTrafficStats(state.retiredStats, peerState.stats);
           state.peers.delete(peerId);
-          removed += 1;
+          removed.push({ broadcastId, peerId });
         }
       }
     }

@@ -6,6 +6,9 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Added
 
+- Prometheus gauges for the tracker's event-loop delay
+  (`openstreamgrid_event_loop_delay_{p50,p90,p99,max}_seconds`) since the
+  previous scrape. The capacity benchmark reports them and gains `--churn`.
 - `OpenStreamGridHlsPlugin.hlsJsConfig()` hands out the grid's loader as
   hls.js configuration for players that create hls.js themselves, such as
   Video.js 10's `<hlsjs-video>` (`source.engine.hlsJs`); `attach()` then only
@@ -106,6 +109,9 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Fixed
 
+- The stale-peer sweep no longer lists every peer (with segments) twice every
+  sweep to find the removed ones, and SQLite segment lookups (`?segment=`) load
+  the matching peers' segments in one query instead of one per peer.
 - The dashboard's peer table shows the top 200 peers by P2P upload, with a
   note when there are more, instead of rebuilding a row for every peer on each
   update.

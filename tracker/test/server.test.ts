@@ -9,6 +9,7 @@ import {
   createConfiguredStore,
   createTrackerHandler,
   parseTrackerConfiguration,
+  TrackerMetrics,
   TrackerServer,
   TrackerStatsSse,
   type TrackerStatsSnapshot,
@@ -589,6 +590,27 @@ test("rate limits mutations per IP and enforces the broadcast peer cap", async (
   assert.deepEqual(JSON.parse(peerLimit.body), {
     error: "Broadcast peer limit reached",
   });
+});
+
+test("exports event-loop delay since the previous scrape", async () => {
+  const metrics = new TrackerMetrics();
+  const store = new TrackerStore();
+  // Block the loop long enough for the delay histogram to notice.
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const blockedUntil = Date.now() + 60;
+  while (Date.now() < blockedUntil) {
+    // Busy-wait on purpose.
+  }
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const first = metrics.render(store);
+  const max = Number(/^openstreamgrid_event_loop_delay_max_seconds (\S+)$/m.exec(first)?.[1]);
+  assert.ok(max >= 0.04, `max delay ${max} s`);
+  assert.match(first, /^openstreamgrid_event_loop_delay_p99_seconds \d/m);
+  // Each scrape covers only the time since the previous one.
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const second = metrics.render(store);
+  const secondMax = Number(/^openstreamgrid_event_loop_delay_max_seconds (\S+)$/m.exec(second)?.[1] ?? 0);
+  assert.ok(secondMax < max);
 });
 
 test("exports tracker counters, gauges, and REST duration metrics", async () => {
@@ -1494,6 +1516,60 @@ test("spreads a flush over several turns and still reaches every viewer", async 
     }
   } finally {
     for (const socket of sockets) socket.close();
+    await server.stop();
+  }
+});
+
+test("announces peers removed by the stale sweep", async () => {
+  const server = new TrackerServer(() => new TrackerStore(), 1_000, {
+    rateLimitRps: 100,
+    rateLimitBurst: 200,
+    maxPeersPerBroadcast: 500,
+  });
+  const port = await server.start(0, "127.0.0.1");
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let socket: WebSocket | undefined;
+  let heartbeat: NodeJS.Timeout | undefined;
+  try {
+    await fetch(`${baseUrl}/api/v1/broadcasts`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "live", playlistUrl: "http://origin/live.m3u8" }),
+    });
+    const tokens = new Map<string, string>();
+    for (const id of ["peer-silent", "peer-active"]) {
+      const join = await fetch(`${baseUrl}/api/v1/broadcasts/live/peers`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id, address: `http://${id}:9090` }),
+      });
+      tokens.set(id, (await join.json() as { sessionToken: string }).sessionToken);
+    }
+    const activeSocket = new WebSocket(
+      `ws://127.0.0.1:${port}/ws?sessionToken=${encodeURIComponent(tokens.get("peer-active") ?? "")}`,
+    );
+    socket = activeSocket;
+    await new Promise<void>((resolve) => activeSocket.once("open", resolve));
+    const list = waitForMessage(activeSocket, (message) => message.type === "peer_list");
+    activeSocket.send(JSON.stringify({ type: "subscribe", broadcastId: "live", peerId: "peer-active" }));
+    await list;
+    // peer-active keeps heartbeating; peer-silent goes stale after 1 s.
+    heartbeat = setInterval(() => {
+      activeSocket.send(JSON.stringify({ type: "heartbeat", broadcastId: "live", peerId: "peer-active" }));
+    }, 200);
+    const left = await new Promise<WsServerMessage>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("No peer_left from the sweep")), 4_000);
+      activeSocket.on("message", (data: RawData) => {
+        const message = JSON.parse(data.toString()) as WsServerMessage;
+        if (message.type !== "peer_left") return;
+        clearTimeout(timeout);
+        resolve(message);
+      });
+    });
+    assert.deepEqual(left, { type: "peer_left", broadcastId: "live", peerId: "peer-silent" });
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
+    socket?.close();
     await server.stop();
   }
 });

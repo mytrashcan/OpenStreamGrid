@@ -19,6 +19,7 @@ import {
   StoreError,
   type JoinPeerOptions,
   type PeerStatsSnapshot,
+  type StalePeer,
   type TrackerStoreBackend,
 } from "./store.js";
 import {
@@ -210,6 +211,14 @@ const prepareStatements = (database: Database.Database) => ({
     FROM peer_segments
     WHERE broadcast_id = @broadcastId AND peer_id = @peerId
     ORDER BY rowid
+  `),
+  listSegmentsOfPeersWithSegment: database.prepare(`
+    SELECT s.peer_id, s.segment_name
+    FROM peer_segments s
+    INNER JOIN peer_segments m
+      ON m.broadcast_id = s.broadcast_id AND m.peer_id = s.peer_id
+    WHERE s.broadcast_id = @broadcastId AND m.segment_name = @segment
+    ORDER BY s.peer_id, s.rowid
   `),
   listBroadcastSegments: database.prepare(`
     SELECT peer_id, segment_name
@@ -534,12 +543,16 @@ export class SQLiteStore implements TrackerStoreBackend {
           broadcastId,
           segment,
         }) as PeerRow[]);
-    if (segment !== undefined) return rows.map((row) => this.mapPeer(row));
-
+    if (rows.length === 0) return [];
+    // Load the listed peers' segments in one query instead of one query per
+    // peer, which made a segment lookup in a large audience issue thousands
+    // of queries.
     const segmentsByPeer = new Map<string, string[]>();
-    const segmentRows = this.statements.listBroadcastSegments.all({
-      broadcastId,
-    }) as BroadcastSegmentRow[];
+    const segmentRows = (
+      segment === undefined
+        ? this.statements.listBroadcastSegments.all({ broadcastId })
+        : this.statements.listSegmentsOfPeersWithSegment.all({ broadcastId, segment })
+    ) as BroadcastSegmentRow[];
     for (const row of segmentRows) {
       const segments = segmentsByPeer.get(row.peer_id);
       if (segments) segments.push(row.segment_name);
@@ -701,7 +714,7 @@ export class SQLiteStore implements TrackerStoreBackend {
     return this.requirePeer(broadcastId, peerId);
   }
 
-  removeStalePeers(maxAgeMs: number): number {
+  removeStalePeers(maxAgeMs: number): StalePeer[] {
     const cutoff = new Date(this.now().getTime() - maxAgeMs).toISOString();
     const stalePeers = this.statements.listStalePeers.all({
       cutoff,
@@ -711,7 +724,7 @@ export class SQLiteStore implements TrackerStoreBackend {
         this.retirePeer(peer.broadcast_id, peer.peer_id);
       }
     })();
-    return stalePeers.length;
+    return stalePeers.map((peer) => ({ broadcastId: peer.broadcast_id, peerId: peer.peer_id }));
   }
 
   getBroadcastStats(broadcastId: string): BroadcastStats {
