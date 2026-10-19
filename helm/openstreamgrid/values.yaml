@@ -25,6 +25,9 @@ tracker:
     existingSecret: openstreamgrid-auth
     apiKeyKey: tracker-api-key
     peerSessionSecretKey: peer-session-secret
+  # Sized for the default MAX_PEERS_PER_BROADCAST=500. Tracker memory is about
+  # 105 MB plus 40 KB per active peer (see docs/tracker-capacity.md); raise the
+  # memory limit before raising the peer cap, for example 512Mi for 4000 peers.
   resources:
     requests:
       cpu: 100m

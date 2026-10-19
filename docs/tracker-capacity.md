@@ -160,6 +160,20 @@ is heavier, so the improvement is if anything understated.
 | 500 | after | 16.3 ms | 14.3% | |
 | 1000 | after | 28.7 ms | 22.8% | 17.5 MB for both stages |
 
+## Sizing
+
+Tracker memory (RSS) across the runs above grew from about 125 MB at 500
+peers to 145 MB at 1000, 170 to 195 MB at 2000, and 225 to 265 MB at 4000:
+roughly **105 MB plus 40 KB per active peer**. CPU with neighbor-view clients
+was about 15% of a core at 500 peers and 40% at 4000. These are macOS
+figures; confirm them in your container runtime before relying on them.
+
+The Helm chart's defaults (`cpu: 500m`, `memory: 256Mi` limits) fit the
+default `MAX_PEERS_PER_BROADCAST=500` with room to spare. Before raising the
+peer cap, raise the memory limit to match, for example to `512Mi` for 4000
+peers, or the tracker can be OOM-killed under load; keep the CPU limit at
+least half a core above the measured use.
+
 ## Findings
 
 - With clients that negotiate `inventory_batch` and `neighbor_view` (the SDK
