@@ -1,0 +1,33 @@
+name: Docker peers
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "peer/**"
+      - "common/**"
+      - "tracker/**"
+      - "origin/**"
+      - "test/docker-test.sh"
+      - "docker-compose.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.base.json"
+      - ".github/workflows/docker-peers.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  p2p-and-fallback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Two Node peers share a segment over P2P, then a restarted peer falls
+      # back to the origin when the advertised peer is unreachable.
+      - name: Run the Docker multi-peer test
+        run: bash test/docker-test.sh
