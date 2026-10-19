@@ -51,6 +51,8 @@ const DEFAULT_PEER_SESSION_TTL_MS = 60 * 60 * 1_000;
 const STATS_EVENT_INTERVAL_MS = 3_000;
 const STATS_EVENT_RETRY_MS = 3_000;
 const STATS_EVENT_MIN_INTERVAL_MS = 1_000;
+/** Peers per broadcast the dashboard's mesh view draws (dashboard.html). */
+const DASHBOARD_MESH_PEERS = 24;
 const MAX_BODY_BYTES = 1_000_000;
 const API_CORS_HEADERS = {
   "access-control-allow-origin": "*",
@@ -341,7 +343,12 @@ export class TrackerStatsSse implements TrackerEvents {
       broadcasts: this.store.listBroadcasts().map((broadcast) => ({
         broadcast,
         stats: this.store.getBroadcastStats(broadcast.id),
-        peers: this.store.listPeerStats(broadcast.id),
+        // The dashboard draws share links only between the first
+        // DASHBOARD_MESH_PEERS peers of a broadcast; the rest need no segments,
+        // which made up most of the snapshot in large audiences.
+        peers: this.store.listPeerStats(broadcast.id).map((entry, index) =>
+          index < DASHBOARD_MESH_PEERS ? entry : { ...entry, peer: { ...entry.peer, segments: [] } },
+        ),
       })),
     };
   }

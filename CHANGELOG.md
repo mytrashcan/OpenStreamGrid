@@ -89,6 +89,9 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Changed
 
+- Dashboard SSE snapshots include peer segment lists only for the 24 peers
+  per broadcast that the mesh view draws, which removes most of the stream's
+  size in large audiences.
 - SQLite heartbeats, stats reports, and segment reports share one commit per
   event-loop turn (each still in its own savepoint), cutting tracker CPU at
   4000 peers by about 10%. A crash can lose the current turn's writes.
