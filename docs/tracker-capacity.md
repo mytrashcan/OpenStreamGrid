@@ -190,6 +190,14 @@ peer's segments with its own query; it now uses one. Earlier runs showed
 benchmark itself: every simulated peer sent its heartbeat and stats in the
 same instant every 5 s. Reports are now spread like real clients'.
 
+### WebSocket compression does not help
+
+Enabling permessage-deflate on the tracker (1 KB threshold, no context
+takeover, compression level 1) cut bytes on the wire at 4000 peers only from
+9.56 to 9.32 MB/s: with neighbor views a client's batch is a few hundred
+bytes, below the threshold. It raised tracker memory from about 290 MB to
+1.4 GB, for the per-connection zlib state. The tracker leaves compression off.
+
 ## Sizing
 
 Tracker memory (RSS) across the runs above grew from about 125 MB at 500
