@@ -169,7 +169,14 @@ const run = async (): Promise<void> => {
     if (once || stopped) break;
     await new Promise<void>((resolve) => {
       wake = resolve;
-      setTimeout(resolve, Math.min(Math.max(intervalMs, MIN_INTERVAL_MS), MAX_INTERVAL_MS));
+      // parseArguments already rejects values outside this range.
+      const delayMs =
+        intervalMs > MAX_INTERVAL_MS
+          ? MAX_INTERVAL_MS
+          : intervalMs < MIN_INTERVAL_MS
+            ? MIN_INTERVAL_MS
+            : intervalMs;
+      setTimeout(resolve, delayMs);
     });
   } while (!stopped);
 };
