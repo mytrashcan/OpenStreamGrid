@@ -617,7 +617,7 @@ export class SQLiteStore implements TrackerStoreBackend {
     removed: string[],
   ): Peer {
     this.groupWrites();
-    this.requirePeer(broadcastId, peerId);
+    const row = this.requirePeerRow(broadcastId, peerId);
     return this.database.transaction(() => {
       const existing = this.getSegments(broadcastId, peerId);
       const next = new Set(existing);
@@ -635,12 +635,14 @@ export class SQLiteStore implements TrackerStoreBackend {
         if (existingSet.has(segment)) continue;
         this.statements.insertPeerSegment.run({ broadcastId, peerId, segment });
       }
-      this.statements.updatePeerLastSeen.run({
-        broadcastId,
-        peerId,
-        lastSeenAt: this.timestamp(),
-      });
-      return this.requirePeer(broadcastId, peerId);
+      const lastSeenAt = this.timestamp();
+      this.statements.updatePeerLastSeen.run({ broadcastId, peerId, lastSeenAt });
+      // Same order as reading the rows back: kept rows first, then inserts.
+      const stored = [
+        ...existing.filter((segment) => nextSet.has(segment)),
+        ...nextSegments.filter((segment) => !existingSet.has(segment)),
+      ];
+      return this.mapPeer({ ...row, last_seen_at: lastSeenAt }, stored);
     })();
   }
 
@@ -650,25 +652,30 @@ export class SQLiteStore implements TrackerStoreBackend {
     heartbeat: PeerHeartbeat,
   ): Peer {
     this.groupWrites();
-    const peer = this.requirePeer(broadcastId, peerId);
+    const row = this.requirePeerRow(broadcastId, peerId);
+    const updated: PeerRow = {
+      ...row,
+      upload_bandwidth_bps:
+        heartbeat.uploadBandwidthBps === undefined
+          ? row.upload_bandwidth_bps
+          : Math.max(0, heartbeat.uploadBandwidthBps),
+      latency_ms:
+        heartbeat.latencyMs === undefined ? row.latency_ms : Math.max(0, heartbeat.latencyMs),
+      success_rate:
+        heartbeat.successRate === undefined
+          ? row.success_rate
+          : clampUnitInterval(heartbeat.successRate),
+      last_seen_at: this.timestamp(),
+    };
     this.statements.updatePeerHealth.run({
       broadcastId,
       peerId,
-      uploadBandwidthBps:
-        heartbeat.uploadBandwidthBps === undefined
-          ? (peer.uploadBandwidthBps ?? null)
-          : Math.max(0, heartbeat.uploadBandwidthBps),
-      latencyMs:
-        heartbeat.latencyMs === undefined
-          ? peer.latencyMs
-          : Math.max(0, heartbeat.latencyMs),
-      successRate:
-        heartbeat.successRate === undefined
-          ? peer.successRate
-          : clampUnitInterval(heartbeat.successRate),
-      lastSeenAt: this.timestamp(),
+      uploadBandwidthBps: updated.upload_bandwidth_bps,
+      latencyMs: updated.latency_ms,
+      successRate: updated.success_rate,
+      lastSeenAt: updated.last_seen_at,
     });
-    return this.requirePeer(broadcastId, peerId);
+    return this.mapPeer(updated);
   }
 
   reportStats(
@@ -677,7 +684,7 @@ export class SQLiteStore implements TrackerStoreBackend {
     stats: PeerTrafficStats,
   ): void {
     this.groupWrites();
-    this.requirePeer(broadcastId, peerId);
+    this.requirePeerRow(broadcastId, peerId);
     this.database.transaction(() => {
       this.statements.replacePeerStats.run({
         broadcastId,
@@ -832,6 +839,17 @@ export class SQLiteStore implements TrackerStoreBackend {
     return this.statements.getPeer.get({ broadcastId, peerId }) as
       | PeerRow
       | undefined;
+  }
+
+  /**
+   * The peer's row, without loading its segments: per-message paths
+   * (heartbeats, stats, segment reports) only need to know the peer exists.
+   */
+  private requirePeerRow(broadcastId: string, peerId: string): PeerRow {
+    const row = this.findPeer(broadcastId, peerId);
+    if (row) return row;
+    this.requireBroadcast(broadcastId);
+    throw new StoreError(`Peer '${peerId}' was not found`, NOT_FOUND_STATUS_CODE);
   }
 
   private requirePeer(broadcastId: string, peerId: string): Peer {

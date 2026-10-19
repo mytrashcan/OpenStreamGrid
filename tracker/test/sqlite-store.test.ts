@@ -492,3 +492,30 @@ test("close commits writes still waiting for their group", (context) => {
   context.after(() => reopened.close());
   assert.deepEqual(reopened.getPeer("live", "peer-a")?.segments, ["a.ts", "b.ts"]);
 });
+
+test("returns the same peer from writes as reading it back", (context) => {
+  const store = new SQLiteStore(temporaryDatabasePath(context));
+  context.after(() => store.close());
+  store.registerBroadcast({ id: "live", playlistUrl: "http://origin/live.m3u8" });
+  store.joinPeer("live", { id: "peer-a", address: "http://peer-a:9090" });
+  store.reportSegments("live", "peer-a", ["a.ts", "b.ts", "c.ts"]);
+
+  // Removing and re-adding b.ts keeps its row, so it stays in place.
+  const afterDelta = store.applySegmentDelta("live", "peer-a", ["b.ts", "d.ts"], ["a.ts", "b.ts"]);
+  assert.deepEqual(afterDelta, store.getPeer("live", "peer-a"));
+  assert.deepEqual(afterDelta.segments, ["b.ts", "c.ts", "d.ts"]);
+
+  const afterHeartbeat = store.heartbeat("live", "peer-a", { latencyMs: 42, successRate: 2 });
+  assert.deepEqual(afterHeartbeat, store.getPeer("live", "peer-a"));
+  assert.equal(afterHeartbeat.latencyMs, 42);
+  assert.equal(afterHeartbeat.successRate, 1);
+
+  assert.throws(
+    () => store.heartbeat("live", "missing", {}),
+    (error: unknown) => error instanceof StoreError && /Peer 'missing'/.test(error.message),
+  );
+  assert.throws(
+    () => store.reportStats("missing", "peer-a", trafficStats()),
+    (error: unknown) => error instanceof StoreError && /Broadcast 'missing'/.test(error.message),
+  );
+});
