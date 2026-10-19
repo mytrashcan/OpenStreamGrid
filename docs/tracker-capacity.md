@@ -114,7 +114,9 @@ The dashboard's SSE stream sends a snapshot of every peer with its segments.
 Every stats report (one per peer every 5 s) and every join or leave used to
 rebuild and send one, so a single open dashboard dominated the tracker.
 Event-driven snapshots are now coalesced to at most one per second (the first
-at once, the rest in one trailing update).
+at once, the rest in one trailing update). The "before" rows were measured
+with neighbor views and the "after" rows with batching only, whose signaling
+is heavier, so the improvement is if anything understated.
 
 | Peers | Dashboard | Probe p95 | Tracker CPU | SSE data in the run |
 | ---: | --- | ---: | ---: | ---: |
