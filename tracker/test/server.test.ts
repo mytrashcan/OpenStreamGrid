@@ -2093,8 +2093,6 @@ test("keeps peer and broadcast metadata small", async () => {
   assert.equal(broadcast.status, 400);
 });
 
-test("bounds peer IDs and addresses on join", async () => {
-  const handler = createTrackerHandler(new TrackerStore());
 test("closes WebSockets that report inventory faster than it can be relayed", async () => {
   const server = new TrackerServer(() => new TrackerStore(), 30_000, {
     trackerApiKey: "test-secret",
@@ -2157,22 +2155,6 @@ test("validates and rate-limits REST segment reports with the WebSocket budget",
     id: "live",
     playlistUrl: "http://origin/live.m3u8",
   });
-  const join = (id: string, address = `http://peer:9090`) =>
-    invoke(handler, "POST", "/api/v1/broadcasts/live/peers", { id, address });
-
-  assert.equal((await join("peer-a.example_01:x")).status, 201);
-  assert.equal((await join("p".repeat(128), "http://peer-b:9090")).status, 201);
-  const cases: Array<[string, string, string]> = [
-    ["p".repeat(129), "http://peer-c:9090", "'id' must be at most 128 characters"],
-    ["peer c", "http://peer-c:9090", "'id' must not contain whitespace or control characters"],
-    ["peer\u0000c", "http://peer-c:9090", "'id' must not contain whitespace or control characters"],
-    ["peer-c", `http://peer-c:9090/${"a".repeat(2_048)}`, "'address' must be at most 2048 characters"],
-  ];
-  for (const [id, address, error] of cases) {
-    const response = await join(id, address);
-    assert.equal(response.status, 400, error);
-    assert.deepEqual(response.json, { error });
-  }
   const joined = await invoke(handler, "POST", "/api/v1/broadcasts/live/peers", {
     id: "peer-a",
     address: "http://peer-a:9090",
@@ -2197,4 +2179,28 @@ test("validates and rate-limits REST segment reports with the WebSocket budget",
   assert.deepEqual(limited.json, { error: "Segment report rate limit exceeded" });
   now = 60_000;
   assert.equal((await report(["v".repeat(500)])).status, 200);
+});
+
+test("bounds peer IDs and addresses on join", async () => {
+  const handler = createTrackerHandler(new TrackerStore());
+  await invoke(handler, "POST", "/api/v1/broadcasts", {
+    id: "live",
+    playlistUrl: "http://origin/live.m3u8",
+  });
+  const join = (id: string, address = `http://peer:9090`) =>
+    invoke(handler, "POST", "/api/v1/broadcasts/live/peers", { id, address });
+
+  assert.equal((await join("peer-a.example_01:x")).status, 201);
+  assert.equal((await join("p".repeat(128), "http://peer-b:9090")).status, 201);
+  const cases: Array<[string, string, string]> = [
+    ["p".repeat(129), "http://peer-c:9090", "'id' must be at most 128 characters"],
+    ["peer c", "http://peer-c:9090", "'id' must not contain whitespace or control characters"],
+    ["peer\u0000c", "http://peer-c:9090", "'id' must not contain whitespace or control characters"],
+    ["peer-c", `http://peer-c:9090/${"a".repeat(2_048)}`, "'address' must be at most 2048 characters"],
+  ];
+  for (const [id, address, error] of cases) {
+    const response = await join(id, address);
+    assert.equal(response.status, 400, error);
+    assert.deepEqual(response.json, { error });
+  }
 });
