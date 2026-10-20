@@ -132,6 +132,9 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Fixed
 
+- The Node peer's HTTP upload server drops an upload when the client reads
+  nothing for 10 s. A client that stopped reading held an upload slot (three
+  by default) for as long as it kept the connection open.
 - The Node peer gives up on a segment after three failed attempts instead of
   downloading it from the origin again on every playlist poll, which a
   missing sidecar caused indefinitely. It logs `segment_skipped`.
