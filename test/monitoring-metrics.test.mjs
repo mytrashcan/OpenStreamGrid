@@ -14,16 +14,23 @@ const prometheusRule = await readFile(
 // The tracker writes metric names literally (as a metric() argument, or in a
 // sample line followed by labels or a value) or as template strings such as
 // `openstreamgrid_event_loop_delay_${name}_seconds`.
-const templatedNames = [...trackerSource.matchAll(/openstreamgrid_[a-z0-9_]*\$\{[^}]+\}[a-z0-9_]*/g)].map(
-  ([template]) => new RegExp(`^${template.replace(/\$\{[^}]+\}/g, "[a-z0-9]+")}$`),
-);
+const templatedNames = [
+  ...trackerSource.matchAll(/(openstreamgrid_[a-z0-9_]*)\$\{[^}]+\}([a-z0-9_]*)/g),
+].map(([, prefix, suffix]) => ({ prefix, suffix }));
+const matchesTemplate = (name) =>
+  templatedNames.some(
+    ({ prefix, suffix }) =>
+      name.startsWith(prefix) &&
+      name.endsWith(suffix) &&
+      /^[a-z0-9]+$/.test(name.slice(prefix.length, name.length - suffix.length)),
+  );
 const unexported = (names) =>
   [...names].filter(
     (name) =>
       !trackerSource.includes(`"${name}"`) &&
       !trackerSource.includes(`${name}{`) &&
       !trackerSource.includes(`${name} `) &&
-      !templatedNames.some((pattern) => pattern.test(name)),
+      !matchesTemplate(name),
   );
 
 test("Grafana panels query only metrics the tracker exports", () => {
