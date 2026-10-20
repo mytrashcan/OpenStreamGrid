@@ -709,7 +709,7 @@
       "gridPos": {
         "x": 0,
         "y": 24,
-        "w": 12,
+        "w": 8,
         "h": 8
       },
       "targets": [
@@ -759,9 +759,9 @@
       "title": "WebSocket signaling traffic",
       "description": "Messages and payload bytes the tracker sends to peers.",
       "gridPos": {
-        "x": 12,
+        "x": 8,
         "y": 24,
-        "w": 12,
+        "w": 8,
         "h": 8
       },
       "targets": [
@@ -828,6 +828,78 @@
         }
       },
       "id": 15,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Tracker event-loop delay",
+      "description": "How long callbacks waited for the tracker event loop since the previous scrape; every REST and WebSocket message pays it. See docs/tracker-capacity.md.",
+      "gridPos": {
+        "x": 16,
+        "y": 24,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max(openstreamgrid_event_loop_delay_p50_seconds{job=~\"$job\"})",
+          "legendFormat": "p50",
+          "refId": "A",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max(openstreamgrid_event_loop_delay_p99_seconds{job=~\"$job\"})",
+          "legendFormat": "p99",
+          "refId": "B",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max(openstreamgrid_event_loop_delay_max_seconds{job=~\"$job\"})",
+          "legendFormat": "max",
+          "refId": "C",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "id": 19,
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"

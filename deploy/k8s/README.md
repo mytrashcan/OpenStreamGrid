@@ -172,7 +172,8 @@ into Grafana and pick a Prometheus data source that scrapes the tracker.
 The dashboard covers active broadcasts and peers, P2P offload (P2P successes
 divided by P2P successes plus origin requests), P2P success rate, fallbacks,
 integrity failures, REST latency quantiles, peer churn, rate limiting,
-WebSocket signaling (subscribers by delivery mode, messages and bytes sent),
+WebSocket signaling (subscribers by delivery mode, messages and bytes sent,
+and the tracker's event-loop delay),
 and security (credential refusals, refused WebSocket upgrades, and REST
 responses by status class).
 
