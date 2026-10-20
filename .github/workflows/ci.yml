@@ -107,4 +107,10 @@ jobs:
           docker run --rm openstreamgrid-load-test:test --help
       - name: Lint Helm chart
         if: matrix.runner == 'ubuntu-latest'
-        run: docker run --rm -v "$PWD:/src" alpine/helm:3.16.4 lint /src/helm/openstreamgrid
+        run: |
+          docker run --rm -v "$PWD:/src" alpine/helm:3.16.4 lint /src/helm/openstreamgrid
+          # Optional templates render only when enabled.
+          docker run --rm -v "$PWD:/src" alpine/helm:3.16.4 lint /src/helm/openstreamgrid \
+            --set tracker.metrics.serviceMonitor.enabled=true \
+            --set tracker.metrics.prometheusRule.enabled=true \
+            --set grafanaDashboard.enabled=true

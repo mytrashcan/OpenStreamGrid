@@ -1,0 +1,61 @@
+{{- if .Values.tracker.metrics.prometheusRule.enabled }}
+{{- $rule := .Values.tracker.metrics.prometheusRule }}
+{{- $selector := printf "namespace=%q, service=%q" .Release.Namespace (include "openstreamgrid.trackerName" .) }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "openstreamgrid.trackerName" . }}
+  labels:
+    {{- include "openstreamgrid.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tracker
+    {{- with $rule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: openstreamgrid-tracker
+      rules:
+        - alert: OpenStreamGridTrackerDown
+          # absent() also fires when the target is gone, not only when a scrape fails.
+          expr: absent(up{ {{- $selector -}} } == 1)
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: No OpenStreamGrid tracker is up.
+            description: Viewers cannot join or find peers and fall back to the origin.
+        - alert: OpenStreamGridIntegrityFailures
+          expr: sum(rate(openstreamgrid_integrity_failures_total{ {{- $selector -}} }[5m])) > 0
+          for: {{ $rule.for }}
+          labels:
+            severity: warning
+          annotations:
+            summary: Peers keep reporting segments that fail SHA-256 verification.
+            description: A peer is serving corrupted or tampered data, or sidecars do not match the published segments.
+        - alert: OpenStreamGridHighFallbackRate
+          expr: |
+            sum(rate(openstreamgrid_fallbacks_total{ {{- $selector -}} }[5m]))
+              / clamp_min(sum(rate(openstreamgrid_p2p_requests_total{ {{- $selector -}} }[5m])), 1e-9) > 0.5
+          for: {{ $rule.for }}
+          labels:
+            severity: warning
+          annotations:
+            summary: Most P2P attempts fall back to the origin.
+            description: Peers are unreachable or too slow, so the origin and CDN carry the load P2P should.
+        - alert: OpenStreamGridAuthFailures
+          expr: sum(rate(openstreamgrid_auth_failures_total{ {{- $selector -}} }[5m])) > {{ $rule.authFailuresPerSecond }}
+          for: {{ $rule.for }}
+          labels:
+            severity: warning
+          annotations:
+            summary: The tracker is refusing many requests for bad credentials.
+            description: Someone is guessing the API key or replaying expired peer sessions, or a client is misconfigured.
+        - alert: OpenStreamGridEventLoopLag
+          expr: max(openstreamgrid_event_loop_delay_p99_seconds{ {{- $selector -}} }) > {{ $rule.eventLoopDelaySeconds }}
+          for: {{ $rule.for }}
+          labels:
+            severity: warning
+          annotations:
+            summary: The tracker's event loop is saturated.
+            description: Signaling is delayed for every viewer; see docs/tracker-capacity.md for sizing.
+{{- end }}
