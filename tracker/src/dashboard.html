@@ -418,6 +418,11 @@
         text-align: right;
       }
 
+      td.text-cell,
+      th.text-cell {
+        text-align: left;
+      }
+
       .broadcast-id {
         color: var(--text);
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -634,6 +639,7 @@
               <thead>
                 <tr>
                   <th scope="col">Peer</th>
+                  <th scope="col" class="text-cell">Client</th>
                   <th scope="col">P2P download</th>
                   <th scope="col">Origin download</th>
                   <th scope="col">P2P upload</th>
@@ -771,6 +777,16 @@
 
         const MAX_PEER_ROWS = 200;
 
+        // Browsers announce runtime "browser"; Node peers announce the
+        // rendition directory they follow (older ones announce nothing).
+        const peerClient = (peer) => {
+          const metadata = peer?.metadata ?? {};
+          const kind = metadata.runtime === "browser" ? "Browser" : "Node";
+          return typeof metadata.rendition === "string" && metadata.rendition !== ""
+            ? `${kind} · ${metadata.rendition}`
+            : kind;
+        };
+
         const renderPeers = (snapshot) => {
           const peers = selectedPeers(snapshot);
           elements.peerRows.replaceChildren();
@@ -800,6 +816,7 @@
               includeBroadcast ? `${entry.broadcastId} / ${peerId}` : peerId,
               "broadcast-id peer-health",
             );
+            appendCell(row, peerClient(entry.peer), "text-cell");
             appendCell(row, formatBytes(p2pBytes));
             appendCell(row, formatBytes(originBytes));
             appendCell(row, formatBytes(finiteNumber(stats.bytesUploadedP2P)));
