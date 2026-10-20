@@ -132,6 +132,9 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Fixed
 
+- The Node peer's HTTP upload server drops an upload when the client reads
+  nothing for 10 s. A client that stopped reading held an upload slot (three
+  by default) for as long as it kept the connection open.
 - Node peers advertise their rendition directory on join (`rendition`
   metadata) and skip peers on another rendition. Renditions often share segment
   file names, so Node peers following different renditions fetched each

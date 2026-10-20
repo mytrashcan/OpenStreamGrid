@@ -9,6 +9,8 @@ import type { TrafficStats } from "./stats.js";
 import { BandwidthLimiter } from "./bandwidth-limiter.js";
 
 const logger = createLogger("peer");
+/** How long an upload may wait for the client to read before it is dropped. */
+const DEFAULT_STALL_TIMEOUT_MS = 10_000;
 
 interface UploadServerOptions {
   cache: SegmentCache;
@@ -17,6 +19,11 @@ interface UploadServerOptions {
   maxConnections: number;
   ready?: () => boolean;
   authorizationToken?: string;
+  /**
+   * Drops an upload whose client reads nothing for this long (default 10 s),
+   * so clients that stop reading cannot hold the few upload slots.
+   */
+  stallTimeoutMs?: number;
 }
 
 /** Rate- and concurrency-limited HTTP server for cached peer segments. */
@@ -24,12 +31,17 @@ export class UploadServer {
   private readonly server;
   private readonly bucket: BandwidthLimiter;
   private activeConnections = 0;
+  private readonly stallTimeoutMs: number;
   private startPromise: Promise<number> | undefined;
   private stopPromise: Promise<void> | undefined;
 
   constructor(private readonly options: UploadServerOptions) {
     if (!Number.isSafeInteger(options.maxConnections) || options.maxConnections <= 0) {
       throw new Error("Maximum connections must be a positive integer");
+    }
+    this.stallTimeoutMs = options.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS;
+    if (!Number.isFinite(this.stallTimeoutMs) || this.stallTimeoutMs <= 0) {
+      throw new Error("Upload stall timeout must be positive");
     }
     this.bucket = new BandwidthLimiter(options.maxUploadSpeedBps / 8);
     this.server = createServer((request, response) =>
@@ -193,10 +205,17 @@ export class UploadServer {
   private async waitForDrainOrClose(response: ServerResponse): Promise<void> {
     await new Promise<void>((resolve) => {
       const done = (): void => {
+        clearTimeout(timer);
         response.off("drain", done);
         response.off("close", done);
         resolve();
       };
+      const timer = setTimeout(() => {
+        logger.warn("upload_stalled", { timeoutMs: this.stallTimeoutMs });
+        response.destroy();
+        done();
+      }, this.stallTimeoutMs);
+      timer.unref();
       response.once("drain", done);
       response.once("close", done);
     });
