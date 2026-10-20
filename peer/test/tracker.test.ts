@@ -285,3 +285,53 @@ test("hands tracker-issued TURN credentials to the transport on join", async () 
     { urls: ["turns:turn.example.com:5349"], username: "4070908800:peer-a", credential: "c1" },
   ]]);
 });
+
+test("leaves peers on another rendition out of peer lists", async () => {
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  const port = (server.address() as AddressInfo).port;
+  const peerOn = (id: string, rendition?: string): Peer => ({
+    ...remotePeer,
+    id,
+    ...(rendition ? { metadata: { rendition } } : {}),
+  });
+  server.on("connection", (socket) => {
+    socket.on("message", (data) => {
+      const message = JSON.parse(data.toString()) as WsClientMessage;
+      if (message.type !== "subscribe") return;
+      socket.send(
+        JSON.stringify({
+          type: "peer_list",
+          broadcastId: "live",
+          peers: [peerOn("same", "low"), peerOn("other", "high"), peerOn("unlabelled")],
+        }),
+      );
+    });
+  });
+  const client = new TrackerClient({
+    trackerUrl: `http://127.0.0.1:${port}`,
+    broadcastId: "live",
+    peerId: "peer-a",
+    initialSessionToken: "test-peer-session",
+    heartbeat: () => ({}),
+    stats,
+    segments: () => [],
+    rendition: "low",
+  });
+
+  try {
+    await client.start();
+    await waitFor(async () => (await client.listPeers("segment.ts")).length > 0);
+    assert.deepEqual(
+      (await client.listPeers("segment.ts")).map((peer) => peer.id).sort(),
+      ["same", "unlabelled"],
+    );
+    assert.deepEqual(client.allPeers().map((peer) => peer.id).sort(), ["same", "unlabelled"]);
+  } finally {
+    client.stop();
+    for (const socket of server.clients) socket.terminate();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+});

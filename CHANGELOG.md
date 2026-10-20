@@ -139,6 +139,14 @@ All notable changes to OpenStreamGrid are documented in this file.
   fails if a declaration imports anything but relative paths or `hls.js`.
   `hls.js` is now an optional peer dependency, since Shaka Player apps do not
   need it.
+- The Node peer's HTTP upload server drops an upload when the client reads
+  nothing for 10 s. A client that stopped reading held an upload slot (three
+  by default) for as long as it kept the connection open.
+- Node peers advertise their rendition directory on join (`rendition`
+  metadata) and skip peers on another rendition. Renditions often share segment
+  file names, so Node peers following different renditions fetched each
+  other's segments, failed verification, and reported each other to the
+  tracker.
 - The Node peer gives up on a segment after three failed attempts instead of
   downloading it from the origin again on every playlist poll, which a
   missing sidecar caused indefinitely. It logs `segment_skipped`.

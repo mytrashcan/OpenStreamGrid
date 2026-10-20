@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { connect } from "node:net";
 import test, { type TestContext } from "node:test";
 import { SegmentCache } from "../src/cache.js";
 import { TrafficStats } from "../src/stats.js";
@@ -17,9 +18,11 @@ const startServer = async (
     ready?: () => boolean;
     maxConnections?: number;
     maxUploadSpeedBps?: number;
+    stallTimeoutMs?: number;
+    cacheBytes?: number;
   } = {},
 ): Promise<RunningServer> => {
-  const cache = new SegmentCache(1_000_000);
+  const cache = new SegmentCache(options.cacheBytes ?? 1_000_000);
   const stats = new TrafficStats();
   const server = new UploadServer({
     cache,
@@ -27,6 +30,7 @@ const startServer = async (
     maxConnections: options.maxConnections ?? 3,
     maxUploadSpeedBps: options.maxUploadSpeedBps ?? 8_000_000,
     ...(options.ready ? { ready: options.ready } : {}),
+    ...(options.stallTimeoutMs ? { stallTimeoutMs: options.stallTimeoutMs } : {}),
   });
   context.after(() => server.stop());
   const port = await server.start(0, "127.0.0.1");
@@ -153,4 +157,48 @@ test("serves CMAF/fMP4 segments with the ISO segment content type", async (conte
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("content-type"), "video/iso.segment");
   assert.equal(await response.text(), "fmp4-data");
+});
+
+test("drops uploads whose client stops reading and frees the slot", async (context) => {
+  const { baseUrl, cache } = await startServer(context, {
+    maxConnections: 1,
+    maxUploadSpeedBps: 8_000_000_000,
+    stallTimeoutMs: 100,
+    cacheBytes: 64_000_000,
+  });
+  // Large enough to fill the socket buffers of a client that reads nothing.
+  cache.set("large.ts", Buffer.alloc(32_000_000));
+  const { port } = new URL(baseUrl);
+  const stalled = connect(Number(port), "127.0.0.1");
+  context.after(() => stalled.destroy());
+  await new Promise<void>((resolve) => stalled.once("connect", resolve));
+  stalled.pause();
+  stalled.write("GET /segments/large.ts HTTP/1.1\r\nHost: peer\r\n\r\n");
+  const closed = new Promise<void>((resolve) => stalled.once("close", () => resolve()));
+
+  // The stalled upload holds the only slot until the server drops it.
+  const deadline = Date.now() + 5_000;
+  let status = 429;
+  while (status === 429 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const response = await fetch(`${baseUrl}/segments/large.ts`, { method: "HEAD" });
+    status = response.status;
+  }
+  assert.equal(status, 200);
+  stalled.resume();
+  await closed;
+});
+
+test("rejects a non-positive upload stall timeout", () => {
+  assert.throws(
+    () =>
+      new UploadServer({
+        cache: new SegmentCache(100),
+        stats: new TrafficStats(),
+        maxConnections: 1,
+        maxUploadSpeedBps: 8,
+        stallTimeoutMs: 0,
+      }),
+    /stall timeout must be positive/,
+  );
 });

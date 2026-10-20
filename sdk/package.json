@@ -45,6 +45,7 @@
     "@openstreamgrid/common": "file:../common",
     "@roamhq/wrtc": "^0.10.0",
     "esbuild": "0.28.2",
+    "hls.js": "^1.7.3",
     "typescript": "6.0.3"
   },
   "keywords": [
