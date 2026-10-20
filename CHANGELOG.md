@@ -132,6 +132,11 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Fixed
 
+- Node peers advertise their rendition directory on join (`rendition`
+  metadata) and skip peers on another rendition. Renditions often share segment
+  file names, so Node peers following different renditions fetched each
+  other's segments, failed verification, and reported each other to the
+  tracker.
 - The Node peer gives up on a segment after three failed attempts instead of
   downloading it from the origin again on every playlist poll, which a
   missing sidecar caused indefinitely. It logs `segment_skipped`.
