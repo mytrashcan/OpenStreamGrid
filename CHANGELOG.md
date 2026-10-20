@@ -6,6 +6,11 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Added
 
+- Optional Helm `PrometheusRule` (`tracker.metrics.prometheusRule`) that alerts
+  when no tracker is up, peers keep reporting integrity failures, most P2P
+  attempts fall back to the origin, credential refusals spike, or the event
+  loop lags. CI lints the chart with its optional templates enabled, and a test
+  checks that the alerts query only exported metrics.
 - `--help` for the Node peer (every CLI flag with its environment variable
   and default) and the sidecar writer. The peer's accepted flags and its help
   text come from one table, so they cannot drift apart.
