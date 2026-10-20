@@ -295,6 +295,20 @@ export interface Logger {
 
 type LogLevel = "info" | "warn" | "error";
 
+const LOG_LEVEL_RANK: Readonly<Record<LogLevel, number>> = { info: 0, warn: 1, error: 2 };
+
+/**
+ * The lowest level written, from the `LOG_LEVEL` environment variable (`info`,
+ * `warn`, or `error`; default `info`). Browsers have no environment and log
+ * everything.
+ */
+const minimumLogLevel = (): LogLevel => {
+  const configured = (
+    globalThis as { process?: { env?: Record<string, string | undefined> } }
+  ).process?.env?.LOG_LEVEL?.trim().toLowerCase();
+  return configured === "warn" || configured === "error" ? configured : "info";
+};
+
 const writeLog = (
   service: string,
   level: LogLevel,
@@ -302,6 +316,7 @@ const writeLog = (
   context: LogContext = {},
   error?: unknown,
 ): void => {
+  if (LOG_LEVEL_RANK[level] < LOG_LEVEL_RANK[minimumLogLevel()]) return;
   const entry = {
     ...context,
     timestamp: new Date().toISOString(),
@@ -323,7 +338,6 @@ const writeLog = (
   else console.log(serialized);
 };
 
-/** Creates a structured logger whose entries always identify their service. */
 /**
  * HLS media segments that peers cache and share: MPEG-TS (`.ts`) and
  * CMAF/fMP4 (`.m4s`). Init segments and playlists always load from the origin.
@@ -359,6 +373,7 @@ export const renditionDirectory = (pathname: string): string | undefined =>
 export const jitteredDelay = (delayMs: number, random: () => number = Math.random): number =>
   delayMs / 2 + random() * (delayMs / 2);
 
+/** Creates a structured logger whose entries always identify their service. */
 export const createLogger = (service: string): Logger => ({
   info: (event, context) => writeLog(service, "info", event, context),
   warn: (event, context) => writeLog(service, "warn", event, context),

@@ -154,6 +154,10 @@ Joins or refreshes a peer.
 }
 ```
 
+`id` is at most 128 characters without whitespace or control characters, and
+`address` at most 2048 characters; both are sent to other peers in every peer
+list.
+
 Returns `201` for a new peer or `200` for an authenticated refresh:
 
 ```json
