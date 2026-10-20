@@ -134,6 +134,11 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Fixed
 
+- Peer address validation rejects IPv4-mapped IPv6 literals of reserved
+  addresses (`http://[::ffff:127.0.0.1]`, `http://[::ffff:169.254.169.254]`)
+  and all of `fe80::/10`. They passed the loopback and link-local checks, so a
+  peer could direct other peers' segment requests at their own loopback
+  services or a cloud metadata endpoint.
 - The Node peer's HTTP upload server drops an upload when the client reads
   nothing for 10 s. A client that stopped reading held an upload slot (three
   by default) for as long as it kept the connection open.

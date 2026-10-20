@@ -10,6 +10,15 @@ const UNSAFE_PEER_HOSTNAMES = new Set([
 ]);
 
 /** Rejects peer HTTP addresses that can trivially target local metadata services. */
+/** The IPv4 address inside an IPv4-mapped IPv6 address such as `::ffff:7f00:1`. */
+const mappedIpv4 = (hostname: string): string | undefined => {
+  const match = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(hostname);
+  if (!match?.[1] || !match[2]) return undefined;
+  const high = Number.parseInt(match[1], 16);
+  const low = Number.parseInt(match[2], 16);
+  return [high >> 8, high & 0xff, low >> 8, low & 0xff].join(".");
+};
+
 export const validatePeerHttpBaseUrl = (address: string): URL => {
   const url = new URL(address);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
@@ -18,13 +27,16 @@ export const validatePeerHttpBaseUrl = (address: string): URL => {
   if (url.username || url.password) {
     throw new Error("Peer address must not contain credentials");
   }
-  const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  const literal = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  // IPv4-mapped IPv6 (`[::ffff:127.0.0.1]`, which URL normalizes to
+  // `::ffff:7f00:1`) reaches the embedded IPv4 address, so check that instead.
+  const hostname = mappedIpv4(literal) ?? literal;
   if (
     UNSAFE_PEER_HOSTNAMES.has(hostname) ||
     hostname.endsWith(".localhost") ||
     hostname.startsWith("127.") ||
     hostname.startsWith("169.254.") ||
-    hostname.startsWith("fe80:")
+    /^fe[89ab][0-9a-f]:/.test(hostname)
   ) {
     throw new Error("Peer address targets a reserved local endpoint");
   }
