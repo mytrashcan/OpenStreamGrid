@@ -359,7 +359,8 @@ WebSocket의 `sessionToken` 쿼리로 사용합니다.
 | `TRACKER_URL` | `http://tracker:7070` | Tracker 기본 URL |
 | `TRACKER_API_KEY` | 미설정 | 선택적 관리자 키. 일반 피어 트래픽은 발급된 세션 토큰 사용 |
 | `BROADCAST_ID` | `live` | 참여할 방송 ID |
-| `ORIGIN_URL` | 필수 | 화질별 디렉터리 또는 `.m3u8` URL |
+| `ORIGIN_URL` | 필수 | 화질별 디렉터리 또는 `.m3u8` URL. 멀티 variant 플레이리스트면 화질 하나를 따라감 |
+| `RENDITION` | 최저 대역폭 | 멀티 variant 플레이리스트에서 따라갈 화질의 디렉터리 또는 파일 이름(예: `med`) |
 | `PEER_ADDRESS` | 필수 | 외부에 알릴 `http://host:port` 주소 |
 | `PEER_ID` | 호스트 이름 | 피어 식별자 |
 | `UPLOAD_HOST` | `0.0.0.0` | 업로드 서버 바인드 주소 |

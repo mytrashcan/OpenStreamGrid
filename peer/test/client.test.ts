@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseArguments, SegmentAttempts } from "../src/client.js";
+import {
+  parseArguments,
+  playlistVariants,
+  resolveMediaPlaylist,
+  SegmentAttempts,
+  selectVariant,
+} from "../src/client.js";
 
 const environment = {
   PEER_ADDRESS: "http://peer-a:9090",
@@ -199,4 +205,84 @@ test("gives up on a segment after its attempts and forgets unlisted ones", () =>
   attempts.fail("c.ts");
   attempts.retain(new Set(["b.ts"]));
   assert.equal(attempts.fail("c.ts"), false);
+});
+
+const MULTIVARIANT_PLAYLIST = [
+  "#EXTM3U",
+  "#EXT-X-VERSION:3",
+  '#EXT-X-STREAM-INF:BANDWIDTH=2628000,RESOLUTION=1280x720,CODECS="avc1.64001f,mp4a.40.2"',
+  "high/stream.m3u8",
+  "#EXT-X-STREAM-INF:BANDWIDTH=828000,RESOLUTION=640x360",
+  "low/stream.m3u8",
+  "#EXT-X-STREAM-INF:AVERAGE-BANDWIDTH=1000,BANDWIDTH=1528000",
+  "med/stream.m3u8",
+  "",
+].join("\n");
+
+test("lists the variants of a multivariant playlist and none for a media playlist", () => {
+  const playlistUrl = new URL("http://origin:8080/hls/stream.m3u8");
+  const variants = playlistVariants(MULTIVARIANT_PLAYLIST, playlistUrl);
+  assert.deepEqual(
+    variants.map(({ url, bandwidth }) => [url.href, bandwidth]),
+    [
+      ["http://origin:8080/hls/high/stream.m3u8", 2_628_000],
+      ["http://origin:8080/hls/low/stream.m3u8", 828_000],
+      ["http://origin:8080/hls/med/stream.m3u8", 1_528_000],
+    ],
+  );
+  assert.deepEqual(
+    playlistVariants("#EXTM3U\n#EXTINF:2.0,\nsegment_000001.ts\n", playlistUrl),
+    [],
+  );
+});
+
+test("selects the named rendition or the lowest-bandwidth variant", () => {
+  const variants = playlistVariants(
+    MULTIVARIANT_PLAYLIST,
+    new URL("http://origin:8080/hls/stream.m3u8"),
+  );
+  assert.equal(selectVariant(variants).url.pathname, "/hls/low/stream.m3u8");
+  assert.equal(selectVariant(variants, "med").url.pathname, "/hls/med/stream.m3u8");
+  assert.throws(() => selectVariant(variants, "4k"), /Rendition '4k'.*available: high, low, med/);
+});
+
+test("resolves a multivariant playlist to a variant's playlist and directory", async () => {
+  const configuration = parseArguments(["--rendition", "high"], environment);
+  assert.equal(configuration.rendition, "high");
+  const requested: string[] = [];
+  let failures = 1;
+  const resolved = await resolveMediaPlaylist(
+    { ...configuration, playlistPollMs: 1 },
+    new AbortController().signal,
+    async (url) => {
+      requested.push(url.href);
+      if (failures-- > 0) throw new Error("origin not ready");
+      return MULTIVARIANT_PLAYLIST;
+    },
+  );
+  assert.deepEqual(requested, [
+    "http://origin:8080/hls/stream.m3u8",
+    "http://origin:8080/hls/stream.m3u8",
+  ]);
+  assert.equal(resolved.playlistUrl.href, "http://origin:8080/hls/high/stream.m3u8");
+  assert.equal(resolved.originBaseUrl.href, "http://origin:8080/hls/high/");
+});
+
+test("keeps a media playlist and stops retrying once aborted", async () => {
+  const configuration = parseArguments([], environment);
+  const media = await resolveMediaPlaylist(configuration, new AbortController().signal, async () =>
+    "#EXTM3U\n#EXTINF:2.0,\nsegment_000001.ts\n",
+  );
+  assert.equal(media, configuration);
+
+  const controller = new AbortController();
+  const aborted = await resolveMediaPlaylist(
+    { ...configuration, playlistPollMs: 1 },
+    controller.signal,
+    async () => {
+      controller.abort();
+      throw new Error("aborted");
+    },
+  );
+  assert.equal(aborted.playlistUrl.href, "http://origin:8080/hls/stream.m3u8");
 });
