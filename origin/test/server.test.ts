@@ -455,12 +455,12 @@ test("generates CMAF/fMP4 segments with per-rendition init segments", () => {
 
   const mpegts = argumentsFor(new HlsStreamer({ outputDirectory: "/tmp/hls" }));
   assert.equal(mpegts.includes("-hls_segment_type"), false);
-  assert.match(mpegts[mpegts.indexOf("-hls_segment_filename") + 1] ?? "", /_segment_%06d\.ts$/);
+  assert.match(mpegts[mpegts.indexOf("-hls_segment_filename") + 1] ?? "", /^%v\/[^/]*_%v_segment_%06d\.ts$/);
 
   const fmp4 = argumentsFor(new HlsStreamer({ outputDirectory: "/tmp/hls", segmentType: "fmp4" }));
   assert.equal(fmp4[fmp4.indexOf("-hls_segment_type") + 1], "fmp4");
   assert.match(fmp4[fmp4.indexOf("-hls_fmp4_init_filename") + 1] ?? "", /_init_%v\.mp4$/);
-  assert.match(fmp4[fmp4.indexOf("-hls_segment_filename") + 1] ?? "", /_segment_%06d\.m4s$/);
+  assert.match(fmp4[fmp4.indexOf("-hls_segment_filename") + 1] ?? "", /^%v\/[^/]*_%v_segment_%06d\.m4s$/);
 });
 
 test("hashes and serves fMP4 media and init segments", async (context) => {

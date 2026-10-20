@@ -288,6 +288,13 @@ deleted. `--once` runs a single pass; `--interval <ms>` sets how often it
 looks for new segments (100 to 60000, default 1000). Serve the sidecars from the same place
 as the segments, or point the SDK's `hashUrlResolver` at them.
 
+Give each rendition's segments distinct file names (for example
+`720p_000123.ts`, not `segment_000123.ts` in every rendition directory). Node
+peers and browsers on another path, such as a CDN, match segments by file name,
+and with shared names a viewer can pick a peer holding another rendition's
+segment; verification then rejects it, but the attempt is wasted and the peer's
+trust score drops.
+
 ## Tracker API
 
 Tracker resources are under `/api/v1`. Administrators send `X-API-Key: <key>`
