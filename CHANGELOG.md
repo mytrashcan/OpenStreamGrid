@@ -6,6 +6,9 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Added
 
+- `--help` for the Node peer (every CLI flag with its environment variable
+  and default) and the sidecar writer. The peer's accepted flags and its help
+  text come from one table, so they cannot drift apart.
 - The dashboard's peer table shows each peer's client, `Browser` or `Node`,
   with the rendition a Node peer follows (`Node · low`).
 - The Node peer follows a multivariant playlist to one rendition, chosen with

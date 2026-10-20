@@ -661,6 +661,45 @@ const originUrls = (value: string): { base: URL; playlist: URL } => {
   return { base, playlist: new URL("stream.m3u8", base) };
 };
 
+/** CLI flags, the environment variables they override, and their defaults. */
+const CLI_OPTIONS: ReadonlyArray<{ flag: string; env: string; description: string }> = [
+  { flag: "tracker-url", env: "TRACKER_URL", description: `Tracker base URL (default ${DEFAULT_TRACKER_URL})` },
+  { flag: "tracker-api-key", env: "TRACKER_API_KEY", description: "Optional tracker admin key" },
+  { flag: "broadcast-id", env: "BROADCAST_ID", description: `Broadcast to join (default ${DEFAULT_BROADCAST_ID})` },
+  { flag: "origin-url", env: "ORIGIN_URL", description: "Rendition directory, media playlist, or multivariant playlist URL (required)" },
+  { flag: "rendition", env: "RENDITION", description: "Rendition to follow in a multivariant playlist (default: lowest bandwidth)" },
+  { flag: "peer-address", env: "PEER_ADDRESS", description: "Advertised http://host:port upload address (required)" },
+  { flag: "peer-id", env: "PEER_ID", description: "Peer identifier (default: host name)" },
+  { flag: "cache-size", env: "CACHE_SIZE", description: "Segment cache size (default 512MB)" },
+  { flag: "cache-ttl-ms", env: "CACHE_TTL_MS", description: `Cache entry lifetime in ms (default ${DEFAULT_CACHE_TTL_MS})` },
+  { flag: "max-upload-speed", env: "MAX_UPLOAD_SPEED", description: "Upload rate limit, e.g. 4Mbps (default 1Mbps)" },
+  { flag: "max-connections", env: "MAX_CONNECTIONS", description: `Concurrent uploads (default ${DEFAULT_MAX_CONNECTIONS})` },
+  { flag: "parallel-downloads", env: "MAX_PARALLEL_DOWNLOADS", description: `Concurrent downloads (default ${DEFAULT_MAX_PARALLEL_DOWNLOADS})` },
+  { flag: "webrtc-enabled", env: "WEBRTC_ENABLED", description: "Try WebRTC before HTTP (default true)" },
+];
+
+/** `--help` text: every CLI flag with its environment variable. */
+export const peerUsage = (): string => {
+  const width = Math.max(...CLI_OPTIONS.map(({ flag }) => flag.length)) + 2;
+  return [
+    "Usage: openstreamgrid-peer [--<option> <value>]...",
+    "",
+    "Each option can also be set with the environment variable shown.",
+    "",
+    ...CLI_OPTIONS.map(
+      ({ flag, env, description }) => `  --${flag.padEnd(width)}${env.padEnd(24)}${description}`,
+    ),
+    "",
+    "Environment-only settings (UPLOAD_HOST, PLAYLIST_POLL_MS, P2P_TIMEOUT_MS,",
+    "SEGMENT_DURATION_SECONDS, DEADLINE_SCHEDULING_ENABLED, STUN_SERVER, TURN_*)",
+    "are described in the README.",
+  ].join("\n");
+};
+
+/** True when the arguments ask for usage instead of starting a peer. */
+export const wantsHelp = (arguments_: readonly string[]): boolean =>
+  arguments_.includes("--help") || arguments_.includes("-h");
+
 /** Parses and validates CLI arguments into a complete peer configuration. */
 export const parseArguments = (
   arguments_: string[],
@@ -679,21 +718,7 @@ export const parseArguments = (
     }
     values.set(key.slice(CLI_OPTION_PREFIX_LENGTH), value);
   }
-  const supported = new Set([
-    "tracker-url",
-    "tracker-api-key",
-    "broadcast-id",
-    "origin-url",
-    "rendition",
-    "peer-address",
-    "peer-id",
-    "cache-size",
-    "cache-ttl-ms",
-    "max-upload-speed",
-    "max-connections",
-    "parallel-downloads",
-    "webrtc-enabled",
-  ]);
+  const supported = new Set(CLI_OPTIONS.map(({ flag }) => flag));
   for (const key of values.keys()) {
     if (!supported.has(key)) throw new Error(`Unknown CLI argument '--${key}'`);
   }
@@ -808,9 +833,12 @@ export const parseArguments = (
 };
 
 const run = async (): Promise<void> => {
-  const configuration = parseArguments(
-    process.argv.slice(PROCESS_ARGUMENT_OFFSET),
-  );
+  const arguments_ = process.argv.slice(PROCESS_ARGUMENT_OFFSET);
+  if (wantsHelp(arguments_)) {
+    console.log(peerUsage());
+    return;
+  }
+  const configuration = parseArguments(arguments_);
   const controller = new AbortController();
   process.once("SIGTERM", () => controller.abort());
   process.once("SIGINT", () => controller.abort());
