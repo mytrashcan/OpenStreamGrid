@@ -6,6 +6,8 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Added
 
+- The dashboard's peer table shows each peer's client, `Browser` or `Node`,
+  with the rendition a Node peer follows (`Node · low`).
 - The Node peer follows a multivariant playlist to one rendition, chosen with
   `RENDITION` (`--rendition`) or the lowest bandwidth by default, instead of
   finding no segments in it. It waits for the origin to serve the playlist
