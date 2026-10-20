@@ -12,7 +12,10 @@ or CDN otherwise.
 npm install @openstreamgrid/sdk hls.js
 ```
 
-`hls.js` 1.5 or later is a peer dependency.
+`hls.js` 1.5 or later is an optional peer dependency: install it for the Hls.js
+plugin. Shaka Player apps can leave it out (`npm install @openstreamgrid/sdk`);
+only TypeScript projects with `skipLibCheck: false` then need hls.js for its
+types.
 
 ## Usage
 
