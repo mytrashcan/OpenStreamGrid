@@ -139,6 +139,11 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Fixed
 
+- Peer address validation rejects IPv4-mapped IPv6 literals of reserved
+  addresses (`http://[::ffff:127.0.0.1]`, `http://[::ffff:169.254.169.254]`)
+  and all of `fe80::/10`. They passed the loopback and link-local checks, so a
+  peer could direct other peers' segment requests at their own loopback
+  services or a cloud metadata endpoint.
 - The SDK package's type declarations imported `@openstreamgrid/common`, a
   private workspace package that is not published, so TypeScript consumers got
   `Cannot find module` errors (or, with `skipLibCheck`, untyped scheduler
