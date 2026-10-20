@@ -134,6 +134,11 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Fixed
 
+- Node peers refuse to fetch from a peer whose host name resolves to a
+  loopback, unspecified, or link-local address. The tracker rejects such
+  addresses only as literals, so a host name like one that resolves to
+  `127.0.0.1` could point other Node peers at their local services. Origin and
+  tracker requests are unaffected.
 - The SDK package's type declarations imported `@openstreamgrid/common`, a
   private workspace package that is not published, so TypeScript consumers got
   `Cannot find module` errors (or, with `skipLibCheck`, untyped scheduler

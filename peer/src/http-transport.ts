@@ -1,7 +1,7 @@
 import { validatePeerHttpBaseUrl } from "@openstreamgrid/common";
 import type { TransportAdapter, TransportOptions, TransportStats } from "./transport.js";
 import type { FetchFunction, SegmentIntegrityVerifier } from "./verifier.js";
-import { keepAliveFetch } from "./http-client.js";
+import { peerFetch } from "./http-client.js";
 
 const DEFAULT_P2P_TIMEOUT_MS = 2_000;
 
@@ -30,7 +30,7 @@ export class HttpTransport implements TransportAdapter {
   };
 
   constructor(options: HttpTransportOptions = {}) {
-    this.fetchImpl = options.fetchImpl ?? keepAliveFetch;
+    this.fetchImpl = options.fetchImpl ?? peerFetch;
     this.verifier = options.verifier;
     this.p2pTimeoutMs = options.p2pTimeoutMs ?? DEFAULT_P2P_TIMEOUT_MS;
   }
