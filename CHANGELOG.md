@@ -124,10 +124,6 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Fixed
 
-- The bundled origin names the rendition in segment file names
-  (`<epoch>_<rendition>_segment_<n>`). Every rendition used the same names, so
-  peers matching segments by file name could fetch another rendition's segment
-  and fail verification.
 - The Node peer gives up on a segment after three failed attempts instead of
   downloading it from the origin again on every playlist poll, which a
   missing sidecar caused indefinitely. It logs `segment_skipped`.

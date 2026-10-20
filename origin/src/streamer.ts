@@ -431,9 +431,7 @@ export class HlsStreamer implements StreamController {
           ]
         : []),
       "-hls_segment_filename",
-      // Name the rendition in the file name too: peers that know a segment
-      // only by its file name must not mistake one rendition's for another's.
-      `%v/${this.segmentEpoch}_%v_segment_%06d.${this.segmentType === "fmp4" ? "m4s" : "ts"}`,
+      `%v/${this.segmentEpoch}_segment_%06d.${this.segmentType === "fmp4" ? "m4s" : "ts"}`,
       "%v/stream.m3u8",
     ];
   }
