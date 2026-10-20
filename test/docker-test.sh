@@ -66,6 +66,18 @@ wait_for_url peer-a http://127.0.0.1:9091/health
 wait_for_url peer-b http://127.0.0.1:9092/health
 wait_for_stat_greater_than p2pSuccesses 0 60
 
+# peer-a names its rendition directory; peer-b follows the master playlist to
+# the lowest-bandwidth rendition, which must be the same one.
+peers="$(curl --fail --silent --show-error --header "X-API-Key: $TRACKER_API_KEY" http://127.0.0.1:7070/api/v1/broadcasts/live/peers)"
+node -e '
+const body = JSON.parse(process.argv[1]);
+const peers = Array.isArray(body) ? body : body.peers;
+const renditions = Object.fromEntries(peers.map((peer) => [peer.id, peer.metadata?.rendition]));
+if (renditions["peer-a"] !== "low" || renditions["peer-b"] !== "low") {
+  throw new Error(`Unexpected peer renditions: ${JSON.stringify(renditions)}`);
+}
+' "$peers"
+
 p2p_stats="$(curl --fail --silent --show-error --header "X-API-Key: $TRACKER_API_KEY" http://127.0.0.1:7070/api/v1/broadcasts/live/stats)"
 fallbacks_before="$(stat_value fallbacks)"
 echo "Forcing a stale-peer request to exercise origin fallback"
