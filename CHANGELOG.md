@@ -97,6 +97,11 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Changed
 
+- The tracker limits broadcast and peer metadata to 32 string entries with
+  short keys, 1024-character values, and 4096 characters in total, and rejects
+  larger metadata with `400`. Peer metadata is relayed in every peer list, so
+  a peer could make the tracker resend up to a megabyte per join to each
+  viewer.
 - The browser SDK and the Node peer jitter their tracker reconnect backoff
   (each delay is uniform between half and all of the backoff step), so an
   audience that loses the tracker at once, as in a tracker restart, does not

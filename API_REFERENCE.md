@@ -89,6 +89,12 @@ Opens a `text/event-stream`. Events are named `stats` or `broadcasts`; each
 
 Registers a broadcast or updates its playlist URL and supplied metadata.
 
+Metadata, here and on peers, is an object of strings with at most 32 entries.
+Keys are 1 to 64 letters, digits, `_`, `.`, `:`, or `-`; values are at most
+1024 characters; keys and values total at most 4096 characters. Larger
+metadata is rejected with `400`, because it is stored and relayed to other
+peers in every peer list.
+
 ```json
 {
   "id": "live",
