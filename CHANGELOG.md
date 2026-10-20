@@ -6,6 +6,8 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Added
 
+- A Grafana panel for the tracker's event-loop delay (p50, p99, max), the
+  signal that `docs/tracker-capacity.md` sizes trackers by.
 - `LOG_LEVEL` (`info`, `warn`, or `error`) for every service, to drop log
   entries below that level.
 - Optional Helm `PrometheusRule` (`tracker.metrics.prometheusRule`) that alerts
