@@ -501,6 +501,8 @@ export class TrackerMetrics {
   private broadcastsTotal = 0;
   private peersTotal = 0;
   private rateLimitedRequestsTotal = 0;
+  private readonly responsesByClass = new Map<string, number>();
+  private httpAuthFailuresTotal = 0;
   private p2pRequestsTotal = 0;
   private originRequestsTotal = 0;
   private p2pSuccessesTotal = 0;
@@ -541,6 +543,14 @@ export class TrackerMetrics {
 
   requestRateLimited(): void {
     this.rateLimitedRequestsTotal += 1;
+  }
+
+  /** Counts every HTTP response: REST ones by status class, and auth refusals on any route. */
+  observeResponse(statusCode: number, isRestRequest: boolean): void {
+    if (statusCode === 401 || statusCode === 403) this.httpAuthFailuresTotal += 1;
+    if (!isRestRequest) return;
+    const statusClass = `${Math.floor(statusCode / 100)}xx`;
+    this.responsesByClass.set(statusClass, (this.responsesByClass.get(statusClass) ?? 0) + 1);
   }
 
   observeRestRequest(durationMs: number): void {
@@ -671,6 +681,7 @@ export class TrackerMetrics {
     );
 
     const webSocket = this.webSocketStats?.();
+    const webSocketRejections = webSocket?.upgradesRejected;
     if (webSocket) {
       metric(
         "openstreamgrid_ws_messages_sent_total",
@@ -690,6 +701,28 @@ export class TrackerMetrics {
         `openstreamgrid_ws_subscribers{mode="immediate"} ${webSocket.subscribers.immediate}`,
         `openstreamgrid_ws_subscribers{mode="batched"} ${webSocket.subscribers.batched}`,
         `openstreamgrid_ws_subscribers{mode="neighbor_view"} ${webSocket.subscribers.neighborView}`,
+      );
+    }
+
+    lines.push(
+      "# HELP openstreamgrid_http_responses_total REST responses by status class.",
+      "# TYPE openstreamgrid_http_responses_total counter",
+      ...["2xx", "3xx", "4xx", "5xx"].map(
+        (statusClass) =>
+          `openstreamgrid_http_responses_total{class="${statusClass}"} ${this.responsesByClass.get(statusClass) ?? 0}`,
+      ),
+      "# HELP openstreamgrid_auth_failures_total Requests refused for missing or invalid credentials (HTTP 401 or 403, or a bad session on WebSocket upgrade).",
+      "# TYPE openstreamgrid_auth_failures_total counter",
+      `openstreamgrid_auth_failures_total{interface="http"} ${this.httpAuthFailuresTotal}`,
+      `openstreamgrid_auth_failures_total{interface="websocket"} ${webSocketRejections?.auth ?? 0}`,
+    );
+    if (webSocketRejections) {
+      lines.push(
+        "# HELP openstreamgrid_ws_upgrades_rejected_total WebSocket upgrades refused, by reason.",
+        "# TYPE openstreamgrid_ws_upgrades_rejected_total counter",
+        ...Object.entries(webSocketRejections).map(
+          ([reason, count]) => `openstreamgrid_ws_upgrades_rejected_total{reason="${reason}"} ${count}`,
+        ),
       );
     }
 
@@ -1348,6 +1381,7 @@ export const createTrackerHandler = (
         response.destroy();
       }
     } finally {
+      metrics.observeResponse(response.statusCode, isRestRequest);
       if (isRestRequest) {
         metrics.observeRestRequest(performance.now() - requestStartedAt);
       }

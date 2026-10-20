@@ -6,6 +6,12 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Added
 
+- Prometheus counters for refused requests: `openstreamgrid_auth_failures_total`
+  (HTTP 401/403 and WebSocket upgrades with a bad session),
+  `openstreamgrid_ws_upgrades_rejected_total` by reason, and
+  `openstreamgrid_http_responses_total` by status class, with a Security row
+  in the Grafana dashboard. A test now checks that every metric the dashboard
+  queries is one the tracker exports.
 - The dashboard's peer table shows each peer's client, `Browser` or `Node`,
   with the rendition a Node peer follows (`Node · low`).
 - The Node peer follows a multivariant playlist to one rendition, chosen with

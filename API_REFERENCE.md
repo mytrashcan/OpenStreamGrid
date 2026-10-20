@@ -48,6 +48,12 @@ subscribers mean clients that predate inventory batching.
 `openstreamgrid_event_loop_delay_{p50,p90,p99,max}_seconds` report how long
 callbacks waited for the tracker's event loop since the previous scrape; every
 REST and WebSocket message pays that delay.
+`openstreamgrid_http_responses_total` counts `/api` responses by status
+`class` (`2xx` to `5xx`). `openstreamgrid_auth_failures_total` counts requests
+refused for missing or invalid credentials by `interface` (`http` for any 401
+or 403 response, `websocket` for upgrades with a bad session), and
+`openstreamgrid_ws_upgrades_rejected_total` counts refused upgrades by
+`reason` (`origin`, `auth`, or `connection_limit`).
 
 #### `GET /api/v1/stats`
 
