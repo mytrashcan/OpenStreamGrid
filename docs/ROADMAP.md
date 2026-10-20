@@ -25,8 +25,16 @@ Since v0.6.1 (unreleased, see the changelog):
 - LL-HLS viewers can assemble and share complete segments
   (`assembleLowLatencySegments`, [ADR 0002](adr/0002-llhls-part-sharing.md)
   option B).
-- A sidecar writer for existing origins, and Prometheus metrics for signaling
-  traffic and event-loop delay.
+- A sidecar writer for existing origins, and Node peers that follow a
+  multivariant playlist to one rendition and skip peers on other renditions.
+- Hardening against abusive peers: reserved peer addresses (including
+  IPv4-mapped and DNS forms), bounded metadata, upload stall timeouts, and
+  jittered reconnects.
+- Observability: metrics for signaling traffic, event-loop delay, and refused
+  requests, a Security row in the Grafana dashboard, and optional Prometheus
+  alerts.
+- An SDK package whose type declarations work for TypeScript consumers, a
+  prerequisite for publishing it to npm.
 
 ## Next
 
