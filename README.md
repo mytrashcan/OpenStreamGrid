@@ -369,7 +369,8 @@ codes, and origin/peer endpoints.
 | `TRACKER_URL` | `http://tracker:7070` | Tracker base URL |
 | `TRACKER_API_KEY` | unset | Optional admin key; normal peer traffic uses the issued session token |
 | `BROADCAST_ID` | `live` | Broadcast to join |
-| `ORIGIN_URL` | required | Rendition directory or `.m3u8` URL |
+| `ORIGIN_URL` | required | Rendition directory or `.m3u8` URL; a multivariant playlist is followed to one rendition |
+| `RENDITION` | lowest bandwidth | Rendition to follow in a multivariant playlist, by directory or file name (for example `med`) |
 | `PEER_ADDRESS` | required | Advertised `http://host:port` address |
 | `PEER_ID` | hostname | Stable peer identifier |
 | `UPLOAD_HOST` | `0.0.0.0` | Upload server bind address |

@@ -32,12 +32,14 @@ const CLI_OPTION_PREFIX_LENGTH = 2;
 const PROCESS_ARGUMENT_OFFSET = 2;
 const logger = createLogger("peer");
 
-interface PeerConfiguration {
+export interface PeerConfiguration {
   trackerUrl: string;
   trackerApiKey?: string;
   broadcastId: string;
   originBaseUrl: URL;
   playlistUrl: URL;
+  /** Variant to follow when the playlist is multivariant (directory or file stem). */
+  rendition?: string;
   peerAddress: string;
   uploadHost: string;
   peerId: string;
@@ -54,7 +56,15 @@ interface PeerConfiguration {
   iceServers: RTCIceServer[];
 }
 
-const delay = async (milliseconds: number, signal: AbortSignal): Promise<void> => {
+/**
+ * Waits `milliseconds` or until `signal` aborts. With `keepAlive` false the
+ * timer does not hold the process open on its own.
+ */
+const delay = async (
+  milliseconds: number,
+  signal: AbortSignal,
+  keepAlive = false,
+): Promise<void> => {
   await new Promise<void>((resolve) => {
     if (signal.aborted) {
       resolve();
@@ -66,7 +76,7 @@ const delay = async (milliseconds: number, signal: AbortSignal): Promise<void> =
       resolve();
     };
     const timer = setTimeout(finish, milliseconds);
-    timer.unref();
+    if (!keepAlive) timer.unref();
     signal.addEventListener("abort", finish, { once: true });
   });
 };
@@ -108,6 +118,112 @@ export const playlistSegments = (playlist: string, playlistUrl: URL): string[] =
     .filter((line) => line !== "" && !line.startsWith("#"))
     .map((line) => pathName(new URL(line, playlistUrl)))
     .filter((name): name is string => name !== undefined);
+
+/** A variant listed in an HLS multivariant playlist. */
+export interface PlaylistVariant {
+  url: URL;
+  bandwidth: number;
+}
+
+/** Variants (`EXT-X-STREAM-INF`) listed in a multivariant playlist; empty for a media playlist. */
+export const playlistVariants = (playlist: string, playlistUrl: URL): PlaylistVariant[] => {
+  const variants: PlaylistVariant[] = [];
+  let bandwidth: number | undefined;
+  for (const rawLine of playlist.split("\n")) {
+    const line = rawLine.trim();
+    if (line.startsWith("#EXT-X-STREAM-INF:")) {
+      const match = /(?:^|[:,])BANDWIDTH=(\d+)/.exec(line);
+      bandwidth = match?.[1] ? Number(match[1]) : Number.POSITIVE_INFINITY;
+    } else if (bandwidth !== undefined && line !== "" && !line.startsWith("#")) {
+      variants.push({ url: new URL(line, playlistUrl), bandwidth });
+      bandwidth = undefined;
+    }
+  }
+  return variants;
+};
+
+const variantNames = (url: URL): string[] => {
+  const segments = url.pathname.split("/");
+  const fileName = segments.at(-1) ?? "";
+  return [segments.at(-2) ?? "", fileName.replace(/\.m3u8$/, "")].filter((name) => name !== "");
+};
+
+/**
+ * The variant whose directory or file stem is `rendition`, or without one the
+ * lowest-bandwidth variant, so peers that follow the same playlist pick the
+ * same rendition and can share its segments.
+ */
+export const selectVariant = (
+  variants: readonly PlaylistVariant[],
+  rendition?: string,
+): PlaylistVariant => {
+  if (rendition !== undefined) {
+    const named = variants.find((variant) => variantNames(variant.url).includes(rendition));
+    if (!named) {
+      const available = variants.flatMap((variant) => variantNames(variant.url).slice(0, 1));
+      throw new Error(
+        `Rendition '${rendition}' is not in the playlist (available: ${available.join(", ")})`,
+      );
+    }
+    return named;
+  }
+  const [first, ...rest] = variants;
+  if (!first) throw new Error("Multivariant playlist lists no variants");
+  return rest.reduce(
+    (lowest, variant) => (variant.bandwidth < lowest.bandwidth ? variant : lowest),
+    first,
+  );
+};
+
+/**
+ * Follows a multivariant playlist to one of its media playlists, retrying
+ * until the origin serves the playlist or `signal` aborts. Segment and
+ * sidecar URLs then resolve against the variant's directory.
+ */
+export const resolveMediaPlaylist = async (
+  configuration: PeerConfiguration,
+  signal: AbortSignal,
+  fetchPlaylist: (url: URL, signal: AbortSignal) => Promise<string> = fetchPlaylistText,
+): Promise<PeerConfiguration> => {
+  while (!signal.aborted) {
+    let playlist: string;
+    try {
+      playlist = await fetchPlaylist(configuration.playlistUrl, signal);
+    } catch (error) {
+      if (!signal.aborted) logger.warn("playlist_unavailable", { error: String(error) });
+      // Nothing else holds the process open before the peer starts.
+      await delay(configuration.playlistPollMs, signal, true);
+      continue;
+    }
+    const variants = playlistVariants(playlist, configuration.playlistUrl);
+    if (variants.length === 0) {
+      if (configuration.rendition !== undefined) {
+        logger.warn("rendition_ignored", {
+          rendition: configuration.rendition,
+          reason: "media playlist",
+        });
+      }
+      return configuration;
+    }
+    const variant = selectVariant(variants, configuration.rendition);
+    logger.info("rendition_selected", {
+      playlist: variant.url.href,
+      bandwidth: Number.isFinite(variant.bandwidth) ? variant.bandwidth : undefined,
+    });
+    return {
+      ...configuration,
+      playlistUrl: variant.url,
+      originBaseUrl: new URL(".", variant.url),
+    };
+  }
+  return configuration;
+};
+
+const fetchPlaylistText = async (url: URL, signal: AbortSignal): Promise<string> => {
+  const response = await keepAliveFetch(url, { signal });
+  if (!response.ok) throw new Error(`Playlist returned HTTP ${response.status}`);
+  return response.text();
+};
 
 const pathName = (url: URL): string | undefined => {
   const name = url.pathname.split("/").at(-1);
@@ -554,6 +670,7 @@ export const parseArguments = (
     "tracker-api-key",
     "broadcast-id",
     "origin-url",
+    "rendition",
     "peer-address",
     "peer-id",
     "cache-size",
@@ -583,6 +700,7 @@ export const parseArguments = (
     throw new Error("Peer address port must be between 1 and 65535");
   }
   const origin = originUrls(originValue);
+  const rendition = values.get("rendition") ?? environment.RENDITION;
   const trackerUrl = httpUrl(
     values.get("tracker-url") ??
       environment.TRACKER_URL ??
@@ -608,6 +726,7 @@ export const parseArguments = (
     ),
     originBaseUrl: origin.base,
     playlistUrl: origin.playlist,
+    ...(rendition === undefined ? {} : { rendition: nonEmptyValue(rendition, "Rendition") }),
     peerAddress: peerUrl.href.replace(/\/$/, ""),
     uploadHost: nonEmptyValue(
       environment.UPLOAD_HOST ?? DEFAULT_UPLOAD_HOST,
@@ -681,7 +800,9 @@ const run = async (): Promise<void> => {
   const controller = new AbortController();
   process.once("SIGTERM", () => controller.abort());
   process.once("SIGINT", () => controller.abort());
-  await new PeerApplication(configuration).run(controller.signal);
+  const resolved = await resolveMediaPlaylist(configuration, controller.signal);
+  if (controller.signal.aborted) return;
+  await new PeerApplication(resolved).run(controller.signal);
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

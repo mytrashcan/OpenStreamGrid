@@ -25,7 +25,8 @@ export const DEFAULT_PLAYLIST_SIZE = 8;
 const TEST_PATTERN_FRAME_RATE = 30;
 const TEST_AUDIO_FREQUENCY_HZ = 1_000;
 const AUDIO_SAMPLE_RATE_HZ = 48_000;
-const HLS_DELETE_THRESHOLD = 2;
+/** Stereo test tone. */
+const AUDIO_CHANNELS = 2;
 const RESTART_INITIAL_DELAY_MS = 1_000;
 const RESTART_MAX_DELAY_MS = 30_000;
 const MAX_RESTART_ATTEMPTS = 5;
@@ -402,7 +403,7 @@ export class HlsStreamer implements StreamController {
       "-c:a",
       "aac",
       "-ac",
-      String(HLS_DELETE_THRESHOLD),
+      String(AUDIO_CHANNELS),
       "-g",
       String(keyframeInterval),
       "-keyint_min",

@@ -6,6 +6,10 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Added
 
+- The Node peer follows a multivariant playlist to one rendition, chosen with
+  `RENDITION` (`--rendition`) or the lowest bandwidth by default, instead of
+  finding no segments in it. It waits for the origin to serve the playlist
+  before joining the tracker.
 - Test-only LL-HLS on the origin: `HLS_PARTS_PER_SEGMENT` lists recent MPEG-TS
   segments as packet-aligned parts (`EXT-X-PART`). A new browser E2E variant
   plays it with low-latency hls.js and checks that the viewer assembles and
