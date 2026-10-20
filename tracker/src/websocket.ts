@@ -192,7 +192,11 @@ export interface TrackerWebSocketStats {
   subscribers: { immediate: number; batched: number; neighborView: number };
   messagesSent: number;
   bytesSent: number;
+  /** Upgrades refused for a disallowed Origin, a bad session, or the per-IP limit. */
+  upgradesRejected: Record<WebSocketRejection, number>;
 }
+
+type WebSocketRejection = "origin" | "auth" | "connection_limit";
 
 /** Validates tracker WebSocket messages and broadcasts peer updates. */
 export class TrackerWebSocketHub implements TrackerEvents {
@@ -215,6 +219,11 @@ export class TrackerWebSocketHub implements TrackerEvents {
   private readonly neighborViews: NeighborViews | undefined;
   private messagesSent = 0;
   private bytesSent = 0;
+  private readonly upgradesRejected: Record<WebSocketRejection, number> = {
+    origin: 0,
+    auth: 0,
+    connection_limit: 0,
+  };
 
   constructor(
     private readonly server: Server,
@@ -350,7 +359,12 @@ export class TrackerWebSocketHub implements TrackerEvents {
       subscribers.batched += broadcast.batched.size;
       for (const sockets of broadcast.viewers.values()) subscribers.neighborView += sockets.size;
     }
-    return { subscribers, messagesSent: this.messagesSent, bytesSent: this.bytesSent };
+    return {
+      subscribers,
+      messagesSent: this.messagesSent,
+      bytesSent: this.bytesSent,
+      upgradesRejected: { ...this.upgradesRejected },
+    };
   }
 
   async stop(): Promise<void> {
@@ -375,6 +389,7 @@ export class TrackerWebSocketHub implements TrackerEvents {
       return;
     }
     if (!this.isOriginAllowed(request.headers.origin)) {
+      this.upgradesRejected.origin += 1;
       socket.end(
         "HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
       );
@@ -389,6 +404,7 @@ export class TrackerWebSocketHub implements TrackerEvents {
       undefined;
     const claims = this.peerSessions.verify(token);
     if (!claims || !this.peerExists(claims)) {
+      this.upgradesRejected.auth += 1;
       socket.end(
         "HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
       );
@@ -397,6 +413,7 @@ export class TrackerWebSocketHub implements TrackerEvents {
     const clientIp = clientAddress(request, this.options.trustProxyHops ?? 0);
     const currentConnections = this.connectionsPerIp.get(clientIp) ?? 0;
     if (currentConnections >= (this.options.maxConnectionsPerIp ?? MAX_CONNECTIONS_PER_IP)) {
+      this.upgradesRejected.connection_limit += 1;
       socket.end(
         "HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
       );
