@@ -18,6 +18,7 @@ import {
   bearerToken,
   type PeerSessionClaims,
 } from "./peer-session.js";
+import { InventoryRateLimiter, segmentIdList } from "./inventory-limits.js";
 import { NeighborViews, type NeighborViewFill } from "./neighbor-views.js";
 import type { TrackerStoreBackend } from "./store.js";
 
@@ -74,8 +75,6 @@ const VIEWERS_PER_FLUSH_TURN = 256;
 const MAX_SUBSCRIBE_FEATURES = 16;
 const MAX_BUFFERED_WEB_SOCKET_BYTES = 1024 * 1024;
 const MAX_WEB_SOCKET_PAYLOAD_BYTES = 64 * 1024;
-const MAX_SEGMENTS_PER_REPORT = 512;
-const MAX_SEGMENT_ID_LENGTH = 512;
 const MESSAGE_RATE_PER_SECOND = 20;
 const MESSAGE_BURST = 40;
 const MAX_CONNECTIONS_PER_IP = 20;
@@ -144,19 +143,8 @@ const optionalUnitInterval = (
 };
 
 const requiredSegments = (message: JsonObject): string[] => {
-  const segments = message.segments;
-  if (
-    !Array.isArray(segments) ||
-    segments.length > MAX_SEGMENTS_PER_REPORT ||
-    segments.some(
-      (segment) =>
-        typeof segment !== "string" ||
-        segment.length === 0 ||
-        segment.length > MAX_SEGMENT_ID_LENGTH,
-    )
-  ) {
-    throw new Error("'segments' must be an array of strings");
-  }
+  const segments = segmentIdList(message.segments);
+  if (!segments) throw new Error("'segments' must be an array of strings");
   return segments;
 };
 
@@ -185,6 +173,8 @@ export interface TrackerWebSocketOptions {
   neighborViewSize?: number;
   /** Neighbor-view subscribers served per event-loop turn (default 256). */
   viewersPerFlushTurn?: number;
+  /** Shared with the REST API so a peer's reports count once across both. */
+  inventoryLimiter?: InventoryRateLimiter;
 }
 
 /** WebSocket fan-out counters exported as Prometheus metrics. */
@@ -213,6 +203,7 @@ export class TrackerWebSocketHub implements TrackerEvents {
   private readonly flushRequested = new Set<string>();
   private readonly sessions = new Map<WebSocket, PeerSessionClaims>();
   private readonly messageBudgets = new Map<WebSocket, MessageBudget>();
+  private readonly inventoryLimiter: InventoryRateLimiter;
   private readonly connectionIps = new Map<WebSocket, string>();
   private readonly connectionsPerIp = new Map<string, number>();
   private readonly sessionExpiryTimers = new Map<WebSocket, NodeJS.Timeout>();
@@ -232,6 +223,7 @@ export class TrackerWebSocketHub implements TrackerEvents {
     private readonly peerSessions = new PeerSessionTokenService(),
     private readonly options: TrackerWebSocketOptions = {},
   ) {
+    this.inventoryLimiter = options.inventoryLimiter ?? new InventoryRateLimiter();
     const neighborViewSize = options.neighborViewSize ?? DEFAULT_NEIGHBOR_VIEW_SIZE;
     this.neighborViews =
       neighborViewSize > 0 ? new NeighborViews(neighborViewSize) : undefined;
@@ -552,6 +544,9 @@ export class TrackerWebSocketHub implements TrackerEvents {
         if (parsed.added !== undefined || parsed.removed !== undefined) {
           const added = requiredSegments({ segments: parsed.added ?? [] });
           const removed = requiredSegments({ segments: parsed.removed ?? [] });
+          if (!this.inventoryLimiter.consume(broadcastId, peerId, [added, removed])) {
+            throw new Error("Segment report rate limit exceeded");
+          }
           this.store.applySegmentDelta(broadcastId, peerId, added, removed);
           this.publishInventory({
             type: "segment_inventory_delta",
@@ -565,6 +560,9 @@ export class TrackerWebSocketHub implements TrackerEvents {
         const segments = requiredSegments(parsed);
         if (parsed.replace !== undefined && typeof parsed.replace !== "boolean") {
           throw new Error("'replace' must be a boolean");
+        }
+        if (!this.inventoryLimiter.consume(broadcastId, peerId, [segments])) {
+          throw new Error("Segment report rate limit exceeded");
         }
         const replace = parsed.replace;
         if (replace && this.hasSameSegments(broadcastId, peerId, segments)) return;

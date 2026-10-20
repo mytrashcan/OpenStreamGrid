@@ -15,6 +15,7 @@ import {
   type TrackerStatsSnapshot,
 } from "../src/server.js";
 import { TrackerStore } from "../src/store.js";
+import { InventoryRateLimiter } from "../src/inventory-limits.js";
 
 interface TestResponse {
   status: number;
@@ -2090,4 +2091,92 @@ test("keeps peer and broadcast metadata small", async () => {
   }
   const broadcast = await register({ big: "v".repeat(1_025) });
   assert.equal(broadcast.status, 400);
+});
+
+test("closes WebSockets that report inventory faster than it can be relayed", async () => {
+  const server = new TrackerServer(() => new TrackerStore(), 30_000, {
+    trackerApiKey: "test-secret",
+    rateLimitRps: 100,
+    rateLimitBurst: 200,
+    maxPeersPerBroadcast: 500,
+  });
+  const port = await server.start(0, "127.0.0.1");
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let socket: WebSocket | undefined;
+  try {
+    await fetch(`${baseUrl}/api/v1/broadcasts`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": "test-secret" },
+      body: JSON.stringify({ id: "live", playlistUrl: "http://origin/live.m3u8" }),
+    });
+    const join = await fetch(`${baseUrl}/api/v1/broadcasts/live/peers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "peer-a", address: "http://peer-a:9090" }),
+    });
+    const { sessionToken } = (await join.json()) as { sessionToken: string };
+    socket = new WebSocket(`ws://127.0.0.1:${port}/ws`, {
+      headers: { authorization: `Bearer ${sessionToken}` },
+    });
+    const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+      socket?.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
+    });
+    await new Promise<void>((resolve, reject) => {
+      socket?.once("open", resolve);
+      socket?.once("error", reject);
+    });
+    const send = (message: unknown): void => socket?.send(JSON.stringify(message));
+    send({ type: "subscribe", broadcastId: "live", peerId: "peer-a" });
+    // About 60 K characters of IDs per message: the 256 K burst allows four.
+    for (let batch = 0; batch < 6; batch += 1) {
+      send({
+        type: "report_segments",
+        broadcastId: "live",
+        peerId: "peer-a",
+        added: Array.from(
+          { length: 120 },
+          (_, index) => `${String(batch * 120 + index).padStart(497, "0")}.ts`,
+        ),
+        removed: [],
+      });
+    }
+    assert.deepEqual(await closed, { code: 1008, reason: "Segment report rate limit exceeded" });
+  } finally {
+    socket?.terminate();
+    await server.stop();
+  }
+});
+
+test("validates and rate-limits REST segment reports with the WebSocket budget", async () => {
+  let now = 0;
+  const inventoryLimiter = new InventoryRateLimiter(10, 3_000, () => now);
+  const handler = createTrackerHandler(new TrackerStore(), {}, undefined, { inventoryLimiter });
+  await invoke(handler, "POST", "/api/v1/broadcasts", {
+    id: "live",
+    playlistUrl: "http://origin/live.m3u8",
+  });
+  const joined = await invoke(handler, "POST", "/api/v1/broadcasts/live/peers", {
+    id: "peer-a",
+    address: "http://peer-a:9090",
+  });
+  const auth = {
+    authorization: `Bearer ${(joined.json as { sessionToken: string }).sessionToken}`,
+  };
+  const report = (segments: unknown) =>
+    invoke(handler, "POST", "/api/v1/broadcasts/live/peers/peer-a/segments", { segments }, auth);
+
+  const tooLong = await report(["x".repeat(513)]);
+  assert.equal(tooLong.status, 400);
+  assert.deepEqual(tooLong.json, {
+    error: "'segments' must be an array of at most 512 non-empty strings of up to 512 characters",
+  });
+  assert.equal((await report(["x".repeat(500), "y".repeat(500)])).status, 200);
+  assert.equal((await report(["z".repeat(500)])).status, 200);
+  // 1500 of 3000 characters remain; the WebSocket hub would draw from the same budget.
+  assert.equal(inventoryLimiter.consume("live", "peer-a", [["w".repeat(1_400)]]), true);
+  const limited = await report(["v".repeat(500)]);
+  assert.equal(limited.status, 429);
+  assert.deepEqual(limited.json, { error: "Segment report rate limit exceeded" });
+  now = 60_000;
+  assert.equal((await report(["v".repeat(500)])).status, 200);
 });
