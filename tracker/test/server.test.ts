@@ -2013,3 +2013,48 @@ test("applies a configurable WebSocket limit per forwarded client", async () => 
     await server.stop();
   }
 });
+
+test("keeps peer and broadcast metadata small", async () => {
+  const handler = createTrackerHandler(new TrackerStore());
+  const register = (metadata: unknown) =>
+    invoke(handler, "POST", "/api/v1/broadcasts", {
+      id: "live",
+      playlistUrl: "http://origin/live.m3u8",
+      metadata,
+    });
+  const join = (id: string, metadata: unknown) =>
+    invoke(handler, "POST", "/api/v1/broadcasts/live/peers", {
+      id,
+      address: `http://${id}:9090`,
+      metadata,
+    });
+
+  assert.equal((await register({ owner: "origin", leaseExpiresAt: "2026-10-20T00:00:00Z" })).status, 201);
+  const accepted = await join("peer-a", {
+    uploadToken: "x".repeat(43),
+    rendition: "low",
+    "app.region": "eu-west:1",
+  });
+  assert.equal(accepted.status, 201);
+
+  const rejected: Array<[unknown, string]> = [
+    [
+      Object.fromEntries(Array.from({ length: 33 }, (_, index) => [`k${index}`, "v"])),
+      "'metadata' must have at most 32 entries",
+    ],
+    [{ "bad key": "v" }, "'metadata' keys must be 1 to 64 letters, digits, '_', '.', ':' or '-'"],
+    [{ ["k".repeat(65)]: "v" }, "'metadata' keys must be 1 to 64 letters, digits, '_', '.', ':' or '-'"],
+    [{ big: "v".repeat(1_025) }, "'metadata' values must be at most 1024 characters"],
+    [
+      Object.fromEntries(Array.from({ length: 5 }, (_, index) => [`k${index}`, "v".repeat(1_000)])),
+      "'metadata' must total at most 4096 characters",
+    ],
+  ];
+  for (const [metadata, error] of rejected) {
+    const response = await join("peer-b", metadata);
+    assert.equal(response.status, 400);
+    assert.deepEqual(response.json, { error });
+  }
+  const broadcast = await register({ big: "v".repeat(1_025) });
+  assert.equal(broadcast.status, 400);
+});
