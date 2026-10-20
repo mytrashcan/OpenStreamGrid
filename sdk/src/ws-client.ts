@@ -1,11 +1,12 @@
 /**
  * Browser-native WebSocket client for OpenStreamGrid tracker communication.
  * Uses the native WebSocket API (not the `ws` npm package).
- * Implements exponential-backoff reconnection and periodic status reporting.
+ * Implements jittered exponential-backoff reconnection and periodic status reporting.
  */
 
 import {
   createLogger,
+  jitteredDelay,
   WS_FEATURE_INVENTORY_BATCH,
   WS_FEATURE_NEIGHBOR_VIEW,
 } from "@openstreamgrid/common";
@@ -479,7 +480,7 @@ export class WsTrackerClient {
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.openSocket();
-    }, delayMs);
+    }, jitteredDelay(delayMs));
   }
 
   private reportStatus(): void {
