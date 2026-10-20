@@ -326,6 +326,18 @@ export const isMediaSegmentPath = (value: string): boolean =>
 export const isMediaSegmentFileName = (value: string): boolean =>
   /^[-A-Za-z0-9_.]+$/.test(value) && MEDIA_SEGMENT_EXTENSION_PATTERN.test(value);
 
+/**
+ * Peer metadata key for the directory a Node peer's segments come from (`low`
+ * for `.../hls/low/`). Renditions often share segment file names, which is how
+ * Node peers advertise segments, so peers on different renditions must not
+ * fetch from each other.
+ */
+export const PEER_METADATA_RENDITION = "rendition";
+
+/** The name of the directory a URL path points into (`low` for `/hls/low/seg.ts`). */
+export const renditionDirectory = (pathname: string): string | undefined =>
+  pathname.split("/").filter((part) => part !== "").at(-2);
+
 export const createLogger = (service: string): Logger => ({
   info: (event, context) => writeLog(service, "info", event, context),
   warn: (event, context) => writeLog(service, "warn", event, context),

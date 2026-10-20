@@ -1,5 +1,6 @@
 import {
   createLogger,
+  PEER_METADATA_RENDITION,
   WS_FEATURE_INVENTORY_BATCH,
   WS_FEATURE_NEIGHBOR_VIEW,
   type Peer,
@@ -263,6 +264,12 @@ export interface TrackerClientOptions {
   initialSessionToken?: string;
   /** Receives ICE servers issued with each join or session refresh. */
   onIssuedIceServers?: (servers: RTCIceServer[]) => void;
+  /**
+   * This peer's rendition directory. Peers that advertise a different one are
+   * left out of peer lists, since their segments can share file names with
+   * this peer's but hold other bytes.
+   */
+  rendition?: string;
 }
 
 /** Maintains tracker membership, WebSocket updates, and periodic reports. */
@@ -420,12 +427,20 @@ export class TrackerClient implements PeerDirectory {
 
   async listPeers(segmentName: string): Promise<Peer[]> {
     return [...this.peers.values()]
-      .filter((peer) => peer.segments.includes(segmentName))
+      .filter((peer) => peer.segments.includes(segmentName) && this.sameRendition(peer))
       .map((peer) => this.copyPeer(peer));
   }
 
   allPeers(): Peer[] {
-    return [...this.peers.values()].map((peer) => this.copyPeer(peer));
+    return [...this.peers.values()]
+      .filter((peer) => this.sameRendition(peer))
+      .map((peer) => this.copyPeer(peer));
+  }
+
+  /** False only when both this peer and `peer` name a rendition and they differ. */
+  private sameRendition(peer: Peer): boolean {
+    const theirs = peer.metadata?.[PEER_METADATA_RENDITION];
+    return theirs === undefined || this.options.rendition === undefined || theirs === this.options.rendition;
   }
 
   getPeerSessionToken(): string {

@@ -2,7 +2,12 @@
 import { randomBytes } from "node:crypto";
 import { hostname } from "node:os";
 import { pathToFileURL } from "node:url";
-import { createLogger, isMediaSegmentFileName } from "@openstreamgrid/common";
+import {
+  createLogger,
+  isMediaSegmentFileName,
+  PEER_METADATA_RENDITION,
+  renditionDirectory,
+} from "@openstreamgrid/common";
 import WebSocket from "ws";
 import { SegmentCache } from "./cache.js";
 import { HybridSegmentFetcher } from "./fetcher.js";
@@ -240,14 +245,20 @@ class PeerApplication {
   private readonly fetcher: HybridSegmentFetcher;
   private readonly inFlightSegments = new Set<string>();
   private readonly uploadToken = randomBytes(32).toString("base64url");
+  /** Rendition directory this peer's segments come from, advertised on join. */
+  private readonly rendition: string | undefined;
 
   constructor(private readonly configuration: PeerConfiguration) {
     this.cache = new SegmentCache(
       configuration.cacheSizeBytes,
       configuration.cacheTtlMs,
     );
+    this.rendition = renditionDirectory(
+      new URL("segment.ts", configuration.originBaseUrl).pathname,
+    );
     this.tracker = new TrackerClient({
       trackerUrl: configuration.trackerUrl,
+      ...(this.rendition ? { rendition: this.rendition } : {}),
       ...(configuration.trackerApiKey
         ? { apiKey: configuration.trackerApiKey }
         : {}),
@@ -333,7 +344,10 @@ class PeerApplication {
         id: this.configuration.peerId,
         address: this.configuration.peerAddress,
         uploadBandwidthBps: this.configuration.maxUploadSpeedBps,
-        metadata: { uploadToken: this.uploadToken },
+        metadata: {
+          uploadToken: this.uploadToken,
+          ...(this.rendition ? { [PEER_METADATA_RENDITION]: this.rendition } : {}),
+        },
       });
       this.transportManager.setSessionToken(this.tracker.getPeerSessionToken());
       await Promise.all([
