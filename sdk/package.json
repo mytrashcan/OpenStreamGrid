@@ -36,6 +36,11 @@
   "peerDependencies": {
     "hls.js": "^1.5.0"
   },
+  "peerDependenciesMeta": {
+    "hls.js": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@openstreamgrid/common": "file:../common",
     "@roamhq/wrtc": "^0.10.0",

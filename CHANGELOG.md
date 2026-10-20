@@ -132,6 +132,13 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Fixed
 
+- The SDK package's type declarations imported `@openstreamgrid/common`, a
+  private workspace package that is not published, so TypeScript consumers got
+  `Cannot find module` errors (or, with `skipLibCheck`, untyped scheduler
+  options). The build now ships those declarations inside `dist/types` and
+  fails if a declaration imports anything but relative paths or `hls.js`.
+  `hls.js` is now an optional peer dependency, since Shaka Player apps do not
+  need it.
 - The Node peer gives up on a segment after three failed attempts instead of
   downloading it from the origin again on every playlist poll, which a
   missing sidecar caused indefinitely. It logs `segment_skipped`.
