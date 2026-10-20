@@ -840,6 +840,29 @@ const readJson = async (request: IncomingMessage): Promise<JsonObject> => {
   }
 };
 
+/**
+ * Peer IDs and addresses appear in every peer list and in each inventory
+ * update about the peer, so they are kept to identifier and URL sizes.
+ */
+const MAX_PEER_ID_LENGTH = 128;
+const MAX_PEER_ADDRESS_LENGTH = 2_048;
+const PEER_ID_PATTERN = /^[^\s\p{Cc}]+$/u;
+
+const boundedString = (value: string, key: string, maxLength: number): string => {
+  if (value.length > maxLength) {
+    throw new RequestError(`'${key}' must be at most ${maxLength} characters`);
+  }
+  return value;
+};
+
+const peerIdentifier = (value: string): string => {
+  boundedString(value, "id", MAX_PEER_ID_LENGTH);
+  if (!PEER_ID_PATTERN.test(value)) {
+    throw new RequestError("'id' must not contain whitespace or control characters");
+  }
+  return value;
+};
+
 const requiredString = (body: JsonObject, key: string): string => {
   const value = body[key];
   if (typeof value !== "string" || value.trim() === "") {
@@ -1251,8 +1274,8 @@ export const createTrackerHandler = (
           );
           const metadata = optionalMetadata(body);
           const join: PeerJoinRequest = {
-            id: requiredString(body, "id"),
-            address: requiredString(body, "address"),
+            id: peerIdentifier(requiredString(body, "id")),
+            address: boundedString(requiredString(body, "address"), "address", MAX_PEER_ADDRESS_LENGTH),
             ...(uploadBandwidthBps !== undefined ? { uploadBandwidthBps } : {}),
             ...(metadata ? { metadata } : {}),
           };

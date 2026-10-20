@@ -113,6 +113,9 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Changed
 
+- Peer joins reject IDs over 128 characters or containing whitespace or control
+  characters, and addresses over 2048 characters. Both were bounded only by
+  the 1 MB body limit and are repeated in every peer list and inventory update.
 - The tracker keeps at most 128 KiB of segment-ID characters per peer, in
   addition to 2000 segments, dropping the oldest. Up to 2000 IDs of 512
   characters let one peer carry about a megabyte of inventory into every peer
