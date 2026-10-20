@@ -113,6 +113,9 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Changed
 
+- Peer joins reject IDs over 128 characters or containing whitespace or control
+  characters, and addresses over 2048 characters. Both were bounded only by
+  the 1 MB body limit and are repeated in every peer list and inventory update.
 - Each peer may report at most 16 K characters of segment IDs per second
   (bursts of 256 K), across WebSocket and REST; beyond that its WebSocket is
   closed with `1008` and REST reports get `429`. REST segment reports also get
