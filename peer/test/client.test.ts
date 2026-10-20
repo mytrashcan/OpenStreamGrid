@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseArguments, resolveMediaPlaylist, SegmentAttempts } from "../src/client.js";
+import {
+  parseArguments,
+  peerUsage,
+  resolveMediaPlaylist,
+  SegmentAttempts,
+  wantsHelp,
+} from "../src/client.js";
 import { playlistSegments, playlistVariants, selectVariant } from "../src/playlist.js";
 
 const environment = {
@@ -279,4 +285,32 @@ test("keeps a media playlist and stops retrying once aborted", async () => {
     },
   );
   assert.equal(aborted.playlistUrl.href, "http://origin:8080/hls/stream.m3u8");
+});
+
+test("documents every CLI flag in --help", () => {
+  const usage = peerUsage();
+  const examples: Record<string, string> = {
+    "tracker-url": "http://tracker:7070",
+    "tracker-api-key": "secret",
+    "broadcast-id": "live",
+    "origin-url": "http://origin:8080/hls",
+    rendition: "med",
+    "peer-address": "http://peer-a:9090",
+    "peer-id": "peer-a",
+    "cache-size": "64MB",
+    "cache-ttl-ms": "60000",
+    "max-upload-speed": "4Mbps",
+    "max-connections": "2",
+    "parallel-downloads": "2",
+    "webrtc-enabled": "false",
+  };
+  for (const [flag, value] of Object.entries(examples)) {
+    assert.match(usage, new RegExp(`--${flag} `), flag);
+    // Every documented flag is accepted.
+    assert.doesNotThrow(() => parseArguments([`--${flag}`, value], environment), flag);
+  }
+  assert.equal(usage.match(/^ {2}--/gm)?.length, Object.keys(examples).length);
+  assert.equal(wantsHelp(["--help"]), true);
+  assert.equal(wantsHelp(["-h"]), true);
+  assert.equal(wantsHelp(["--peer-id", "a"]), false);
 });

@@ -11,6 +11,9 @@ All notable changes to OpenStreamGrid are documented in this file.
   attempts fall back to the origin, credential refusals spike, or the event
   loop lags. CI lints the chart with its optional templates enabled, and a test
   checks that the alerts query only exported metrics.
+- `--help` for the Node peer (every CLI flag with its environment variable
+  and default) and the sidecar writer. The peer's accepted flags and its help
+  text come from one table, so they cannot drift apart.
 - Prometheus counters for refused requests: `openstreamgrid_auth_failures_total`
   (HTTP 401/403 and WebSocket upgrades with a bad session),
   `openstreamgrid_ws_upgrades_rejected_total` by reason, and

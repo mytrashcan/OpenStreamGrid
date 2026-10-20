@@ -78,7 +78,12 @@ test("the command line runs one pass with --once", async (context) => {
     await readFile(path.join(root, "seg_1.m4s.sha256"), "utf8"),
     `${sha256("fmp4")}  seg_1.m4s\n`,
   );
-  await assert.rejects(promisify(execFile)(process.execPath, [script]), /Usage: sidecars\.js/);
+  await assert.rejects(
+    promisify(execFile)(process.execPath, [script]),
+    /Missing <hls-directory>; run with --help for usage/,
+  );
+  const help = await promisify(execFile)(process.execPath, [script, "--help"]);
+  assert.match(help.stdout, /^Usage: sidecars\.js <hls-directory> \[--once\] \[--interval <ms>\]/);
   await assert.rejects(
     promisify(execFile)(process.execPath, [script, root, "--interval", "3600000"]),
     /--interval must be between 100 and 60000 milliseconds/,
