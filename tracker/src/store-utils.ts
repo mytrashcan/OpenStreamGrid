@@ -77,3 +77,31 @@ export const penalizePeerQuality = (
     ),
   };
 };
+
+/**
+ * Total segment-ID characters kept per peer. Inventories travel in every peer
+ * list sent to the peer's neighbors, so this bounds that payload even when a
+ * peer reports the maximum number of segments with the longest IDs. Real
+ * inventories (hundreds of IDs under 100 characters) are far below it.
+ */
+export const MAX_INVENTORY_CHARACTERS_PER_PEER = 128 * 1024;
+
+/**
+ * The newest segments of `segments` (later entries are newer) that fit in
+ * `maxSegments` entries and `maxCharacters` characters of segment IDs.
+ */
+export const limitInventory = (
+  segments: readonly string[],
+  maxSegments: number,
+  maxCharacters = MAX_INVENTORY_CHARACTERS_PER_PEER,
+): string[] => {
+  let characters = 0;
+  let start = segments.length;
+  while (start > 0 && segments.length - start < maxSegments) {
+    const length = segments[start - 1]?.length ?? 0;
+    if (characters + length > maxCharacters) break;
+    characters += length;
+    start -= 1;
+  }
+  return segments.slice(start);
+};

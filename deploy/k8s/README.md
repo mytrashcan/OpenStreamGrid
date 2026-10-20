@@ -150,8 +150,18 @@ helm upgrade --install openstreamgrid helm/openstreamgrid \
   --namespace openstreamgrid \
   --set tracker.metrics.serviceMonitor.enabled=true \
   --set tracker.metrics.serviceMonitor.labels.release=kube-prometheus-stack \
+  --set tracker.metrics.prometheusRule.enabled=true \
+  --set tracker.metrics.prometheusRule.labels.release=kube-prometheus-stack \
   --set grafanaDashboard.enabled=true
 ```
+
+The optional `PrometheusRule` alerts when no tracker is up, when peers keep
+reporting integrity failures, when more than half of P2P attempts fall back
+to the origin, when credential refusals exceed
+`prometheusRule.authFailuresPerSecond`, and when the event loop's p99 delay
+exceeds `prometheusRule.eventLoopDelaySeconds`, each after
+`prometheusRule.for`. Match `prometheusRule.labels` to your Prometheus
+`ruleSelector`.
 
 Match `serviceMonitor.labels` to your Prometheus `serviceMonitorSelector`, and
 `grafanaDashboard.labels` to the sidecar's label (default `grafana_dashboard:
@@ -161,8 +171,10 @@ into Grafana and pick a Prometheus data source that scrapes the tracker.
 
 The dashboard covers active broadcasts and peers, P2P offload (P2P successes
 divided by P2P successes plus origin requests), P2P success rate, fallbacks,
-integrity failures, REST latency quantiles, peer churn, rate limiting, and
-WebSocket signaling (subscribers by delivery mode, messages and bytes sent).
+integrity failures, REST latency quantiles, peer churn, rate limiting,
+WebSocket signaling (subscribers by delivery mode, messages and bytes sent),
+and security (credential refusals, refused WebSocket upgrades, and REST
+responses by status class).
 
 ## Sizing
 

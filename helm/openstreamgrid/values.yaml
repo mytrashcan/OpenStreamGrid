@@ -54,6 +54,19 @@ tracker:
       scrapeTimeout: 10s
       # Extra labels, for example to match a Prometheus serviceMonitorSelector.
       labels: {}
+    prometheusRule:
+      # Alerts on the tracker's metrics; requires the Prometheus Operator CRDs
+      # and the ServiceMonitor above (the rules select its scrape target).
+      enabled: false
+      # How long a condition must hold before its alert fires.
+      for: 10m
+      # Credential refusals per second (HTTP 401/403 and WebSocket upgrades
+      # with a bad session) that count as an attack or a misconfigured client.
+      authFailuresPerSecond: 1
+      # Event-loop delay p99 above which signaling is too slow for viewers.
+      eventLoopDelaySeconds: 0.2
+      # Extra labels, for example to match a Prometheus ruleSelector.
+      labels: {}
 
 origin:
   image:

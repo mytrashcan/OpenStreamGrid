@@ -14,6 +14,7 @@ import {
 } from "@openstreamgrid/common";
 import {
   clampUnitInterval,
+  limitInventory,
   PeerFailureConsensus,
   penalizePeerQuality,
   sanitizePeerTrafficStats,
@@ -268,8 +269,9 @@ export class TrackerStore implements TrackerStoreBackend {
     const nextSegments = replace
       ? segments
       : [...peerState.peer.segments, ...segments];
-    peerState.peer.segments = [...new Set(nextSegments)].slice(
-      -this.maxSegmentsPerPeer,
+    peerState.peer.segments = limitInventory(
+      [...new Set(nextSegments)],
+      this.maxSegmentsPerPeer,
     );
     peerState.peer.lastSeenAt = this.timestamp();
     return this.copyPeer(peerState.peer);
@@ -285,7 +287,7 @@ export class TrackerStore implements TrackerStoreBackend {
     const next = new Set(peerState.peer.segments);
     for (const segment of removed) next.delete(segment);
     for (const segment of added) next.add(segment);
-    peerState.peer.segments = [...next].slice(-this.maxSegmentsPerPeer);
+    peerState.peer.segments = limitInventory([...next], this.maxSegmentsPerPeer);
     peerState.peer.lastSeenAt = this.timestamp();
     return this.copyPeer(peerState.peer);
   }

@@ -24,6 +24,7 @@ import {
 } from "./store.js";
 import {
   clampUnitInterval,
+  limitInventory,
   PeerFailureConsensus,
   penalizePeerQuality,
   sanitizePeerTrafficStats,
@@ -586,8 +587,9 @@ export class SQLiteStore implements TrackerStoreBackend {
     this.groupWrites();
     this.requirePeer(broadcastId, peerId);
     const existing = this.getSegments(broadcastId, peerId);
-    const nextSegments = [...new Set(replace ? segments : [...existing, ...segments])].slice(
-      -this.maxSegmentsPerPeer,
+    const nextSegments = limitInventory(
+      [...new Set(replace ? segments : [...existing, ...segments])],
+      this.maxSegmentsPerPeer,
     );
     const existingSet = new Set(existing);
     const nextSet = new Set(nextSegments);
@@ -623,7 +625,7 @@ export class SQLiteStore implements TrackerStoreBackend {
       const next = new Set(existing);
       for (const segment of removed) next.delete(segment);
       for (const segment of added) next.add(segment);
-      const nextSegments = [...next].slice(-this.maxSegmentsPerPeer);
+      const nextSegments = limitInventory([...next], this.maxSegmentsPerPeer);
       const existingSet = new Set(existing);
       const nextSet = new Set(nextSegments);
       for (const segment of existing) {

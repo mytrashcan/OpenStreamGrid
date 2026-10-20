@@ -6,6 +6,14 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Added
 
+- Optional Helm `PrometheusRule` (`tracker.metrics.prometheusRule`) that alerts
+  when no tracker is up, peers keep reporting integrity failures, most P2P
+  attempts fall back to the origin, credential refusals spike, or the event
+  loop lags. CI lints the chart with its optional templates enabled, and a test
+  checks that the alerts query only exported metrics.
+- `--help` for the Node peer (every CLI flag with its environment variable
+  and default) and the sidecar writer. The peer's accepted flags and its help
+  text come from one table, so they cannot drift apart.
 - Prometheus counters for refused requests: `openstreamgrid_auth_failures_total`
   (HTTP 401/403 and WebSocket upgrades with a bad session),
   `openstreamgrid_ws_upgrades_rejected_total` by reason, and
@@ -105,6 +113,10 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Changed
 
+- The tracker keeps at most 128 KiB of segment-ID characters per peer, in
+  addition to 2000 segments, dropping the oldest. Up to 2000 IDs of 512
+  characters let one peer carry about a megabyte of inventory into every peer
+  list sent to its neighbors.
 - The tracker limits broadcast and peer metadata to 32 string entries with
   short keys, 1024-character values, and 4096 characters in total, and rejects
   larger metadata with `400`. Peer metadata is relayed in every peer list, so
