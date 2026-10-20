@@ -359,7 +359,14 @@ before additions, as for `segment_inventory_delta`. Updates from a peer that
 left before the batch was sent are dropped, so `peer_left` is never followed by
 a stale update. A batch carries at most 256 entries; larger batches are split.
 
-Malformed frames are rejected. Connections are closed during tracker shutdown;
+Malformed frames are rejected. Frames are limited to 64 KiB and each
+connection to 20 messages per second (bursts of 40). A segment report carries
+at most 512 IDs of up to 512 characters, and each peer may report 16 K
+characters of segment IDs per second (bursts of 256 K, enough to re-report a
+full inventory after reconnecting), counted across WebSocket and REST
+reports. A connection over a limit is closed with code `1008`; a REST report
+over the rate gets `429`. The tracker keeps at most 2000 segments and 128 KiB
+of segment IDs per peer, dropping the oldest. Connections are closed during tracker shutdown;
 clients should reconnect with exponential backoff and resubscribe.
 
 ## Browser SDK events

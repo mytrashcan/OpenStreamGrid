@@ -24,6 +24,12 @@ import {
 } from "./peer-session.js";
 import { clientAddress } from "./client-address.js";
 import {
+  InventoryRateLimiter,
+  MAX_SEGMENT_ID_LENGTH,
+  MAX_SEGMENTS_PER_REPORT,
+  segmentIdList,
+} from "./inventory-limits.js";
+import {
   issueTurnCredentials,
   TURN_CREDENTIAL_GRACE_MS,
   type TurnCredentialOptions,
@@ -959,14 +965,6 @@ const optionalMetadata = (
   return metadata;
 };
 
-const stringArray = (body: JsonObject, key: string): string[] => {
-  const value = body[key];
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
-    throw new RequestError(`'${key}' must be an array of strings`);
-  }
-  return value;
-};
-
 const decodedPathComponent = (value: string): string => {
   try {
     return decodeURIComponent(value);
@@ -1000,6 +998,8 @@ export interface TrackerHttpOptions {
   maxPeersPerBroadcast?: number;
   metrics?: TrackerMetrics;
   rateLimiter?: IpRateLimiter;
+  /** Shared with the WebSocket hub so a peer's reports count once across both. */
+  inventoryLimiter?: InventoryRateLimiter;
   turn?: TurnCredentialOptions;
   /** Reverse proxies in front of the tracker whose X-Forwarded-For is trusted. */
   trustProxyHops?: number;
@@ -1018,6 +1018,7 @@ export const createTrackerHandler = (
   options: TrackerHttpOptions = {},
 ) => {
   const metrics = options.metrics ?? new TrackerMetrics();
+  const inventoryLimiter = options.inventoryLimiter ?? new InventoryRateLimiter();
   const rateLimiter =
     options.rateLimiter ??
     new IpRateLimiter(
@@ -1192,8 +1193,17 @@ export const createTrackerHandler = (
         if (action === "segments" && method === "POST") {
           requirePeerSession(broadcastId, peerId);
           const replace = optionalBoolean(body, "replace");
+          const segments = segmentIdList(body.segments);
+          if (!segments) {
+            throw new RequestError(
+              `'segments' must be an array of at most ${MAX_SEGMENTS_PER_REPORT} non-empty strings of up to ${MAX_SEGMENT_ID_LENGTH} characters`,
+            );
+          }
+          if (!inventoryLimiter.consume(broadcastId, peerId, [segments])) {
+            throw new RequestError("Segment report rate limit exceeded", 429);
+          }
           const report: SegmentPossessionReport = {
-            segments: stringArray(body, "segments"),
+            segments,
             ...(replace !== undefined ? { replace } : {}),
           };
           const peer = store.reportSegments(
@@ -1496,8 +1506,10 @@ export class TrackerServer {
       broadcastListChanged: () => webSockets?.broadcastListChanged(),
       broadcastRemoved: (broadcastId) => webSockets?.broadcastRemoved(broadcastId),
     };
+    const inventoryLimiter = new InventoryRateLimiter();
     this.server = createServer(
       createTrackerHandler(store, events, this.statsEvents, {
+        inventoryLimiter,
         rateLimitRps: configuration.rateLimitRps,
         rateLimitBurst: configuration.rateLimitBurst,
         maxPeersPerBroadcast: configuration.maxPeersPerBroadcast,
@@ -1523,6 +1535,7 @@ export class TrackerServer {
       this.statsEvents,
       peerSessions,
       {
+        inventoryLimiter,
         ...(configuration.wsAllowedOrigins
           ? { allowedOrigins: configuration.wsAllowedOrigins }
           : {}),
