@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { PeerTrafficStats } from "@openstreamgrid/common";
 import { StoreError, TrackerStore } from "../src/store.js";
+import { limitInventory, MAX_INVENTORY_CHARACTERS_PER_PEER } from "../src/store-utils.js";
 
 const stats = (origin: number, p2p: number): PeerTrafficStats => ({
   bytesDownloadedP2P: p2p,
@@ -245,4 +246,25 @@ test("applySegmentDelta merges deltas under the segment cap", () => {
     () => store.applySegmentDelta("live", "missing", [], []),
     StoreError,
   );
+});
+
+test("bounds each peer's inventory by segment count and ID characters", () => {
+  assert.deepEqual(limitInventory(["a", "b", "c", "d"], 2), ["c", "d"]);
+  assert.deepEqual(limitInventory(["aaaa", "bb", "cc"], 10, 5), ["bb", "cc"]);
+  assert.deepEqual(limitInventory(["aaaaaa"], 10, 5), []);
+
+  const store = new TrackerStore(() => new Date("2026-07-17T00:00:00.000Z"));
+  store.registerBroadcast({ id: "live", playlistUrl: "http://origin/hls/stream.m3u8" });
+  store.joinPeer("live", { id: "peer-a", address: "http://peer-a:9090" });
+  const longIds = (from: number, count: number): string[] =>
+    Array.from({ length: count }, (_, index) => `${String(from + index).padStart(500, "0")}.ts`);
+  for (let batch = 0; batch < 4; batch += 1) {
+    store.reportSegments("live", "peer-a", longIds(batch * 500, 500));
+  }
+  const segments = store.listPeers("live")[0]?.segments ?? [];
+  const characters = segments.reduce((total, segment) => total + segment.length, 0);
+  assert.ok(characters <= MAX_INVENTORY_CHARACTERS_PER_PEER, `${characters} characters`);
+  assert.ok(segments.length > 0 && segments.length < 2_000);
+  // The newest segments are the ones kept.
+  assert.equal(segments.at(-1), longIds(1_999, 1)[0]);
 });

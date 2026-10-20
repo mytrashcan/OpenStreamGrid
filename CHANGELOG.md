@@ -105,6 +105,10 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Changed
 
+- The tracker keeps at most 128 KiB of segment-ID characters per peer, in
+  addition to 2000 segments, dropping the oldest. Up to 2000 IDs of 512
+  characters let one peer carry about a megabyte of inventory into every peer
+  list sent to its neighbors.
 - The tracker limits broadcast and peer metadata to 32 string entries with
   short keys, 1024-character values, and 4096 characters in total, and rejects
   larger metadata with `400`. Peer metadata is relayed in every peer list, so

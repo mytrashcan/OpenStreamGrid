@@ -9,6 +9,7 @@ import { createConfiguredStore } from "../src/server.js";
 import { LATEST_SCHEMA_VERSION } from "../src/sqlite-migration.js";
 import { SQLiteStore } from "../src/sqlite-store.js";
 import { StoreError, TrackerStore } from "../src/store.js";
+import { MAX_INVENTORY_CHARACTERS_PER_PEER } from "../src/store-utils.js";
 
 const trafficStats = (
   overrides: Partial<PeerTrafficStats> = {},
@@ -518,4 +519,20 @@ test("returns the same peer from writes as reading it back", (context) => {
     () => store.reportStats("missing", "peer-a", trafficStats()),
     (error: unknown) => error instanceof StoreError && /Broadcast 'missing'/.test(error.message),
   );
+});
+
+test("bounds each peer's inventory by ID characters in SQLite too", (context) => {
+  const store = new SQLiteStore(temporaryDatabasePath(context), () => new Date("2026-07-17T00:00:00.000Z"));
+  context.after(() => store.close());
+  store.registerBroadcast({ id: "live", playlistUrl: "http://origin/hls/stream.m3u8" });
+  store.joinPeer("live", { id: "peer-a", address: "http://peer-a:9090" });
+  const longIds = (from: number, count: number): string[] =>
+    Array.from({ length: count }, (_, index) => `${String(from + index).padStart(500, "0")}.ts`);
+  store.reportSegments("live", "peer-a", longIds(0, 400));
+  store.applySegmentDelta("live", "peer-a", longIds(400, 400), []);
+  const segments = store.listPeers("live")[0]?.segments ?? [];
+  const characters = segments.reduce((total, segment) => total + segment.length, 0);
+  assert.ok(characters <= MAX_INVENTORY_CHARACTERS_PER_PEER, `${characters} characters`);
+  assert.ok(segments.includes(longIds(799, 1)[0] ?? ""));
+  assert.ok(!segments.includes(longIds(0, 1)[0] ?? ""));
 });
