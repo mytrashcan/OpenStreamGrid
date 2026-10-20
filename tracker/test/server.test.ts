@@ -15,6 +15,7 @@ import {
   type TrackerStatsSnapshot,
 } from "../src/server.js";
 import { TrackerStore } from "../src/store.js";
+import { InventoryRateLimiter } from "../src/inventory-limits.js";
 
 interface TestResponse {
   status: number;
@@ -2144,4 +2145,38 @@ test("closes WebSockets that report inventory faster than it can be relayed", as
     socket?.terminate();
     await server.stop();
   }
+});
+
+test("validates and rate-limits REST segment reports with the WebSocket budget", async () => {
+  let now = 0;
+  const inventoryLimiter = new InventoryRateLimiter(10, 3_000, () => now);
+  const handler = createTrackerHandler(new TrackerStore(), {}, undefined, { inventoryLimiter });
+  await invoke(handler, "POST", "/api/v1/broadcasts", {
+    id: "live",
+    playlistUrl: "http://origin/live.m3u8",
+  });
+  const joined = await invoke(handler, "POST", "/api/v1/broadcasts/live/peers", {
+    id: "peer-a",
+    address: "http://peer-a:9090",
+  });
+  const auth = {
+    authorization: `Bearer ${(joined.json as { sessionToken: string }).sessionToken}`,
+  };
+  const report = (segments: unknown) =>
+    invoke(handler, "POST", "/api/v1/broadcasts/live/peers/peer-a/segments", { segments }, auth);
+
+  const tooLong = await report(["x".repeat(513)]);
+  assert.equal(tooLong.status, 400);
+  assert.deepEqual(tooLong.json, {
+    error: "'segments' must be an array of at most 512 non-empty strings of up to 512 characters",
+  });
+  assert.equal((await report(["x".repeat(500), "y".repeat(500)])).status, 200);
+  assert.equal((await report(["z".repeat(500)])).status, 200);
+  // 1500 of 3000 characters remain; the WebSocket hub would draw from the same budget.
+  assert.equal(inventoryLimiter.consume("live", "peer-a", [["w".repeat(1_400)]]), true);
+  const limited = await report(["v".repeat(500)]);
+  assert.equal(limited.status, 429);
+  assert.deepEqual(limited.json, { error: "Segment report rate limit exceeded" });
+  now = 60_000;
+  assert.equal((await report(["v".repeat(500)])).status, 200);
 });

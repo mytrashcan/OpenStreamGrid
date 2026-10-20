@@ -113,10 +113,12 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Changed
 
-- Tracker WebSocket connections may report at most 16 K characters of segment
-  IDs per second (bursts of 256 K) and are closed with `1008` beyond that.
-  Reports are relayed to every neighbor, so the message-rate limit alone let
-  one connection make the tracker relay over a megabyte per second to each.
+- Each peer may report at most 16 K characters of segment IDs per second
+  (bursts of 256 K), across WebSocket and REST; beyond that its WebSocket is
+  closed with `1008` and REST reports get `429`. REST segment reports also get
+  the WebSocket limits of 512 IDs of up to 512 characters, where they were
+  unbounded. Reports are relayed to every neighbor, so these limits bound what
+  one peer can make the tracker send.
 - The tracker keeps at most 128 KiB of segment-ID characters per peer, in
   addition to 2000 segments, dropping the oldest. Up to 2000 IDs of 512
   characters let one peer carry about a megabyte of inventory into every peer

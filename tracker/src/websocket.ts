@@ -18,6 +18,7 @@ import {
   bearerToken,
   type PeerSessionClaims,
 } from "./peer-session.js";
+import { InventoryRateLimiter, segmentIdList } from "./inventory-limits.js";
 import { NeighborViews, type NeighborViewFill } from "./neighbor-views.js";
 import type { TrackerStoreBackend } from "./store.js";
 
@@ -63,8 +64,6 @@ type InventoryMessage = Extract<
 
 interface MessageBudget {
   tokens: number;
-  /** Segment-ID characters this socket may still report (see below). */
-  inventoryCharacters: number;
   updatedAt: number;
 }
 
@@ -76,18 +75,8 @@ const VIEWERS_PER_FLUSH_TURN = 256;
 const MAX_SUBSCRIBE_FEATURES = 16;
 const MAX_BUFFERED_WEB_SOCKET_BYTES = 1024 * 1024;
 const MAX_WEB_SOCKET_PAYLOAD_BYTES = 64 * 1024;
-const MAX_SEGMENTS_PER_REPORT = 512;
-const MAX_SEGMENT_ID_LENGTH = 512;
 const MESSAGE_RATE_PER_SECOND = 20;
 const MESSAGE_BURST = 40;
-/**
- * Inventory reports are relayed to every neighbor, so their volume is limited
- * separately from the message count: a sustained 16 K characters of segment
- * IDs per second, with bursts of 256 K for the full inventory a client
- * re-reports after reconnecting. Clients report a few IDs per segment.
- */
-const INVENTORY_CHARACTERS_PER_SECOND = 16 * 1024;
-const INVENTORY_BURST_CHARACTERS = 256 * 1024;
 const MAX_CONNECTIONS_PER_IP = 20;
 const INVALID_MESSAGE_CLOSE_CODE = 1_008;
 const BROADCAST_REMOVED_CLOSE_CODE = 4_004;
@@ -154,19 +143,8 @@ const optionalUnitInterval = (
 };
 
 const requiredSegments = (message: JsonObject): string[] => {
-  const segments = message.segments;
-  if (
-    !Array.isArray(segments) ||
-    segments.length > MAX_SEGMENTS_PER_REPORT ||
-    segments.some(
-      (segment) =>
-        typeof segment !== "string" ||
-        segment.length === 0 ||
-        segment.length > MAX_SEGMENT_ID_LENGTH,
-    )
-  ) {
-    throw new Error("'segments' must be an array of strings");
-  }
+  const segments = segmentIdList(message.segments);
+  if (!segments) throw new Error("'segments' must be an array of strings");
   return segments;
 };
 
@@ -195,6 +173,8 @@ export interface TrackerWebSocketOptions {
   neighborViewSize?: number;
   /** Neighbor-view subscribers served per event-loop turn (default 256). */
   viewersPerFlushTurn?: number;
+  /** Shared with the REST API so a peer's reports count once across both. */
+  inventoryLimiter?: InventoryRateLimiter;
 }
 
 /** WebSocket fan-out counters exported as Prometheus metrics. */
@@ -223,6 +203,7 @@ export class TrackerWebSocketHub implements TrackerEvents {
   private readonly flushRequested = new Set<string>();
   private readonly sessions = new Map<WebSocket, PeerSessionClaims>();
   private readonly messageBudgets = new Map<WebSocket, MessageBudget>();
+  private readonly inventoryLimiter: InventoryRateLimiter;
   private readonly connectionIps = new Map<WebSocket, string>();
   private readonly connectionsPerIp = new Map<string, number>();
   private readonly sessionExpiryTimers = new Map<WebSocket, NodeJS.Timeout>();
@@ -242,6 +223,7 @@ export class TrackerWebSocketHub implements TrackerEvents {
     private readonly peerSessions = new PeerSessionTokenService(),
     private readonly options: TrackerWebSocketOptions = {},
   ) {
+    this.inventoryLimiter = options.inventoryLimiter ?? new InventoryRateLimiter();
     const neighborViewSize = options.neighborViewSize ?? DEFAULT_NEIGHBOR_VIEW_SIZE;
     this.neighborViews =
       neighborViewSize > 0 ? new NeighborViews(neighborViewSize) : undefined;
@@ -250,7 +232,6 @@ export class TrackerWebSocketHub implements TrackerEvents {
       this.subscriptions.set(socket, EMPTY_SUBSCRIPTION);
       this.messageBudgets.set(socket, {
         tokens: MESSAGE_BURST,
-        inventoryCharacters: INVENTORY_BURST_CHARACTERS,
         updatedAt: Date.now(),
       });
       socket.on("message", (data, isBinary) => {
@@ -563,7 +544,7 @@ export class TrackerWebSocketHub implements TrackerEvents {
         if (parsed.added !== undefined || parsed.removed !== undefined) {
           const added = requiredSegments({ segments: parsed.added ?? [] });
           const removed = requiredSegments({ segments: parsed.removed ?? [] });
-          if (!this.consumeInventoryBudget(socket, [added, removed])) {
+          if (!this.inventoryLimiter.consume(broadcastId, peerId, [added, removed])) {
             throw new Error("Segment report rate limit exceeded");
           }
           this.store.applySegmentDelta(broadcastId, peerId, added, removed);
@@ -580,7 +561,7 @@ export class TrackerWebSocketHub implements TrackerEvents {
         if (parsed.replace !== undefined && typeof parsed.replace !== "boolean") {
           throw new Error("'replace' must be a boolean");
         }
-        if (!this.consumeInventoryBudget(socket, [segments])) {
+        if (!this.inventoryLimiter.consume(broadcastId, peerId, [segments])) {
           throw new Error("Segment report rate limit exceeded");
         }
         const replace = parsed.replace;
@@ -762,31 +743,13 @@ export class TrackerWebSocketHub implements TrackerEvents {
     const budget = this.messageBudgets.get(socket);
     if (!budget) return false;
     const now = Date.now();
-    const elapsedSeconds = (now - budget.updatedAt) / 1_000;
     budget.tokens = Math.min(
       MESSAGE_BURST,
-      budget.tokens + elapsedSeconds * MESSAGE_RATE_PER_SECOND,
-    );
-    budget.inventoryCharacters = Math.min(
-      INVENTORY_BURST_CHARACTERS,
-      budget.inventoryCharacters + elapsedSeconds * INVENTORY_CHARACTERS_PER_SECOND,
+      budget.tokens + ((now - budget.updatedAt) / 1_000) * MESSAGE_RATE_PER_SECOND,
     );
     budget.updatedAt = now;
     if (budget.tokens < 1) return false;
     budget.tokens -= 1;
-    return true;
-  }
-
-  /** Charges an inventory report's segment IDs; false once the socket is over its rate. */
-  private consumeInventoryBudget(socket: WebSocket, segmentLists: readonly string[][]): boolean {
-    const budget = this.messageBudgets.get(socket);
-    if (!budget) return false;
-    let characters = 0;
-    for (const segments of segmentLists) {
-      for (const segment of segments) characters += segment.length;
-    }
-    if (characters > budget.inventoryCharacters) return false;
-    budget.inventoryCharacters -= characters;
     return true;
   }
 
