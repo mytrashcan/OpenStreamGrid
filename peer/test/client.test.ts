@@ -3,12 +3,11 @@ import test from "node:test";
 import {
   parseArguments,
   peerUsage,
-  playlistVariants,
   resolveMediaPlaylist,
   SegmentAttempts,
-  selectVariant,
   wantsHelp,
 } from "../src/client.js";
+import { playlistSegments, playlistVariants, selectVariant } from "../src/playlist.js";
 
 const environment = {
   PEER_ADDRESS: "http://peer-a:9090",
@@ -173,8 +172,7 @@ test("validates required peer environment configuration", () => {
   );
 });
 
-test("lists MPEG-TS and fMP4 media segments but not init segments", async () => {
-  const { playlistSegments } = await import("../src/client.js");
+test("lists MPEG-TS and fMP4 media segments but not init segments", () => {
   const playlist = [
     "#EXTM3U",
     '#EXT-X-MAP:URI="epoch_init_low.mp4"',
