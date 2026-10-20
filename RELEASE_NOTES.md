@@ -1,3 +1,64 @@
+# OpenStreamGrid 0.7.0 Release Notes
+
+OpenStreamGrid 0.7.0 makes tracker signaling scale with the audience, brings
+P2P offload to LL-HLS viewers and existing origins, and hardens the tracker
+and peers against abusive clients. The full list is in the
+[changelog](CHANGELOG.md#070---2026-10-20).
+
+## Highlights
+
+- **Signaling that scales linearly.** Clients negotiate `inventory_batch` and
+  `neighbor_view`: inventory updates are batched every 250 ms and each viewer
+  sees a bounded set of neighbors (`TRACKER_NEIGHBOR_VIEW_SIZE`, default 64).
+  One tracker serves 4000 peers in one broadcast at under half a core
+  ([Tracker capacity](docs/tracker-capacity.md)).
+- **LL-HLS.** Partial segments load from the origin, and with
+  `assembleLowLatencySegments` viewers at the live edge join a segment's parts,
+  verify it, and share it ([ADR 0002](docs/adr/0002-llhls-part-sharing.md)).
+- **Existing origins.** `origin/dist/sidecars.js` writes the SHA-256 sidecars
+  peers verify against for any packager's output. Node peers follow a
+  multivariant playlist to one rendition (`RENDITION`) and skip peers on other
+  renditions.
+- **Players.** `hlsJsConfig()` supports players that create hls.js themselves,
+  such as Video.js 10.
+- **Operations.** Metrics for signaling traffic, event-loop delay, and refused
+  requests; a Security row and event-loop panel in Grafana; an optional
+  `PrometheusRule`; `LOG_LEVEL`; and `--help` for the peer and sidecar CLIs.
+
+## Security
+
+- Peer addresses that are loopback, unspecified, or link-local are rejected,
+  including IPv4-mapped IPv6 literals, and Node peers refuse host names that
+  resolve to them.
+- The tracker bounds what one peer can make it relay: peer IDs (128
+  characters), addresses (2048), metadata (32 entries, 4096 characters),
+  inventories (2000 segments, 128 KiB of IDs), and reported segment IDs per
+  second across REST and WebSocket.
+- Node peers drop HTTP uploads to clients that stop reading for 10 s.
+- Tracker reconnects are jittered so an audience does not return in lockstep.
+
+## Upgrade notes
+
+- Joins with peer IDs over 128 characters or containing whitespace, addresses
+  over 2048 characters, or metadata beyond the new limits now get `400`.
+- REST segment reports are limited to 512 IDs of up to 512 characters, and a
+  peer reporting more than 16 K ID characters per second gets `429` (REST) or
+  has its WebSocket closed with `1008`.
+- SQLite writes from heartbeats and reports are committed once per event-loop
+  turn; a crash can lose that turn's writes.
+- In the SDK package, `hls.js` is an optional peer dependency, and the type
+  declarations no longer import the unpublished `@openstreamgrid/common`.
+
+## Validation
+
+- `npm run build`, `npm run typecheck`, `npm run lint`
+- `npm test` across all workspaces and the SDK
+- Browser E2E for hls.js (MPEG-TS, fMP4, LL-HLS parts), Shaka, and Video.js 10
+- Docker multi-peer test, with one peer following the master playlist
+- `helm lint` with the optional templates enabled
+
+---
+
 # OpenStreamGrid 0.6.1 Release Notes
 
 OpenStreamGrid 0.6.1 is a patch release for 0.6.0. It hardens tracker
