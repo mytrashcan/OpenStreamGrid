@@ -166,6 +166,10 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Fixed
 
+- The Node peer logs a playlist failure once when it starts or changes and once
+  when it clears (`playlist_processing_recovered`, `playlist_available`),
+  instead of on every poll, which wrote two lines per second while the origin
+  was down.
 - Node peers refuse to fetch from a peer whose host name resolves to a
   loopback, unspecified, or link-local address. The tracker rejects such
   addresses only as literals, so a host name like one that resolves to
