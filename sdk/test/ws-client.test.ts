@@ -226,6 +226,8 @@ test("applies batched inventory updates in order", async (context) => {
 
 test("reconnects with backoff and resets it after a peer list", async (context) => {
   context.mock.method(console, "error", () => {});
+  // Pin the jitter to the top of its range so the delays are the full backoff.
+  context.mock.method(Math, "random", () => 0.999);
   const sockets: FakeWebSocket[] = [];
   const openedAt: number[] = [];
   const events: string[] = [];

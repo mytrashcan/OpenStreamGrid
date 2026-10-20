@@ -183,6 +183,8 @@ test("negotiates and applies batched inventory updates", async () => {
 });
 
 test("backs off when sockets close before a valid peer list", async (context) => {
+  // Pin the jitter to the top of its range so the delays are the full backoff.
+  context.mock.method(Math, "random", () => 0.999);
   context.mock.method(console, "error", () => {});
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await new Promise<void>((resolve) => server.once("listening", resolve));

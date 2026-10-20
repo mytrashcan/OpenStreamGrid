@@ -4,6 +4,7 @@ import {
   addPeerTrafficStats,
   createEmptyPeerTrafficStats,
   renditionDirectory,
+  jitteredDelay,
   createLogger,
   parsePeerTrafficStats,
   isMediaSegmentFileName,
@@ -111,4 +112,14 @@ test("names the directory a path points into", () => {
   assert.equal(renditionDirectory("/hls/low/segment.ts"), "low");
   assert.equal(renditionDirectory("hls/low/segment.ts"), "low");
   assert.equal(renditionDirectory("/segment.ts"), undefined);
+});
+
+test("jitters reconnect delays between half and all of the backoff", () => {
+  assert.equal(jitteredDelay(1_000, () => 0), 500);
+  assert.equal(jitteredDelay(1_000, () => 0.5), 750);
+  assert.ok(jitteredDelay(1_000, () => 0.999_999) < 1_000);
+  for (let index = 0; index < 100; index += 1) {
+    const delay = jitteredDelay(2_000);
+    assert.ok(delay >= 1_000 && delay < 2_000);
+  }
 });

@@ -288,6 +288,15 @@ deleted. `--once` runs a single pass; `--interval <ms>` sets how often it
 looks for new segments (100 to 60000, default 1000). Serve the sidecars from the same place
 as the segments, or point the SDK's `hashUrlResolver` at them.
 
+Give each rendition's segments distinct file names if you can (for example
+`720p_000123.ts`, not `segment_000123.ts` in every rendition directory). Node
+peers advertise segments by file name, so with shared names a browser on one
+rendition can pick a Node peer holding another rendition's segment;
+verification rejects it, but the attempt is wasted and the peer's trust score
+drops. The bundled origin shares names across renditions (FFmpeg accepts the
+rendition in the directory or the file name, not both), so run its Node peers
+on the rendition most viewers watch.
+
 ## Tracker API
 
 Tracker resources are under `/api/v1`. Administrators send `X-API-Key: <key>`
