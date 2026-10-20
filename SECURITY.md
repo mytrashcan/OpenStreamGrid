@@ -50,6 +50,13 @@ prototype releases are not maintained unless a release notice says otherwise.
   Peer addresses are visible to other viewers: keep neighbor views enabled
   (`TRACKER_NEIGHBOR_VIEW_SIZE`) so each viewer sees only its neighbors, over
   both WebSocket and REST, rather than the whole audience.
+- Peers fetch from addresses other peers advertise. The tracker rejects
+  loopback, unspecified, and link-local peer addresses (including
+  IPv4-mapped IPv6 forms such as `[::ffff:169.254.169.254]`), and Node peers
+  also refuse host names that resolve to them. Private ranges stay allowed for
+  LAN and container deployments, so restrict Node peers' egress (for example
+  with a `NetworkPolicy`) if they run next to private services that should
+  not receive their requests.
 - Monitor authentication failures, rate-limit responses, integrity failures,
   fallback spikes, peer churn, and unexpected origin traffic.
 - Keep Node.js, FFmpeg, container base images, and npm dependencies patched.
@@ -59,9 +66,12 @@ prototype releases are not maintained unless a release notice says otherwise.
 SHA-256 sidecars detect corrupted segment bytes; they do not authenticate the
 content publisher unless the sidecar itself is delivered through a trusted,
 authenticated channel. Peers share only segments that matched a sidecar: when
-an origin segment's sidecar cannot be fetched, the browser SDK plays the
-origin bytes (as the player would without OpenStreamGrid) but never caches or
-shares them. The administrator API key is deployment-wide. Peer
+an origin segment's sidecar cannot be fetched, the browser SDK plays the origin
+bytes (as the player would without OpenStreamGrid) but never caches or shares
+them. Peer metadata is limited to a few short entries (32 entries, 4096
+characters) because the tracker relays it to other peers, and a Node peer drops
+uploads to clients that stop reading after 10 s, so idle connections cannot
+hold its upload slots. The administrator API key is deployment-wide. Peer
 sessions are short-lived and identity-scoped, but they do not replace viewer
 account authorization in the integrating service. The development Docker
 Compose topology is not a hardened internet-facing deployment.
