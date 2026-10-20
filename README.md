@@ -504,6 +504,7 @@ If OpenStreamGrid is useful to you, consider
 - [Security policy](SECURITY.md)
 - [Release notes](RELEASE_NOTES.md)
 - [Changelog](CHANGELOG.md)
+- [Roadmap](docs/ROADMAP.md)
 - [Kubernetes deployment guide](deploy/k8s/README.md)
 - [ADR 0001: Tracker horizontal scaling](docs/adr/0001-tracker-horizontal-scaling.md)
 - [ADR 0002: Sharing LL-HLS partial segments](docs/adr/0002-llhls-part-sharing.md)
