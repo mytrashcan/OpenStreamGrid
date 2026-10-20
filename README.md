@@ -396,7 +396,8 @@ codes, and origin/peer endpoints.
 | `TURN_USERNAME` | unset | TURN username |
 | `TURN_CREDENTIAL` | unset | TURN credential |
 
-Equivalent CLI flags are available for the primary peer options. Benchmark
+Equivalent CLI flags are available for the primary peer options;
+`node peer/dist/client.js --help` lists them. Benchmark
 configuration is available through the following environment variables.
 
 ### Browser SDK

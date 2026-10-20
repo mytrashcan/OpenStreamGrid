@@ -120,6 +120,16 @@ export const writeSidecars = async (root: string): Promise<SidecarPassResult> =>
   return { written, removed };
 };
 
+const USAGE = [
+  "Usage: sidecars.js <hls-directory> [--once] [--interval <ms>]",
+  "",
+  "Writes <segment>.sha256 next to every segment an HLS media playlist under",
+  "<hls-directory> lists, and removes sidecars whose segment is gone.",
+  "",
+  "  --once            Run a single pass and exit",
+  `  --interval <ms>   Time between passes, ${MIN_INTERVAL_MS} to ${MAX_INTERVAL_MS} (default ${DEFAULT_INTERVAL_MS})`,
+].join("\n");
+
 const parseArguments = (
   argv: string[],
 ): { root: string; once: boolean; intervalMs: number } => {
@@ -146,13 +156,18 @@ const parseArguments = (
     else throw new Error(`Unexpected argument '${argument}'`);
   }
   if (!root) {
-    throw new Error("Usage: sidecars.js <hls-directory> [--once] [--interval <ms>]");
+    throw new Error("Missing <hls-directory>; run with --help for usage");
   }
   return { root, once, intervalMs };
 };
 
 const run = async (): Promise<void> => {
-  const { root, once, intervalMs } = parseArguments(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(USAGE);
+    return;
+  }
+  const { root, once, intervalMs } = parseArguments(argv);
   let stopped = false;
   let wake: (() => void) | undefined;
   const stop = (): void => {

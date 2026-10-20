@@ -385,7 +385,8 @@ WebSocket의 `sessionToken` 쿼리로 사용합니다.
 | `TURN_USERNAME` | 미설정 | TURN 사용자 이름 |
 | `TURN_CREDENTIAL` | 미설정 | TURN 인증 정보 |
 
-주요 피어 설정에는 같은 이름의 CLI 옵션도 제공됩니다.
+주요 피어 설정에는 같은 이름의 CLI 옵션도 제공되며,
+`node peer/dist/client.js --help`로 목록을 볼 수 있습니다.
 
 ### 브라우저 SDK
 
