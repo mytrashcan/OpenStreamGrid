@@ -63,6 +63,8 @@ type InventoryMessage = Extract<
 
 interface MessageBudget {
   tokens: number;
+  /** Segment-ID characters this socket may still report (see below). */
+  inventoryCharacters: number;
   updatedAt: number;
 }
 
@@ -78,6 +80,14 @@ const MAX_SEGMENTS_PER_REPORT = 512;
 const MAX_SEGMENT_ID_LENGTH = 512;
 const MESSAGE_RATE_PER_SECOND = 20;
 const MESSAGE_BURST = 40;
+/**
+ * Inventory reports are relayed to every neighbor, so their volume is limited
+ * separately from the message count: a sustained 16 K characters of segment
+ * IDs per second, with bursts of 256 K for the full inventory a client
+ * re-reports after reconnecting. Clients report a few IDs per segment.
+ */
+const INVENTORY_CHARACTERS_PER_SECOND = 16 * 1024;
+const INVENTORY_BURST_CHARACTERS = 256 * 1024;
 const MAX_CONNECTIONS_PER_IP = 20;
 const INVALID_MESSAGE_CLOSE_CODE = 1_008;
 const BROADCAST_REMOVED_CLOSE_CODE = 4_004;
@@ -240,6 +250,7 @@ export class TrackerWebSocketHub implements TrackerEvents {
       this.subscriptions.set(socket, EMPTY_SUBSCRIPTION);
       this.messageBudgets.set(socket, {
         tokens: MESSAGE_BURST,
+        inventoryCharacters: INVENTORY_BURST_CHARACTERS,
         updatedAt: Date.now(),
       });
       socket.on("message", (data, isBinary) => {
@@ -552,6 +563,9 @@ export class TrackerWebSocketHub implements TrackerEvents {
         if (parsed.added !== undefined || parsed.removed !== undefined) {
           const added = requiredSegments({ segments: parsed.added ?? [] });
           const removed = requiredSegments({ segments: parsed.removed ?? [] });
+          if (!this.consumeInventoryBudget(socket, [added, removed])) {
+            throw new Error("Segment report rate limit exceeded");
+          }
           this.store.applySegmentDelta(broadcastId, peerId, added, removed);
           this.publishInventory({
             type: "segment_inventory_delta",
@@ -565,6 +579,9 @@ export class TrackerWebSocketHub implements TrackerEvents {
         const segments = requiredSegments(parsed);
         if (parsed.replace !== undefined && typeof parsed.replace !== "boolean") {
           throw new Error("'replace' must be a boolean");
+        }
+        if (!this.consumeInventoryBudget(socket, [segments])) {
+          throw new Error("Segment report rate limit exceeded");
         }
         const replace = parsed.replace;
         if (replace && this.hasSameSegments(broadcastId, peerId, segments)) return;
@@ -745,13 +762,31 @@ export class TrackerWebSocketHub implements TrackerEvents {
     const budget = this.messageBudgets.get(socket);
     if (!budget) return false;
     const now = Date.now();
+    const elapsedSeconds = (now - budget.updatedAt) / 1_000;
     budget.tokens = Math.min(
       MESSAGE_BURST,
-      budget.tokens + ((now - budget.updatedAt) / 1_000) * MESSAGE_RATE_PER_SECOND,
+      budget.tokens + elapsedSeconds * MESSAGE_RATE_PER_SECOND,
+    );
+    budget.inventoryCharacters = Math.min(
+      INVENTORY_BURST_CHARACTERS,
+      budget.inventoryCharacters + elapsedSeconds * INVENTORY_CHARACTERS_PER_SECOND,
     );
     budget.updatedAt = now;
     if (budget.tokens < 1) return false;
     budget.tokens -= 1;
+    return true;
+  }
+
+  /** Charges an inventory report's segment IDs; false once the socket is over its rate. */
+  private consumeInventoryBudget(socket: WebSocket, segmentLists: readonly string[][]): boolean {
+    const budget = this.messageBudgets.get(socket);
+    if (!budget) return false;
+    let characters = 0;
+    for (const segments of segmentLists) {
+      for (const segment of segments) characters += segment.length;
+    }
+    if (characters > budget.inventoryCharacters) return false;
+    budget.inventoryCharacters -= characters;
     return true;
   }
 

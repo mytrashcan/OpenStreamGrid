@@ -2091,3 +2091,57 @@ test("keeps peer and broadcast metadata small", async () => {
   const broadcast = await register({ big: "v".repeat(1_025) });
   assert.equal(broadcast.status, 400);
 });
+
+test("closes WebSockets that report inventory faster than it can be relayed", async () => {
+  const server = new TrackerServer(() => new TrackerStore(), 30_000, {
+    trackerApiKey: "test-secret",
+    rateLimitRps: 100,
+    rateLimitBurst: 200,
+    maxPeersPerBroadcast: 500,
+  });
+  const port = await server.start(0, "127.0.0.1");
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let socket: WebSocket | undefined;
+  try {
+    await fetch(`${baseUrl}/api/v1/broadcasts`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": "test-secret" },
+      body: JSON.stringify({ id: "live", playlistUrl: "http://origin/live.m3u8" }),
+    });
+    const join = await fetch(`${baseUrl}/api/v1/broadcasts/live/peers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "peer-a", address: "http://peer-a:9090" }),
+    });
+    const { sessionToken } = (await join.json()) as { sessionToken: string };
+    socket = new WebSocket(`ws://127.0.0.1:${port}/ws`, {
+      headers: { authorization: `Bearer ${sessionToken}` },
+    });
+    const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+      socket?.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
+    });
+    await new Promise<void>((resolve, reject) => {
+      socket?.once("open", resolve);
+      socket?.once("error", reject);
+    });
+    const send = (message: unknown): void => socket?.send(JSON.stringify(message));
+    send({ type: "subscribe", broadcastId: "live", peerId: "peer-a" });
+    // About 60 K characters of IDs per message: the 256 K burst allows four.
+    for (let batch = 0; batch < 6; batch += 1) {
+      send({
+        type: "report_segments",
+        broadcastId: "live",
+        peerId: "peer-a",
+        added: Array.from(
+          { length: 120 },
+          (_, index) => `${String(batch * 120 + index).padStart(497, "0")}.ts`,
+        ),
+        removed: [],
+      });
+    }
+    assert.deepEqual(await closed, { code: 1008, reason: "Segment report rate limit exceeded" });
+  } finally {
+    socket?.terminate();
+    await server.stop();
+  }
+});

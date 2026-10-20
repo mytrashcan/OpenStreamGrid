@@ -108,6 +108,10 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Changed
 
+- Tracker WebSocket connections may report at most 16 K characters of segment
+  IDs per second (bursts of 256 K) and are closed with `1008` beyond that.
+  Reports are relayed to every neighbor, so the message-rate limit alone let
+  one connection make the tracker relay over a megabyte per second to each.
 - The tracker limits broadcast and peer metadata to 32 string entries with
   short keys, 1024-character values, and 4096 characters in total, and rejects
   larger metadata with `400`. Peer metadata is relayed in every peer list, so
