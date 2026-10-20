@@ -4,6 +4,8 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-20
+
 ### Added
 
 - A Grafana panel for the tracker's event-loop delay (p50, p99, max), the

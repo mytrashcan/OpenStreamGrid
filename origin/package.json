@@ -1,6 +1,6 @@
 {
   "name": "@openstreamgrid/origin",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -13,6 +13,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@openstreamgrid/common": "0.6.1"
+    "@openstreamgrid/common": "0.7.0"
   }
 }

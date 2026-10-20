@@ -30,7 +30,7 @@ With [Docker Compose v2](https://docs.docker.com/compose/) installed, start the
 tracker, test origin, and two peers with one command:
 
 ```bash
-git clone --branch v0.6.1 --depth 1 https://github.com/mytrashcan/OpenStreamGrid.git
+git clone --branch v0.7.0 --depth 1 https://github.com/mytrashcan/OpenStreamGrid.git
 cd OpenStreamGrid
 docker compose up --build --detach
 docker compose ps
@@ -49,12 +49,13 @@ peer is unavailable or too slow. Stop the stack with `docker compose down`.
 
 ## Release Status
 
-[OpenStreamGrid v0.6.1](https://github.com/mytrashcan/OpenStreamGrid/releases/tag/v0.6.1)
-is the current stable release. It is a patch release on top of v0.6.0's
-reproducible QoE benchmarks, pluggable scheduling policies, and deadline-aware
-P2P/Origin hedging: it hardens peer joins and WebSocket upgrades, fixes the
-WebSocket Origin allowlist for Node peers, corrects Helm image tags, and ships
-multi-architecture container images.
+[OpenStreamGrid v0.7.0](https://github.com/mytrashcan/OpenStreamGrid/releases/tag/v0.7.0)
+is the current stable release. It makes tracker signaling scale linearly with
+the audience (one tracker serves 4000 peers in a broadcast at under half a
+core), lets LL-HLS viewers share segments they assemble from parts, adds a
+sidecar writer for existing origins and multivariant playlists for Node peers,
+hardens the tracker and peers against abusive clients, and adds alerts and
+security metrics for operators.
 Use the release tag for reproducible deployments and review the
 [release notes](RELEASE_NOTES.md) before upgrading. See the
 [changelog](CHANGELOG.md) for the complete history.
@@ -63,9 +64,9 @@ Tagged container images are published to GHCR for production deployment:
 
 | Component | Image |
 | --- | --- |
-| Tracker | `ghcr.io/mytrashcan/openstreamgrid-tracker:v0.6.1` |
-| Origin | `ghcr.io/mytrashcan/openstreamgrid-origin:v0.6.1` |
-| Node peer | `ghcr.io/mytrashcan/openstreamgrid-peer:v0.6.1` |
+| Tracker | `ghcr.io/mytrashcan/openstreamgrid-tracker:v0.7.0` |
+| Origin | `ghcr.io/mytrashcan/openstreamgrid-origin:v0.7.0` |
+| Node peer | `ghcr.io/mytrashcan/openstreamgrid-peer:v0.7.0` |
 
 Images are built for `linux/amd64` and `linux/arm64` and tagged both `vX.Y.Z`
 and `X.Y.Z` (from v0.6.1; earlier releases are `linux/amd64` with `vX.Y.Z` only).
@@ -275,9 +276,8 @@ output directory:
 ```bash
 # From a checkout (npm run build first)
 node origin/dist/sidecars.js /var/www/hls
-# Or from an origin image built from main or a release after v0.6.1 (v0.6.1
-# predates the writer); it runs as a non-root user, so let it write to the
-# host directory with --user
+# Or from an origin image v0.7.0 or later (earlier images predate the writer);
+# it runs as a non-root user, so let it write to the host directory with --user
 docker run --rm --user "$(id -u):$(id -g)" -v /var/www/hls:/hls \
   <origin image> origin/dist/sidecars.js /hls
 ```

@@ -17,7 +17,7 @@ The three implementation phases in the original plan are complete:
 - **Phase 3, hardening:** WebRTC DataChannel transport, SQLite store, load and
   capacity benchmarks, Helm chart, CI, and linting.
 
-Since v0.6.1 (unreleased, see the changelog):
+Released in v0.7.0 (see the changelog):
 
 - Tracker signaling scales linearly with the audience (`inventory_batch` and
   `neighbor_view`); one tracker serves 4000 peers in one broadcast at under
@@ -38,7 +38,6 @@ Since v0.6.1 (unreleased, see the changelog):
 
 ## Next
 
-- **Release 0.7.0** with the unreleased changes above.
 - **Publish the browser SDK to npm.** It is build- and publish-dry-run checked
   in CI but not yet on the registry.
 - **Refresh the performance baseline** (`scripts/benchmark.sh`) on a machine
