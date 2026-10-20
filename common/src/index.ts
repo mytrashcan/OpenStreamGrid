@@ -326,6 +326,15 @@ export const isMediaSegmentPath = (value: string): boolean =>
 export const isMediaSegmentFileName = (value: string): boolean =>
   /^[-A-Za-z0-9_.]+$/.test(value) && MEDIA_SEGMENT_EXTENSION_PATTERN.test(value);
 
+/**
+ * Reconnect delay with "equal jitter": uniform in `[delayMs / 2, delayMs)`, so
+ * clients that lost the tracker at the same moment, such as a whole audience
+ * during a tracker restart, spread their reconnects instead of arriving in
+ * lockstep at every backoff step.
+ */
+export const jitteredDelay = (delayMs: number, random: () => number = Math.random): number =>
+  delayMs / 2 + random() * (delayMs / 2);
+
 export const createLogger = (service: string): Logger => ({
   info: (event, context) => writeLog(service, "info", event, context),
   warn: (event, context) => writeLog(service, "warn", event, context),

@@ -1,5 +1,6 @@
 import {
   createLogger,
+  jitteredDelay,
   WS_FEATURE_INVENTORY_BATCH,
   WS_FEATURE_NEIGHBOR_VIEW,
   type Peer,
@@ -517,7 +518,7 @@ export class TrackerClient implements PeerDirectory {
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
       this.openSocket();
-    }, delayMs);
+    }, jitteredDelay(delayMs));
     this.reconnectTimer.unref();
   }
 

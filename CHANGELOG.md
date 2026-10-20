@@ -93,6 +93,10 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Changed
 
+- The browser SDK and the Node peer jitter their tracker reconnect backoff
+  (each delay is uniform between half and all of the backoff step), so an
+  audience that loses the tracker at once, as in a tracker restart, does not
+  reconnect in lockstep.
 - Dashboard SSE snapshots include peer segment lists only for the 24 peers
   per broadcast that the mesh view draws, which removes most of the stream's
   size in large audiences.

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   addPeerTrafficStats,
   createEmptyPeerTrafficStats,
+  jitteredDelay,
   createLogger,
   parsePeerTrafficStats,
   isMediaSegmentFileName,
@@ -104,4 +105,14 @@ test("classifies HLS media segment names", () => {
   }
   assert.equal(isMediaSegmentFileName("seg_000001.m4s"), true);
   assert.equal(isMediaSegmentFileName("low/seg_000001.m4s"), false);
+});
+
+test("jitters reconnect delays between half and all of the backoff", () => {
+  assert.equal(jitteredDelay(1_000, () => 0), 500);
+  assert.equal(jitteredDelay(1_000, () => 0.5), 750);
+  assert.ok(jitteredDelay(1_000, () => 0.999_999) < 1_000);
+  for (let index = 0; index < 100; index += 1) {
+    const delay = jitteredDelay(2_000);
+    assert.ok(delay >= 1_000 && delay < 2_000);
+  }
 });
