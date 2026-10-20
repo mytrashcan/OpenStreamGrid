@@ -139,6 +139,13 @@ All notable changes to OpenStreamGrid are documented in this file.
   and all of `fe80::/10`. They passed the loopback and link-local checks, so a
   peer could direct other peers' segment requests at their own loopback
   services or a cloud metadata endpoint.
+- The SDK package's type declarations imported `@openstreamgrid/common`, a
+  private workspace package that is not published, so TypeScript consumers got
+  `Cannot find module` errors (or, with `skipLibCheck`, untyped scheduler
+  options). The build now ships those declarations inside `dist/types` and
+  fails if a declaration imports anything but relative paths or `hls.js`.
+  `hls.js` is now an optional peer dependency, since Shaka Player apps do not
+  need it.
 - The Node peer's HTTP upload server drops an upload when the client reads
   nothing for 10 s. A client that stopped reading held an upload slot (three
   by default) for as long as it kept the connection open.
