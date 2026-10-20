@@ -855,6 +855,15 @@ const optionalBoolean = (body: JsonObject, key: string): boolean | undefined => 
   return value;
 };
 
+/**
+ * Metadata is stored and relayed to other peers in every peer list, so it is
+ * kept small: a few short entries, not a payload channel.
+ */
+const MAX_METADATA_ENTRIES = 32;
+const MAX_METADATA_VALUE_LENGTH = 1_024;
+const MAX_METADATA_TOTAL_LENGTH = 4_096;
+const METADATA_KEY_PATTERN = /^[A-Za-z0-9_.:-]{1,64}$/;
+
 const optionalMetadata = (
   body: JsonObject,
 ): Record<string, string> | undefined => {
@@ -863,12 +872,33 @@ const optionalMetadata = (
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new RequestError("'metadata' must be an object of strings");
   }
+  const entries = Object.entries(value);
+  if (entries.length > MAX_METADATA_ENTRIES) {
+    throw new RequestError(`'metadata' must have at most ${MAX_METADATA_ENTRIES} entries`);
+  }
   const metadata: Record<string, string> = {};
-  for (const [key, item] of Object.entries(value)) {
+  let totalLength = 0;
+  for (const [key, item] of entries) {
     if (typeof item !== "string") {
       throw new RequestError("'metadata' must be an object of strings");
     }
+    if (!METADATA_KEY_PATTERN.test(key)) {
+      throw new RequestError(
+        "'metadata' keys must be 1 to 64 letters, digits, '_', '.', ':' or '-'",
+      );
+    }
+    if (item.length > MAX_METADATA_VALUE_LENGTH) {
+      throw new RequestError(
+        `'metadata' values must be at most ${MAX_METADATA_VALUE_LENGTH} characters`,
+      );
+    }
+    totalLength += key.length + item.length;
     metadata[key] = item;
+  }
+  if (totalLength > MAX_METADATA_TOTAL_LENGTH) {
+    throw new RequestError(
+      `'metadata' must total at most ${MAX_METADATA_TOTAL_LENGTH} characters`,
+    );
   }
   return metadata;
 };

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   addPeerTrafficStats,
   createEmptyPeerTrafficStats,
+  validatePeerHttpBaseUrl,
   renditionDirectory,
   jitteredDelay,
   createLogger,
@@ -122,4 +123,32 @@ test("jitters reconnect delays between half and all of the backoff", () => {
     const delay = jitteredDelay(2_000);
     assert.ok(delay >= 1_000 && delay < 2_000);
   }
+});
+
+test("rejects peer addresses that reach local or link-local endpoints", () => {
+  for (const address of [
+    "http://localhost:9090",
+    "http://127.0.0.1:9090",
+    "http://2130706433:9090",
+    "http://[::1]:9090",
+    "http://0.0.0.0:9090",
+    "http://169.254.169.254",
+    "http://[fe80::1]:9090",
+    "http://[febf::1]:9090",
+    "http://[::ffff:127.0.0.1]:9090",
+    "http://[::ffff:169.254.169.254]",
+    "http://metadata.google.internal",
+  ]) {
+    assert.throws(() => validatePeerHttpBaseUrl(address), /reserved local endpoint/, address);
+  }
+  for (const address of [
+    "http://peer-a:9090",
+    "http://10.0.0.5:9090",
+    "http://[::ffff:10.0.0.5]:9090",
+    "https://[2001:db8::1]:9443",
+  ]) {
+    assert.equal(validatePeerHttpBaseUrl(address).href.startsWith("http"), true, address);
+  }
+  assert.throws(() => validatePeerHttpBaseUrl("http://user:pass@peer-a:9090"), /credentials/);
+  assert.throws(() => validatePeerHttpBaseUrl("http://peer-a:9090/?x=1"), /query or fragment/);
 });
