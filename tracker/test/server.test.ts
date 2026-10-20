@@ -272,6 +272,10 @@ const invoke = async (
     get headersSent() {
       return headersSent;
     },
+    // ServerResponse.writeHead sets statusCode; the handler reads it for metrics.
+    get statusCode() {
+      return status;
+    },
     writeHead(statusCode: number) {
       status = statusCode;
       headersSent = true;
@@ -321,6 +325,10 @@ const invokeRaw = async (
   const response = {
     get headersSent() {
       return headersSent;
+    },
+    // ServerResponse.writeHead sets statusCode; the handler reads it for metrics.
+    get statusCode() {
+      return status;
     },
     writeHead(
       statusCode: number,
@@ -515,6 +523,21 @@ test("authenticates protected HTTP routes when an API key is configured", async 
   assert.equal(publicHealth.status, 200);
   assert.equal(publicMetrics.status, 401);
   assert.equal(publicPreflight.status, 204);
+
+  // The refused requests above (wrong key, peer token, no key) are counted.
+  const counted = await invokeRaw(
+    handler,
+    "GET",
+    "/metrics",
+    undefined,
+    "192.0.2.30",
+    { authorization: "Bearer test-secret" },
+  );
+  const authFailures = Number(
+    /openstreamgrid_auth_failures_total\{interface="http"\} (\d+)/.exec(counted.body)?.[1],
+  );
+  assert.ok(authFailures >= 3, `auth failures: ${authFailures}`);
+  assert.match(counted.body, /openstreamgrid_http_responses_total\{class="2xx"\} [1-9]\d*\n/);
 });
 
 test("rate limits mutations per IP and enforces the broadcast peer cap", async () => {
@@ -1623,6 +1646,16 @@ test("authenticates WebSocket upgrades with a peer session", async () => {
       authenticatedSocket?.once("error", reject);
     });
     assert.equal(authenticatedSocket.readyState, WebSocket.OPEN);
+
+    // Both refused upgrades count as WebSocket auth failures.
+    const metrics = await (
+      await fetch(`http://127.0.0.1:${port}/metrics`, {
+        headers: { "x-api-key": "test secret/with symbols" },
+      })
+    ).text();
+    assert.match(metrics, /openstreamgrid_auth_failures_total\{interface="websocket"\} 2\n/);
+    assert.match(metrics, /openstreamgrid_ws_upgrades_rejected_total\{reason="auth"\} 2\n/);
+    assert.match(metrics, /openstreamgrid_ws_upgrades_rejected_total\{reason="origin"\} 0\n/);
   } finally {
     authenticatedSocket?.close();
     await server.stop();
