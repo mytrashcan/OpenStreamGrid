@@ -319,6 +319,10 @@ WebSocket의 `sessionToken` 쿼리로 사용합니다.
 
 ## 환경 변수 참조
 
+모든 서비스(Tracker, Origin, 사이드카 작성기, Node 피어)는 JSON 로그를 출력하며,
+`LOG_LEVEL`(`info`, `warn`, `error`, 기본 `info`)을 지정하면 그보다 낮은 수준의
+로그를 생략합니다.
+
 ### Tracker
 
 | 변수 | 기본값 | 설명 |

@@ -330,6 +330,10 @@ codes, and origin/peer endpoints.
 
 ## Configuration
 
+Every service (tracker, origin, sidecar writer, and Node peer) writes JSON log
+lines and accepts `LOG_LEVEL` (`info`, `warn`, or `error`; default `info`) to
+drop entries below that level.
+
 ### Tracker
 
 | Variable | Default | Description |

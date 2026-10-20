@@ -152,3 +152,37 @@ test("rejects peer addresses that reach local or link-local endpoints", () => {
   assert.throws(() => validatePeerHttpBaseUrl("http://user:pass@peer-a:9090"), /credentials/);
   assert.throws(() => validatePeerHttpBaseUrl("http://peer-a:9090/?x=1"), /query or fragment/);
 });
+
+test("drops log entries below LOG_LEVEL", (context) => {
+  const entries: string[] = [];
+  context.mock.method(console, "log", (entry: string) => entries.push(entry));
+  context.mock.method(console, "warn", (entry: string) => entries.push(entry));
+  context.mock.method(console, "error", (entry: string) => entries.push(entry));
+  const previous = process.env.LOG_LEVEL;
+  context.after(() => {
+    if (previous === undefined) delete process.env.LOG_LEVEL;
+    else process.env.LOG_LEVEL = previous;
+  });
+  const logger = createLogger("test-service");
+  const levels = (): string[] =>
+    entries.splice(0).map((entry) => (JSON.parse(entry) as { level: string }).level);
+  const logAll = (): void => {
+    logger.info("a");
+    logger.warn("b");
+    logger.error("c", undefined);
+  };
+
+  process.env.LOG_LEVEL = "warn";
+  logAll();
+  assert.deepEqual(levels(), ["warn", "error"]);
+  process.env.LOG_LEVEL = " ERROR ";
+  logAll();
+  assert.deepEqual(levels(), ["error"]);
+  // Unknown values keep everything rather than silencing logs.
+  process.env.LOG_LEVEL = "verbose";
+  logAll();
+  assert.deepEqual(levels(), ["info", "warn", "error"]);
+  delete process.env.LOG_LEVEL;
+  logAll();
+  assert.deepEqual(levels(), ["info", "warn", "error"]);
+});
