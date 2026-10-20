@@ -14,8 +14,9 @@ x-service-defaults: &service-defaults
 x-peer-environment: &peer-environment
   TRACKER_URL: http://tracker:7070
   BROADCAST_ID: live
-  # The Node peer consumes one media rendition; the master playlist remains
-  # available at /hls/stream.m3u8 for HLS players and the browser SDK.
+  # A Node peer consumes one media rendition: either a rendition directory, or
+  # the master playlist (/hls), which it follows to RENDITION or the lowest
+  # bandwidth. peer-b uses the master playlist so both forms stay covered.
   ORIGIN_URL: http://origin:8080/hls/low
   CACHE_SIZE: 512MB
   CACHE_TTL_MS: "300000"
@@ -130,6 +131,8 @@ services:
       <<: *peer-environment
       PEER_ID: peer-b
       PEER_ADDRESS: http://peer-b:9090
+      # Resolves to low, peer-a's rendition, so the two can share segments.
+      ORIGIN_URL: http://origin:8080/hls
       PLAYLIST_POLL_MS: "1000"
       WEBRTC_ENABLED: "${PEER_B_WEBRTC_ENABLED:-true}"
     depends_on:
