@@ -6,6 +6,8 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Added
 
+- `LOG_LEVEL` (`info`, `warn`, or `error`) for every service, to drop log
+  entries below that level.
 - Optional Helm `PrometheusRule` (`tracker.metrics.prometheusRule`) that alerts
   when no tracker is up, peers keep reporting integrity failures, most P2P
   attempts fall back to the origin, credential refusals spike, or the event
