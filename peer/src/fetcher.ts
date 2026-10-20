@@ -23,7 +23,7 @@ import type {
   SegmentIntegrityVerifier,
 } from "./verifier.js";
 import type { TransportManager } from "./transport-manager.js";
-import { keepAliveFetch } from "./http-client.js";
+import { keepAliveFetch, peerFetch } from "./http-client.js";
 import {
   MAX_PARALLEL_DOWNLOADS_VALUE,
   schedulerDecisionFor,
@@ -141,6 +141,8 @@ class PeerFetchError extends Error {
 /** Fetches verified segments from cache, peers, or origin in priority order. */
 export class HybridSegmentFetcher {
   private readonly fetchImpl: FetchFunction;
+  /** Fetch for other peers, which refuses hosts that resolve to local addresses. */
+  private readonly peerFetchImpl: FetchFunction;
   private readonly p2pTimeoutMs: number;
   private readonly maxParallel: number;
   private readonly scheduler: SegmentScheduler;
@@ -155,6 +157,7 @@ export class HybridSegmentFetcher {
 
   constructor(private readonly options: FetcherOptions) {
     this.fetchImpl = options.fetchImpl ?? keepAliveFetch;
+    this.peerFetchImpl = options.fetchImpl ?? peerFetch;
     this.p2pTimeoutMs = options.p2pTimeoutMs ?? DEFAULT_P2P_TIMEOUT_MS;
     this.maxParallel = options.maxParallel ?? MAX_PARALLEL_DOWNLOADS_VALUE;
     if (!Number.isSafeInteger(this.maxParallel) || this.maxParallel <= 0) {
@@ -727,7 +730,7 @@ export class HybridSegmentFetcher {
       } else {
         let response: Response;
         try {
-          response = await this.fetchImpl(
+          response = await this.peerFetchImpl(
             new URL(
               `/segments/${encodeURIComponent(segmentName)}`,
               validatePeerHttpBaseUrl(peer.address),

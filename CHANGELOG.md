@@ -139,6 +139,11 @@ All notable changes to OpenStreamGrid are documented in this file.
 
 ### Fixed
 
+- Node peers refuse to fetch from a peer whose host name resolves to a
+  loopback, unspecified, or link-local address. The tracker rejects such
+  addresses only as literals, so a host name like one that resolves to
+  `127.0.0.1` could point other Node peers at their local services. Origin and
+  tracker requests are unaffected.
 - Peer address validation rejects IPv4-mapped IPv6 literals of reserved
   addresses (`http://[::ffff:127.0.0.1]`, `http://[::ffff:169.254.169.254]`)
   and all of `fe80::/10`. They passed the loopback and link-local checks, so a
