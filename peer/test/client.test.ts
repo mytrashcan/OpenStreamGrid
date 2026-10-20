@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   parseArguments,
   peerUsage,
+  RecurringFailure,
   resolveMediaPlaylist,
   SegmentAttempts,
   wantsHelp,
@@ -313,4 +314,26 @@ test("documents every CLI flag in --help", () => {
   assert.equal(wantsHelp(["--help"]), true);
   assert.equal(wantsHelp(["-h"]), true);
   assert.equal(wantsHelp(["--peer-id", "a"]), false);
+});
+
+test("reports a recurring failure once per outage and once on recovery", () => {
+  const events: string[] = [];
+  const failure = new RecurringFailure(
+    (error) => events.push(`fail:${(error as Error).message}`),
+    (failures) => events.push(`recovered:${failures}`),
+  );
+  failure.succeed();
+  failure.fail(new Error("HTTP 503"));
+  failure.fail(new Error("HTTP 503"));
+  failure.fail(new Error("HTTP 503"));
+  failure.fail(new Error("ECONNREFUSED"));
+  failure.succeed();
+  failure.succeed();
+  failure.fail(new Error("HTTP 503"));
+  assert.deepEqual(events, [
+    "fail:HTTP 503",
+    "fail:ECONNREFUSED",
+    "recovered:4",
+    "fail:HTTP 503",
+  ]);
 });

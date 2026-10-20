@@ -120,6 +120,36 @@ export class SegmentAttempts {
 }
 
 /**
+ * Reports a failure that repeats on every poll once when it starts (or its
+ * message changes) and once when it clears, so an origin outage logs two
+ * lines instead of two per second.
+ */
+export class RecurringFailure {
+  private message: string | undefined;
+  private failures = 0;
+
+  constructor(
+    private readonly onFailure: (error: unknown) => void,
+    private readonly onRecovery: (failures: number) => void,
+  ) {}
+
+  fail(error: unknown): void {
+    this.failures += 1;
+    const message = error instanceof Error ? error.message : String(error);
+    if (message === this.message) return;
+    this.message = message;
+    this.onFailure(error);
+  }
+
+  succeed(): void {
+    if (this.failures === 0) return;
+    this.onRecovery(this.failures);
+    this.failures = 0;
+    this.message = undefined;
+  }
+}
+
+/**
  * Follows a multivariant playlist to one of its media playlists, retrying
  * until the origin serves the playlist or `signal` aborts. Segment and
  * sidecar URLs then resolve against the variant's directory.
@@ -129,12 +159,17 @@ export const resolveMediaPlaylist = async (
   signal: AbortSignal,
   fetchPlaylist: (url: URL, signal: AbortSignal) => Promise<string> = fetchPlaylistText,
 ): Promise<PeerConfiguration> => {
+  const unavailable = new RecurringFailure(
+    (error) => logger.warn("playlist_unavailable", { error: String(error) }),
+    (failures) => logger.info("playlist_available", { failures }),
+  );
   while (!signal.aborted) {
     let playlist: string;
     try {
       playlist = await fetchPlaylist(configuration.playlistUrl, signal);
+      unavailable.succeed();
     } catch (error) {
-      if (!signal.aborted) logger.warn("playlist_unavailable", { error: String(error) });
+      if (!signal.aborted) unavailable.fail(error);
       // Nothing else holds the process open before the peer starts.
       await delay(configuration.playlistPollMs, signal, true);
       continue;
@@ -301,6 +336,10 @@ class PeerApplication {
   private async consumePlaylist(signal: AbortSignal): Promise<void> {
     const processed = new Set<string>();
     const attempts = new SegmentAttempts();
+    const playlistFailure = new RecurringFailure(
+      (error) => logger.error("playlist_processing_failed", error),
+      (failures) => logger.info("playlist_processing_recovered", { failures }),
+    );
     while (!signal.aborted) {
       try {
         const response = await keepAliveFetch(this.configuration.playlistUrl, { signal });
@@ -311,6 +350,7 @@ class PeerApplication {
           await response.text(),
           this.configuration.playlistUrl,
         );
+        playlistFailure.succeed();
         const current = new Set(segments);
         for (const segment of processed) {
           if (!current.has(segment)) processed.delete(segment);
@@ -341,7 +381,7 @@ class PeerApplication {
           }
         }
       } catch (error) {
-        if (!signal.aborted) logger.error("playlist_processing_failed", error);
+        if (!signal.aborted) playlistFailure.fail(error);
       }
       await delay(this.configuration.playlistPollMs, signal);
     }
