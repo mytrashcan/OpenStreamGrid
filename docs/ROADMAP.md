@@ -28,8 +28,8 @@ Since v0.6.1 (unreleased, see the changelog):
 - A sidecar writer for existing origins, and Node peers that follow a
   multivariant playlist to one rendition and skip peers on other renditions.
 - Hardening against abusive peers: reserved peer addresses (including
-  IPv4-mapped and DNS forms), bounded metadata, upload stall timeouts, and
-  jittered reconnects.
+  IPv4-mapped and DNS forms), bounded metadata and inventories, upload stall
+  timeouts, and jittered reconnects.
 - Observability: metrics for signaling traffic, event-loop delay, and refused
   requests, a Security row in the Grafana dashboard, and optional Prometheus
   alerts.
