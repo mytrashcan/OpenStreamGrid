@@ -1,14 +1,33 @@
+<div align="center">
+
 # OpenStreamGrid
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Latest release](https://img.shields.io/github/v/release/mytrashcan/OpenStreamGrid)](https://github.com/mytrashcan/OpenStreamGrid/releases/latest)
-[![CI](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/ci.yml/badge.svg)](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/ci.yml)
-[![Node.js 22+](https://img.shields.io/badge/Node.js-22%2B-green.svg)](package.json)
-[![Docker images](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/docker-publish.yml)
+**하나의 라이브 스트림, 함께 나누는 전송.**
 
-표준 라이브 스트리밍을 위한 범용 하이브리드 P2P-CDN 전송 미들웨어입니다.
+기존 HLS 스트림에 피어 전송을 더하고, 필요할 때 Origin으로 전환합니다.
 
-[English](README.md) | [한국어](README.ko.md)
+[![CI](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/ci.yml/badge.svg)](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/ci.yml) [![Latest release](https://img.shields.io/github/v/release/mytrashcan/OpenStreamGrid?color=0d9488)](https://github.com/mytrashcan/OpenStreamGrid/releases/latest) [![Node.js 22+](https://img.shields.io/badge/Node.js-22%2B-417e38?logo=nodedotjs&logoColor=white)](package.json) [![Docker images](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/docker-publish.yml) [![MIT License](https://img.shields.io/badge/License-MIT-64748b)](LICENSE)
+
+[**시작하기**](#퀵-스타트) · [**브라우저 SDK**](#무설치-브라우저-peer) · [**문서**](#문서-링크) · [**릴리스**](https://github.com/mytrashcan/OpenStreamGrid/releases/latest)
+
+[English](README.md) · [한국어](README.ko.md)
+
+<br>
+
+<img src="docs/images/delivery-grid.svg" width="100%" alt="시청자 A, B, C가 검증된 세그먼트를 공유하고 필요할 때 Origin 또는 CDN에서 받는 개념도">
+
+<sub>피어끼리 검증된 세그먼트를 공유하고, 필요할 때 Origin/CDN에서 받습니다.</sub>
+
+</div>
+
+<br>
+
+| 함께 나누는 전송 | 재생 기한에 맞춘 폴백 | 기존 환경과 연동 |
+| :--- | :--- | :--- |
+| 시청자가 캐시한 세그먼트를 HTTP/WebRTC로 공유합니다. | 피어가 없거나 느리면 Origin/CDN으로 전환합니다. | HLS · CMAF · Hls.js · Shaka Player · Video.js |
+
+<details>
+<summary><strong>전송 방식 자세히 보기</strong> — 무결성 검증과 LL-HLS 지원 범위</summary>
 
 ## 프로젝트 소개
 
@@ -29,6 +48,8 @@ P2P 전송이 불가능하거나 재생 기한 안에 완료되지 않으면 즉
 
 > OpenStreamGrid는 완전한 라이브 스트리밍 플랫폼이 아닙니다. 기존 인코더,
 > Origin, CDN, 플레이어에 결합하는 독립적인 영상 전송 미들웨어입니다.
+
+</details>
 
 ## 퀵 스타트
 
@@ -65,6 +86,9 @@ Tracker 시그널링이 시청자 수에 선형으로 확장되어 Tracker 하�
 전에는 [릴리스 노트](RELEASE_NOTES.md)를 확인하세요. 전체 변경 내역은
 [변경 이력](CHANGELOG.md)에 정리되어 있습니다.
 
+<details>
+<summary><strong>컨테이너 이미지와 SDK 빌드</strong> — 배포 태그 및 패키지 안내</summary>
+
 운영 배포용 컨테이너 이미지는 GHCR에 게시됩니다.
 
 | 구성 요소 | 이미지 |
@@ -85,7 +109,12 @@ npm ci --prefix sdk
 npm run build --prefix sdk
 ```
 
+</details>
+
 ## 아키텍처 개요
+
+<details>
+<summary><strong>구성 요소와 데이터 흐름</strong> — Origin, Tracker, Node Peer, 브라우저 SDK</summary>
 
 ```text
                          HTTPS / API 키
@@ -118,7 +147,12 @@ npm run build --prefix sdk
 - **브라우저 SDK**는 Hls.js 로더와 결합해 브라우저에서도 하이브리드 전송을
   사용할 수 있게 합니다.
 
+</details>
+
 ## 스케줄링
+
+<details>
+<summary><strong>스케줄러 정책</strong> — 피어 선택과 사용자 정의 스케줄러</summary>
 
 OpenStreamGrid는 공통 `SegmentScheduler` 계약과 실행 환경별 기본 정책을
 사용합니다. Node Peer의 `WeightedScoreScheduler`는 장기간 수집한 지연 시간,
@@ -132,7 +166,12 @@ Peer보다 지속적인 품질 이력이 적기 때문에 두 정책을 의도�
 이벤트로 관찰할 수 있습니다. 어떤 정책을 사용하더라도 P2P를 사용할 수 없거나
 계획이 Origin을 선택하면 전송 계층의 Origin/CDN 폴백이 최종 기준입니다.
 
+</details>
+
 ## 주요 기능
+
+<details>
+<summary><strong>전체 기능 보기</strong> — 전송, 검증, 자원 제한, 운영 도구</summary>
 
 - HTTP/WebRTC 기반 P2P 전송과 즉시 Origin 폴백
 - Hls.js, Shaka Player, Video.js 10(또는 hls.js를 직접 만드는 플레이어) 연동.
@@ -152,6 +191,8 @@ Peer보다 지속적인 품질 이력이 적기 때문에 두 정책을 의도�
   이벤트 루프 지연 포함)
 - Helm 차트의 Grafana 대시보드와 Prometheus Operator `ServiceMonitor`
 - Docker Compose 통합 테스트, 부하 테스트, Kubernetes/Helm 배포 파일
+
+</details>
 
 ## 무설치 브라우저 Peer
 
@@ -199,6 +240,9 @@ TURN 자격증명을 시청자 코드에 넣는 대신 트래커에 `TURN_URLS`�
 브라우저 Peer는 등록 시 신원이 제한된 단기 세션을 자동으로 발급받습니다.
 시청자 코드에 `TRACKER_API_KEY`를 전달하거나 포함하지 말고, 관리자 키는 신뢰할
 수 있는 Origin과 운영 구성 요소에서만 사용하세요.
+
+<details>
+<summary><strong>다른 플레이어 연동</strong> — Shaka Player와 Video.js</summary>
 
 ### Shaka Player
 
@@ -257,7 +301,12 @@ video.source = {
 연결하세요. `grid.detach()`로 그리드를 멈춥니다. 브라우저 E2E가 이 방식으로
 Video.js 10.0.1을 재생합니다.
 
+</details>
+
 ## 기존 Origin과 함께 사용하기
+
+<details>
+<summary><strong>SHA-256 사이드카 설정</strong> — 기존 패키저와 화질별 파일 이름</summary>
 
 피어는 공유되는 모든 세그먼트를 옆에 있는 `<segment>.sha256` 사이드카
 (`<16진수 다이제스트>  <세그먼트 이름>`)로 검증합니다. 번들 Origin은 사이드카를
@@ -288,11 +337,16 @@ docker run --rm --user "$(id -u):$(id -g)" -v /var/www/hls:/hls \
 화질 이름을 디렉터리나 파일 이름 중 한 곳에만 허용합니다) Node 피어를 시청자가
 가장 많은 화질에 두세요.
 
+</details>
+
 ## API 요약
 
 Tracker 리소스는 `/api/v1` 아래에 있습니다. 관리 요청은 `X-API-Key`를
 사용하며, Prometheus 같은 수집기는 같은 키를 `Authorization: Bearer <key>`로 보낼 수 있습니다. 피어 참여 응답의 세션 토큰은 이후 REST 요청의 Bearer 토큰과
 WebSocket의 `sessionToken` 쿼리로 사용합니다.
+
+<details>
+<summary><strong>엔드포인트 목록 보기</strong> — REST, WebSocket, 메트릭</summary>
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
@@ -318,11 +372,16 @@ WebSocket의 `sessionToken` 쿼리로 사용합니다.
 요청·응답 스키마와 상태 코드, WebSocket 메시지는
 [API 레퍼런스](API_REFERENCE.md)를 참고하세요.
 
+</details>
+
 ## 환경 변수 참조
 
 모든 서비스(Tracker, Origin, 사이드카 작성기, Node 피어)는 JSON 로그를 출력하며,
 `LOG_LEVEL`(`info`, `warn`, `error`, 기본 `info`)을 지정하면 그보다 낮은 수준의
 로그를 생략합니다.
+
+<details>
+<summary><strong>Tracker</strong> — 설정 및 기본값</summary>
 
 ### Tracker
 
@@ -346,6 +405,11 @@ WebSocket의 `sessionToken` 쿼리로 사용합니다.
 | `TURN_URLS` | 미설정 | 피어 참여 응답에 단기 자격증명과 함께 내려줄 `turn:`/`turns:` URI 목록(쉼표 구분). 브라우저와 Node 피어가 ICE 서버에 추가해 사용 |
 | `TURN_SHARED_SECRET` | 미설정 | TURN 서버 공유 비밀(coturn `static-auth-secret`, 16바이트 이상). `TURN_URLS`와 함께 필수 |
 
+</details>
+
+<details>
+<summary><strong>Origin</strong> — 설정 및 기본값</summary>
+
 ### Origin
 
 | 변수 | 기본값 | 설명 |
@@ -364,6 +428,11 @@ WebSocket의 `sessionToken` 쿼리로 사용합니다.
 | `HLS_PARTS_PER_SEGMENT` | `0` | 테스트 전용: 마지막 세 MPEG-TS 세그먼트를 이 개수의 LL-HLS 부분 세그먼트(`EXT-X-PART`)로 나열하고 완성된 세그먼트의 패킷 단위 조각으로 제공. 플레이어와 SDK의 LL-HLS 경로를 시험하며, 세그먼트 완성 뒤에만 나열하므로 지연 이득은 없음 |
 | `HASH_INTERVAL_MS` | `250` | 해시 파일 탐색 주기(ms) |
 | `FFMPEG_PATH` | `PATH`의 `ffmpeg` | FFmpeg 실행 파일 경로 |
+
+</details>
+
+<details>
+<summary><strong>Node Peer</strong> — 설정 및 기본값</summary>
 
 ### Node Peer
 
@@ -393,6 +462,11 @@ WebSocket의 `sessionToken` 쿼리로 사용합니다.
 주요 피어 설정에는 같은 이름의 CLI 옵션도 제공되며,
 `node peer/dist/client.js --help`로 목록을 볼 수 있습니다.
 
+</details>
+
+<details>
+<summary><strong>브라우저 SDK</strong> — 설정 및 기본값</summary>
+
 ### 브라우저 SDK
 
 | 옵션 | 기본값 | 설명 |
@@ -405,6 +479,11 @@ WebSocket의 `sessionToken` 쿼리로 사용합니다.
 | `maxCacheBytes` | `100 MB` | 브라우저 세그먼트 캐시 한도 |
 | `hashUrlResolver` | 인접 `.sha256` | 서명·쿼리 URL을 고려한 해시 파일 주소 구성 함수 |
 | `assembleLowLatencySegments` | `false` | LL-HLS: 플레이리스트에 세그먼트가 오르면 부분 세그먼트를 이어 붙여 사이드카로 검증하고, 완성 세그먼트를 받는 피어와 공유. hls.js 인스턴스에 `attach()`와 세그먼트 검증 필요 |
+
+</details>
+
+<details>
+<summary><strong>벤치마크</strong> — 설정 및 기본값</summary>
 
 ### 벤치마크
 
@@ -420,6 +499,10 @@ WebSocket의 `sessionToken` 쿼리로 사용합니다.
 | `TRACKER_URL` | `http://127.0.0.1:7070` | 호스트 상태 확인용 Tracker URL |
 | `ORIGIN_URL` | `http://127.0.0.1:8080` | 호스트 상태 확인용 Origin URL |
 
+</details>
+
+## 성능
+
 ### Tracker 처리 용량
 
 클라이언트가 인벤토리 배치와 이웃 뷰를 협상하면(SDK와 Node 피어는 협상합니다)
@@ -428,6 +511,9 @@ Tracker 하나가 **방송 하나에서 활성 피어 4000명**을 CPU 코어의
 클라이언트는 약 1000명에서 코어 하나를 다 씁니다. Apple M5에서 제어 평면
 벤치마크(`npm run benchmark:tracker-capacity`)로 측정했으며, 방법과 모든 측정
 결과는 [Tracker capacity](docs/tracker-capacity.md)에 있습니다.
+
+<details>
+<summary><strong>스케줄러 실험 결과</strong> — 재현 가능한 정책 비교</summary>
 
 <!-- BENCHMARK_SCHEDULER:START -->
 ### Phase 3 스케줄러 정책 실험: `mixed-workload`
@@ -445,6 +531,8 @@ _고정 시드 `phase3-mixed-2026`, 정책별 결정론적 요청 400건. 프로
 <!-- BENCHMARK:START -->
 _Benchmark data is generated by running `bash scripts/benchmark.sh --scenario benchmarks/scenarios/ci-smoke.json`. See [benchmark methodology](docs/benchmark-methodology.md) for details._
 <!-- BENCHMARK:END -->
+
+</details>
 
 ## 개발 및 검증
 
@@ -464,21 +552,31 @@ P2P 교환과 Origin 폴백 통합 테스트는 `bash test/docker-test.sh`, 기�
 
 ## 문서 링크
 
-- [영문 README](README.md)
-- [API 레퍼런스](API_REFERENCE.md)
-- [기여 가이드](CONTRIBUTING.md)
-- [행동 강령](CODE_OF_CONDUCT.md)
-- [보안 정책](SECURITY.md)
-- [릴리스 노트](RELEASE_NOTES.md)
-- [변경 이력](CHANGELOG.md)
-- [로드맵](docs/ROADMAP.md)
-- [Kubernetes 배포 가이드](deploy/k8s/README.md)
-- [Helm 설정](helm/openstreamgrid/values.yaml)
-- [브라우저 SDK 예제](sdk/examples/basic.html)
+| 목적 | 문서 |
+| :--- | :--- |
+| 연동하기 | [브라우저 SDK](sdk/README.md) · [API 레퍼런스](API_REFERENCE.md) · [예제](sdk/examples/basic.html) |
+| 배포하기 | [릴리스 노트](RELEASE_NOTES.md) · [Kubernetes](deploy/k8s/README.md) · [Helm 설정](helm/openstreamgrid/values.yaml) |
+| 성능 살펴보기 | [벤치마크 방법](docs/benchmark-methodology.md) · [Tracker 처리 용량](docs/tracker-capacity.md) · [스케줄러 실험실](benchmarks/scheduler-lab/README.md) |
+| 설계 이해하기 | [로드맵](docs/ROADMAP.md) · [스케줄러 구조](docs/scheduler-architecture.md) · [변경 이력](CHANGELOG.md) |
+| 참여하기 | [기여 가이드](CONTRIBUTING.md) · [행동 강령](CODE_OF_CONDUCT.md) · [보안 정책](SECURITY.md) |
 
-## 기여 및 라이선스
+## 함께 만들기
 
-이슈와 Pull Request를 환영합니다. 개발 환경, 테스트 기준, 코딩 규칙은
-[CONTRIBUTING.md](CONTRIBUTING.md)를 먼저 확인해 주세요.
+버그 제보, 연동 경험, 아이디어와 Pull Request를 환영합니다.
 
-OpenStreamGrid는 [MIT License](LICENSE)로 배포됩니다.
+| 참여 방법 | 시작할 곳 |
+| :--- | :--- |
+| 질문과 아이디어 | [GitHub Discussions](https://github.com/mytrashcan/OpenStreamGrid/discussions) |
+| 버그 제보 | [GitHub Issues](https://github.com/mytrashcan/OpenStreamGrid/issues) |
+| 코드 기여 | [개발 환경과 기여 안내](CONTRIBUTING.md) |
+| 보안 취약점 제보 | [비공개 제보 절차](SECURITY.md) |
+
+---
+
+<div align="center">
+
+[MIT License](LICENSE) · [English](README.md) · [GitHub](https://github.com/mytrashcan/OpenStreamGrid)
+
+<sub>기존 라이브 스트리밍 환경을 위한 피어 기반 전송.</sub>
+
+</div>
