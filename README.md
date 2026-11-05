@@ -1,14 +1,33 @@
+<div align="center">
+
 # OpenStreamGrid
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Latest release](https://img.shields.io/github/v/release/mytrashcan/OpenStreamGrid)](https://github.com/mytrashcan/OpenStreamGrid/releases/latest)
-[![CI](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/ci.yml/badge.svg)](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/ci.yml)
-[![Node.js 22+](https://img.shields.io/badge/Node.js-22%2B-green.svg)](package.json)
-[![Docker images](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/docker-publish.yml)
+**One live stream. Delivered together.**
 
-Universal hybrid P2P-CDN middleware for standards-based live streaming.
+Peer-assisted delivery for your existing HLS stack, with origin fallback built in.
 
-[English](README.md) | [한국어](README.ko.md)
+[![CI](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/ci.yml/badge.svg)](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/ci.yml) [![Latest release](https://img.shields.io/github/v/release/mytrashcan/OpenStreamGrid?color=0d9488)](https://github.com/mytrashcan/OpenStreamGrid/releases/latest) [![Node.js 22+](https://img.shields.io/badge/Node.js-22%2B-417e38?logo=nodedotjs&logoColor=white)](package.json) [![Docker images](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/mytrashcan/OpenStreamGrid/actions/workflows/docker-publish.yml) [![MIT License](https://img.shields.io/badge/License-MIT-64748b)](LICENSE)
+
+[**Quick start**](#quick-start) · [**Browser SDK**](#zero-install-browser-peers) · [**Documentation**](#documentation) · [**Releases**](https://github.com/mytrashcan/OpenStreamGrid/releases/latest)
+
+[English](README.md) · [한국어](README.ko.md)
+
+<br>
+
+<img src="docs/images/delivery-grid.svg" width="100%" alt="Conceptual delivery flow: viewers A, B, and C share verified segments and use origin or CDN fallback when needed">
+
+<sub>Verified segments between peers. Origin/CDN fallback when needed.</sub>
+
+</div>
+
+<br>
+
+| Share the delivery | Keep playback moving | Bring your own stack |
+| :--- | :--- | :--- |
+| Viewers exchange cached segments over HTTP/WebRTC. | Slow or missing peers trigger origin/CDN fallback. | HLS · CMAF · Hls.js · Shaka Player · Video.js |
+
+<details>
+<summary><strong>How delivery works</strong> — integrity checks and LL-HLS support</summary>
 
 OpenStreamGrid adds peer-assisted delivery to HLS streams with MPEG-TS (`.ts`)
 or CMAF/fMP4 (`.m4s`) media segments. With LL-HLS, partial segments load
@@ -23,6 +42,8 @@ immediately falls back to the origin when P2P cannot meet the playback deadline.
 
 > OpenStreamGrid is delivery middleware, not a complete streaming platform. It
 > integrates with your existing origin, CDN, and player stack.
+
+</details>
 
 ## Quick Start
 
@@ -60,6 +81,9 @@ Use the release tag for reproducible deployments and review the
 [release notes](RELEASE_NOTES.md) before upgrading. See the
 [changelog](CHANGELOG.md) for the complete history.
 
+<details>
+<summary><strong>Container images and SDK builds</strong> — deployment tags and package availability</summary>
+
 Tagged container images are published to GHCR for production deployment:
 
 | Component | Image |
@@ -80,6 +104,8 @@ npm ci --prefix sdk
 npm run build --prefix sdk
 ```
 
+</details>
+
 ## Use Cases
 
 - **Live streaming platforms** — reduce origin and CDN segment traffic while
@@ -94,6 +120,9 @@ Review [Security](SECURITY.md) and the [release notes](RELEASE_NOTES.md) before
 planning a production rollout.
 
 ## Architecture
+
+<details>
+<summary><strong>Components and data flow</strong> — origin, tracker, Node peers, and browser SDK</summary>
 
 ```text
                     HTTP behind TLS proxy / API key
@@ -122,7 +151,12 @@ deployment. The origin can generate multiple test channels and three HLS
 renditions per channel. Production media origins can register their own
 playlist URLs through the same API.
 
+</details>
+
 ## Scheduling
+
+<details>
+<summary><strong>Scheduler policies</strong> — peer selection and custom schedulers</summary>
 
 OpenStreamGrid uses the shared `SegmentScheduler` contract with runtime-specific
 default policies. Node peers use `WeightedScoreScheduler`, which combines
@@ -138,7 +172,12 @@ browser SDK's `scheduler` option. Browser decisions are observable through the
 Origin/CDN fallback as authoritative whenever P2P is unavailable or a plan
 chooses Origin.
 
+</details>
+
 ## Features
+
+<details>
+<summary><strong>Explore all features</strong> — delivery, integrity, resource limits, and operations</summary>
 
 - Hybrid HTTP/WebRTC segment delivery with immediate origin fallback.
 - Player integrations for Hls.js, Shaka Player, and Video.js 10 (or any player
@@ -159,6 +198,8 @@ chooses Origin.
   event-loop delay), SSE updates, and SQLite history.
 - Grafana dashboard and Prometheus Operator `ServiceMonitor` in the Helm chart.
 - Docker Compose, load-test scenarios, Kubernetes/Helm manifests, and CI.
+
+</details>
 
 ## Zero-install browser peers
 
@@ -207,6 +248,9 @@ environments, but it is not part of the normal viewer path.
 Browser peers automatically receive a short-lived, identity-scoped session when
 they register. Do not pass or embed `TRACKER_API_KEY` in viewer code; reserve the
 administrator credential for trusted origin and operations components.
+
+<details>
+<summary><strong>Other player integrations</strong> — Shaka Player and Video.js</summary>
 
 ### Shaka Player
 
@@ -266,7 +310,12 @@ to `grid.attach()` to schedule against the playback position; attach again if
 the player recreates it. `grid.detach()` stops the grid. The browser E2E plays
 Video.js 10.0.1 this way.
 
+</details>
+
 ## Using your own origin
+
+<details>
+<summary><strong>Set up SHA-256 sidecars</strong> — existing packagers and rendition naming</summary>
 
 Peers verify every shared segment against a `<segment>.sha256` sidecar next to
 it (`<hex digest>  <segment name>`). The bundled origin writes them; with
@@ -297,12 +346,17 @@ drops. The bundled origin shares names across renditions (FFmpeg accepts the
 rendition in the directory or the file name, not both), so run its Node peers
 on the rendition most viewers watch.
 
+</details>
+
 ## Tracker API
 
 Tracker resources are under `/api/v1`. Administrators send `X-API-Key: <key>`
 or, for scrapers such as Prometheus, `Authorization: Bearer <key>`.
 Peer join returns a short-lived session token; peer REST calls use
 `Authorization: Bearer <token>` and WebSocket upgrades use `?sessionToken=<token>`.
+
+<details>
+<summary><strong>Browse endpoints</strong> — REST, WebSocket, and metrics</summary>
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -328,11 +382,16 @@ Peer join returns a short-lived session token; peer REST calls use
 See [API_REFERENCE.md](API_REFERENCE.md) for schemas, signaling messages, status
 codes, and origin/peer endpoints.
 
+</details>
+
 ## Configuration
 
 Every service (tracker, origin, sidecar writer, and Node peer) writes JSON log
 lines and accepts `LOG_LEVEL` (`info`, `warn`, or `error`; default `info`) to
 drop entries below that level.
+
+<details>
+<summary><strong>Tracker</strong> — options and defaults</summary>
 
 ### Tracker
 
@@ -356,6 +415,11 @@ drop entries below that level.
 | `TURN_URLS` | unset | Comma-separated `turn:`/`turns:` URIs returned with short-lived credentials on peer join; browser and Node peers add them to their ICE servers |
 | `TURN_SHARED_SECRET` | unset | TURN server shared secret (coturn `static-auth-secret`, at least 16 bytes); required with `TURN_URLS` |
 
+</details>
+
+<details>
+<summary><strong>Origin</strong> — options and defaults</summary>
+
 ### Origin
 
 | Variable | Default | Description |
@@ -374,6 +438,11 @@ drop entries below that level.
 | `HLS_PARTS_PER_SEGMENT` | `0` | Test only: list the last three MPEG-TS segments as this many LL-HLS parts (`EXT-X-PART`), served as packet-aligned slices of the finished segment, so players and the SDK exercise LL-HLS. Parts appear only once a segment is complete, so there is no latency gain |
 | `HASH_INTERVAL_MS` | `250` | Sidecar hash discovery interval |
 | `FFMPEG_PATH` | `ffmpeg` on `PATH` | FFmpeg executable override |
+
+</details>
+
+<details>
+<summary><strong>Node peer</strong> — options and defaults</summary>
 
 ### Node Peer
 
@@ -404,6 +473,11 @@ Equivalent CLI flags are available for the primary peer options;
 `node peer/dist/client.js --help` lists them. Benchmark
 configuration is available through the following environment variables.
 
+</details>
+
+<details>
+<summary><strong>Browser SDK</strong> — options and defaults</summary>
+
 ### Browser SDK
 
 | Option | Default | Description |
@@ -416,6 +490,11 @@ configuration is available through the following environment variables.
 | `maxCacheBytes` | `100 MB` | Browser segment-cache limit |
 | `hashUrlResolver` | adjacent `.sha256` | Override signed/query-aware sidecar URL resolution |
 | `assembleLowLatencySegments` | `false` | LL-HLS: join a segment's parts once the playlist lists it, verify it against the segment's sidecar, and share it with peers that load complete segments. Needs `attach()` on the hls.js instance and segment verification |
+
+</details>
+
+<details>
+<summary><strong>Benchmark</strong> — options and defaults</summary>
 
 ### Benchmark
 
@@ -430,6 +509,8 @@ configuration is available through the following environment variables.
 | `BENCHMARK_PROJECT_NAME` | `openstreamgrid-benchmark` | Isolated Compose project name |
 | `TRACKER_URL` | `http://127.0.0.1:7070` | Host health-check URL |
 | `ORIGIN_URL` | `http://127.0.0.1:8080` | Host health-check URL |
+
+</details>
 
 ## Performance Baseline
 
@@ -450,6 +531,9 @@ Node peer do). Clients that predate those features saturate a core at about
 (`npm run benchmark:tracker-capacity`); see
 [Tracker capacity](docs/tracker-capacity.md) for the method and every run.
 
+<details>
+<summary><strong>Scheduler experiment results</strong> — reproducible policy comparisons</summary>
+
 <!-- BENCHMARK_SCHEDULER:START -->
 ### Phase 3 scheduler policy lab: `mixed-workload`
 
@@ -466,6 +550,8 @@ _Fixed seed `phase3-mixed-2026`; 400 deterministic requests per policy. Controll
 <!-- BENCHMARK:START -->
 _Benchmark data is generated by running `bash scripts/benchmark.sh --scenario benchmarks/scenarios/ci-smoke.json`. See [benchmark methodology](docs/benchmark-methodology.md) for details._
 <!-- BENCHMARK:END -->
+
+</details>
 
 ## Development
 
@@ -489,43 +575,45 @@ peer; `sdk/` is the browser/Hls.js package; `common/` contains shared contracts;
 > **Want to contribute?** Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup,
 > testing expectations, coding guidelines, and pull request requirements.
 
+## Documentation
+
+| I want to… | Start here |
+| :--- | :--- |
+| Integrate a player | [Browser SDK](sdk/README.md) · [API reference](API_REFERENCE.md) · [Example](sdk/examples/basic.html) |
+| Deploy the grid | [Release notes](RELEASE_NOTES.md) · [Kubernetes](deploy/k8s/README.md) · [Helm settings](helm/openstreamgrid/values.yaml) |
+| Measure delivery | [Benchmark methodology](docs/benchmark-methodology.md) · [Tracker capacity](docs/tracker-capacity.md) · [Scheduler lab](benchmarks/scheduler-lab/README.md) |
+| Understand the design | [Roadmap](docs/ROADMAP.md) · [Scheduler architecture](docs/scheduler-architecture.md) · [Changelog](CHANGELOG.md) |
+| Explore design decisions | [Tracker horizontal scaling](docs/adr/0001-tracker-horizontal-scaling.md) · [LL-HLS part sharing](docs/adr/0002-llhls-part-sharing.md) |
+| Get involved | [Contributing](CONTRIBUTING.md) · [Code of conduct](CODE_OF_CONDUCT.md) · [Security policy](SECURITY.md) |
+
 ## Community
 
-[![Discord: coming soon](https://img.shields.io/badge/Discord-coming%20soon-5865F2?logo=discord&logoColor=white)](#community)
-[![GitHub stars](https://img.shields.io/github/stars/mytrashcan/OpenStreamGrid?style=social)](https://github.com/mytrashcan/OpenStreamGrid/stargazers)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+Try an integration, share what you learn, or help improve delivery.
 
-- Ask usage questions and propose ideas in [GitHub Discussions](https://github.com/mytrashcan/OpenStreamGrid/discussions).
-- Report reproducible defects through [GitHub Issues](https://github.com/mytrashcan/OpenStreamGrid/issues).
-- Report security vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
-- Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
+| Get involved | Start here |
+| :--- | :--- |
+| Ask a question or share an idea | [GitHub Discussions](https://github.com/mytrashcan/OpenStreamGrid/discussions) |
+| Report a reproducible bug | [GitHub Issues](https://github.com/mytrashcan/OpenStreamGrid/issues) |
+| Make a contribution | [Development and contribution guide](CONTRIBUTING.md) |
+| Report a vulnerability privately | [Security reporting](SECURITY.md) |
 
-The Discord community is not open yet. This badge will be linked to the official
-server once one is available.
+Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+If OpenStreamGrid helps your project, consider
+[starring the repository](https://github.com/mytrashcan/OpenStreamGrid).
 
-## Star History
+<details>
+<summary>Star history</summary>
 
 [![Star History Chart](https://api.star-history.com/svg?repos=mytrashcan/OpenStreamGrid&type=Date)](https://star-history.com/#mytrashcan/OpenStreamGrid&Date)
 
-If OpenStreamGrid is useful to you, consider
-[starring the repository](https://github.com/mytrashcan/OpenStreamGrid).
+</details>
 
-## Documentation
+---
 
-- [Korean README](README.ko.md)
-- [API reference](API_REFERENCE.md)
-- [Contributing guide](CONTRIBUTING.md)
-- [Code of conduct](CODE_OF_CONDUCT.md)
-- [Security policy](SECURITY.md)
-- [Release notes](RELEASE_NOTES.md)
-- [Changelog](CHANGELOG.md)
-- [Roadmap](docs/ROADMAP.md)
-- [Kubernetes deployment guide](deploy/k8s/README.md)
-- [ADR 0001: Tracker horizontal scaling](docs/adr/0001-tracker-horizontal-scaling.md)
-- [ADR 0002: Sharing LL-HLS partial segments](docs/adr/0002-llhls-part-sharing.md)
-- [Tracker capacity](docs/tracker-capacity.md)
-- [Browser SDK example](sdk/examples/basic.html)
+<div align="center">
 
-## License
+[MIT License](LICENSE) · [한국어](README.ko.md) · [GitHub](https://github.com/mytrashcan/OpenStreamGrid)
 
-OpenStreamGrid is licensed under the [MIT License](LICENSE).
+<sub>Peer-assisted delivery for the live streaming stack you already have.</sub>
+
+</div>

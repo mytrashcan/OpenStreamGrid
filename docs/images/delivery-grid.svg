@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="480" viewBox="0 0 1200 480" role="img" aria-labelledby="title desc">
+  <title id="title">OpenStreamGrid peer-assisted delivery</title>
+  <desc id="desc">One stream, a connected audience. Viewers share verified segments with each other and use origin or CDN fallback when needed. Conceptual delivery illustration.</desc>
+  <defs>
+    <linearGradient id="background" x2="1" y2="1">
+      <stop stop-color="#0b1825"/>
+      <stop offset="1" stop-color="#0c282b"/>
+    </linearGradient>
+    <radialGradient id="halo">
+      <stop stop-color="#2dd4bf" stop-opacity=".12"/>
+      <stop offset="1" stop-color="#2dd4bf" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#a5f3fc" stroke-opacity=".045"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="480" rx="24" fill="url(#background)"/>
+  <rect width="1200" height="480" rx="24" fill="url(#grid)"/>
+  <ellipse cx="900" cy="240" rx="360" ry="240" fill="url(#halo)"/>
+  <rect x=".5" y=".5" width="1199" height="479" rx="24" fill="none" stroke="#28434c"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <g transform="translate(60 56)" fill="none" stroke="#5eead4" stroke-width="2">
+      <path d="M4 4L28 12L10 30ZM4 4L10 30M28 12L34 34L10 30"/>
+      <g fill="#5eead4" stroke="none">
+        <circle cx="4" cy="4" r="3"/><circle cx="28" cy="12" r="3"/>
+        <circle cx="10" cy="30" r="3"/><circle cx="34" cy="34" r="3"/>
+      </g>
+    </g>
+    <text x="112" y="79" fill="#83d9d1" font-size="13" font-weight="600" letter-spacing="2">PEER-ASSISTED LIVE STREAMING</text>
+    <text x="60" y="173" fill="#f0fdfa" font-size="58" font-weight="700" letter-spacing="-2">One stream.</text>
+    <text x="60" y="242" fill="#5eead4" font-size="58" font-weight="700" letter-spacing="-2">A connected</text>
+    <text x="60" y="311" fill="#5eead4" font-size="58" font-weight="700" letter-spacing="-2">audience.</text>
+    <text x="62" y="355" fill="#b0c4cd" font-size="17">Share verified segments. Keep playback moving.</text>
+    <g font-size="12" font-weight="600" text-anchor="middle">
+      <rect x="60" y="398" width="62" height="28" rx="14" fill="#142f38" stroke="#2d4b53"/>
+      <text x="91" y="417" fill="#c7e4e5">HLS</text>
+      <rect x="132" y="398" width="78" height="28" rx="14" fill="#142f38" stroke="#2d4b53"/>
+      <text x="171" y="417" fill="#c7e4e5">CMAF</text>
+      <rect x="220" y="398" width="92" height="28" rx="14" fill="#142f38" stroke="#2d4b53"/>
+      <text x="266" y="417" fill="#c7e4e5">WebRTC</text>
+    </g>
+    <g fill="none" stroke-linecap="round">
+      <path d="M875 120L715 236M875 120L1035 236" stroke="#7795a7" stroke-width="2" stroke-dasharray="6 8"/>
+      <path d="M715 268H1035M715 268L875 367L1035 268" stroke="#2dd4bf" stroke-width="2"/>
+      <circle cx="795" cy="268" r="5" fill="#99f6e4" stroke="#0f393a" stroke-width="6"/>
+      <circle cx="955" cy="318" r="5" fill="#99f6e4" stroke="#0f393a" stroke-width="6"/>
+    </g>
+    <g text-anchor="middle">
+      <rect x="785" y="60" width="180" height="66" rx="14" fill="#172e3d" stroke="#547082"/>
+      <path d="M861 81H889M861 87H889" stroke="#9fb8c9" stroke-width="2" stroke-linecap="round"/>
+      <text x="875" y="110" fill="#e0eef4" font-size="15" font-weight="600">Origin / CDN</text>
+      <text x="1015" y="177" fill="#a5bac8" font-size="12">Fallback when needed</text>
+      <g fill="#103737" stroke="#32847b">
+        <rect x="647" y="234" width="136" height="68" rx="12"/>
+        <rect x="967" y="234" width="136" height="68" rx="12"/>
+        <rect x="807" y="342" width="136" height="68" rx="12"/>
+      </g>
+      <g fill="none" stroke="#5eead4" stroke-width="1.5" stroke-linecap="round">
+        <rect x="701" y="247" width="28" height="18" rx="3"/><path d="M709 270H721M715 265V270"/>
+        <rect x="1021" y="247" width="28" height="18" rx="3"/><path d="M1029 270H1041M1035 265V270"/>
+        <rect x="861" y="355" width="28" height="18" rx="3"/><path d="M869 378H881M875 373V378"/>
+      </g>
+      <g fill="#dcfdf5" font-size="13" font-weight="600">
+        <text x="715" y="289">Viewer A</text><text x="1035" y="289">Viewer B</text>
+        <text x="875" y="397">Viewer C</text>
+      </g>
+      <text x="875" y="252" fill="#99f6e4" font-size="12">Verified P2P segments</text>
+      <text x="875" y="448" fill="#89a9b0" font-size="11" letter-spacing="1.4">DELIVERY FLOW · CONCEPTUAL VIEW</text>
+    </g>
+  </g>
+</svg>
