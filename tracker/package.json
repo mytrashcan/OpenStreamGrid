@@ -15,7 +15,7 @@
   "dependencies": {
     "@openstreamgrid/common": "0.7.0",
     "better-sqlite3": "^12.11.1",
-    "ws": "^8.22.0"
+    "ws": "^8.22.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
