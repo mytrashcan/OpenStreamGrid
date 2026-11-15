@@ -12,6 +12,6 @@
     "@videojs/html": "10.3.0",
     "esbuild": "0.28.2",
     "hls.js": "^1.7.4",
-    "shaka-player": "5.3.3"
+    "shaka-player": "5.3.4"
   }
 }
