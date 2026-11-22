@@ -7,11 +7,11 @@
     "build:videojs": "esbuild page/videojs.js --bundle --format=esm --outfile=page/dist/videojs.mjs --log-level=warning"
   },
   "devDependencies": {
-    "@playwright/test": "1.65.0",
-    "@videojs/hlsjs-video": "10.3.0",
-    "@videojs/html": "10.3.0",
+    "@playwright/test": "1.65.1",
+    "@videojs/hlsjs-video": "10.5.0",
+    "@videojs/html": "10.5.0",
     "esbuild": "0.28.2",
     "hls.js": "^1.7.4",
-    "shaka-player": "5.3.3"
+    "shaka-player": "5.3.5"
   }
 }
